@@ -544,7 +544,7 @@ async fn run_inner(
                         }
                         Err(e) => sys(format!("[SYS] path probe: bad address: {e}")).await,
                     },
-                    NetCommand::FetchPage { identity, path } => match parse_hash(&identity) {
+                    NetCommand::FetchPage { identity, path, fields } => match parse_hash(&identity) {
                         Ok(id) => {
                             // The 30 s query blocks, so run it off the select loop.
                             let hops = nomad_hops.get(&identity).copied().unwrap_or(DEFAULT_PAGE_HOPS);
@@ -553,21 +553,25 @@ async fn run_inner(
                             // discovery.
                             let key = nomad_keys.get(&identity).copied();
                             let id8 = identity.get(..8).unwrap_or(&identity);
-                            sys(format!("[SYS] page fetch {path} from {id8}.. ({hops} hops)")).await;
+                            let nfields = fields.len();
+                            let suffix = if nfields > 0 { format!(", {nfields} field(s)") } else { String::new() };
+                            sys(format!("[SYS] page fetch {path} from {id8}.. ({hops} hops{suffix})")).await;
+                            // The msgpack request data (`{field_…/var_…: value}`), empty for a GET.
+                            let payload = encode_form(&fields);
                             let lc = link_client.clone();
                             let ev = events.clone();
                             tokio::spawn(async move {
                                 let result = match key {
                                     Some(pk) => {
                                         lc.query_with_key(
-                                            id, pk, NOMAD_NODE, &path, Vec::new(), hops,
+                                            id, pk, NOMAD_NODE, &path, payload, hops,
                                             PAGE_FETCH_TIMEOUT,
                                         )
                                         .await
                                     }
                                     None => {
                                         lc.query(
-                                            id, NOMAD_NODE, &path, Vec::new(), hops,
+                                            id, NOMAD_NODE, &path, payload, hops,
                                             PAGE_FETCH_TIMEOUT,
                                         )
                                         .await
@@ -909,6 +913,24 @@ async fn discover_nomad_nodes(
             })
             .await;
     }
+}
+
+/// Encode a Nomad Network form submission as the msgpack map the node expects —
+/// `{ field_<name>: value, var_<key>: value }`. Empty input → empty bytes (a
+/// plain GET, matching `link.request(path, data=None)`).
+fn encode_form(fields: &[(String, String)]) -> Vec<u8> {
+    if fields.is_empty() {
+        return Vec::new();
+    }
+    let map = rmpv::Value::Map(
+        fields
+            .iter()
+            .map(|(k, v)| (rmpv::Value::from(k.as_str()), rmpv::Value::from(v.as_str())))
+            .collect(),
+    );
+    let mut buf = Vec::new();
+    let _ = rmpv::encode::write_value(&mut buf, &map);
+    buf
 }
 
 /// Best-effort node name from a `nomadnetwork.node` announce's app data (UTF-8,
@@ -1487,6 +1509,24 @@ fn parse_hostport(s: &str) -> (String, u16) {
 mod tests {
     use super::*;
     use rns_runtime::config::Config;
+
+    #[test]
+    fn encode_form_round_trips_through_msgpack() {
+        // Empty submission → no payload (a plain GET).
+        assert!(encode_form(&[]).is_empty());
+
+        let bytes = encode_form(&[
+            ("field_q".to_string(), "hi".to_string()),
+            ("var_p".to_string(), "2".to_string()),
+        ]);
+        let val = rmpv::decode::read_value(&mut &bytes[..]).expect("valid msgpack");
+        let map = val.as_map().expect("a map");
+        assert_eq!(map.len(), 2);
+        assert_eq!(map[0].0.as_str(), Some("field_q"));
+        assert_eq!(map[0].1.as_str(), Some("hi"));
+        assert_eq!(map[1].0.as_str(), Some("var_p"));
+        assert_eq!(map[1].1.as_str(), Some("2"));
+    }
 
     #[test]
     fn generated_config_parses() {

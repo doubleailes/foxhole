@@ -675,7 +675,7 @@ fn render_browser(frame: &mut Frame, app: &App, area: Rect) {
     let legend = match app.browser_pane {
         BrowserPane::Nodes => "[Tab] page  [Up/Dn] node  [Enter] open  [r] reload",
         BrowserPane::Page => {
-            "[Tab] nodes  [Up/Dn] link  [Enter] follow  [Bksp] back  [PgUp/PgDn] scroll"
+            "[Up/Dn] field/link  type to edit  [Enter] follow/submit  [Bksp] back  [PgUp/PgDn] scroll"
         }
     };
     frame.render_widget(Paragraph::new(Line::styled(legend, ts_style())), rows[2]);
@@ -724,9 +724,9 @@ fn render_page(frame: &mut Frame, app: &App, area: Rect) {
             PageStatus::Fetching => vec![Line::styled("  fetching page...", ts_style())],
             PageStatus::Error(e) => vec![Line::styled(format!("  error: {e}"), tag_style("ERR"))],
             PageStatus::Loaded(src) => {
-                let selected = if focused { Some(p.link_sel) } else { None };
+                let focus = if focused { Some(p.element_sel) } else { None };
                 // Match the pane's inner width so heading bars/dividers fill it.
-                crate::micron::render(src, selected, area.width.saturating_sub(2))
+                crate::micron::render(src, area.width.saturating_sub(2), focus, &p.field_values)
             }
         },
     };
@@ -775,11 +775,12 @@ fn render_guide(frame: &mut Frame, app: &App, area: Rect) {
         "  Ctrl+N / Ctrl+P  Next / previous tab".to_string(),
         "  Ctrl+O           New conversation by LXMF address".to_string(),
         "  Tab              Cycle panes (Peers / Thread / Transmit; Browser cols)".to_string(),
-        "  Up / Down        Select peer / node / link".to_string(),
+        "  Up / Down        Select peer / node / page element".to_string(),
         "  PgUp / PgDn      Scroll the focused text pane".to_string(),
         "  Home / End       Jump to top / bottom".to_string(),
-        "  Enter            Send / open node / follow link".to_string(),
-        "  Backspace        Browser: back to previous page".to_string(),
+        "  Enter            Send / open node / follow link / submit form".to_string(),
+        "  (type)           Browser: edit a focused page input field".to_string(),
+        "  Backspace        Browser: back, or delete in a field".to_string(),
         "  Ctrl+S           Send to selected peer".to_string(),
         "  Ctrl+R           Sync now from propagation node (on demand)".to_string(),
         "  Ctrl+X           Purge compose buffer".to_string(),

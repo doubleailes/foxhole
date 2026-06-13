@@ -12,11 +12,13 @@
 //! sections rendered as **full-width depth-shaded heading bars** with their
 //! bodies indented by depth, and `─`-filled dividers — hence `render` takes the
 //! viewport `width`. Colours use 3-nibble (`f80`), grayscale (`g50`) and
-//! truecolor (`Tff8800`) forms. Links render in the page's own style (underlined,
-//! reversed when selected), are numbered in document order so the Browser can
-//! follow one ([`link_targets`]). Input fields are skipped and remote partials
-//! show a placeholder (forms are a later phase). Anything unrecognised is
-//! dropped — never fatal, never leaks the control byte.
+//! truecolor (`Tff8800`) forms. Links and editable text fields are the focusable
+//! [`Element`]s (numbered in document order, [`elements`]); the focused one is
+//! highlighted and text fields render their live value (masked → `*`). Checkbox/
+//! radio inputs render read-only and remote partials show a placeholder.
+//! Anything unrecognised is dropped — never fatal, never leaks the control byte.
+
+use std::collections::HashMap;
 
 use ratatui::layout::Alignment;
 use ratatui::style::{Color, Modifier, Style};
@@ -29,6 +31,19 @@ const SECTION_INDENT: usize = 2;
 /// Default horizontal-divider glyph (NomadNet uses U+2500); a page's `-X`
 /// overrides it.
 const DIVIDER_CH: char = '\u{2500}';
+/// Background of an input field box.
+const FIELD_BG: Color = Color::Rgb(0x33, 0x33, 0x33);
+
+/// A focusable page element, in document order — the Browser navigates these and
+/// the focus index lines up with [`render`]'s `focus` argument.
+pub enum Element {
+    /// A hyperlink: `target` is the resolvable url, `fields` its submit spec
+    /// (`*`, field names, or `k=v` vars).
+    Link { target: String, fields: Vec<String> },
+    /// An editable text input: `name` keys its value, `default` is the initial
+    /// value. (Width/masked are applied at render time from the source.)
+    Field { name: String, default: String },
+}
 
 /// Body text style — the default grey, the base every line builds on.
 fn body_style() -> Style {
@@ -45,28 +60,35 @@ fn heading_palette(depth: usize) -> (Color, Color) {
     }
 }
 
-/// Cross-line link bookkeeping for a render pass: links are numbered in document
-/// order so the Browser can select one, and their targets are collected for
-/// navigation.
-struct LinkWalk {
-    /// Index assigned to the next link encountered.
+/// Cross-line bookkeeping for one walk over the source: focusable elements
+/// (links + text fields) are numbered in document order, collected, and — when
+/// rendering — highlighted (`focus`) and filled from the live field `values`.
+struct Walk<'a> {
+    /// Index assigned to the next focusable element.
     next: usize,
-    /// The link index to highlight (`REVERSED`), if any.
-    selected: Option<usize>,
-    /// Each link's resolvable target (the `url` of `label`url`fields`), in order.
-    targets: Vec<String>,
+    /// The element index to highlight, if any (render only).
+    focus: Option<usize>,
+    /// Current field values by name (render only; empty when just collecting).
+    values: &'a HashMap<String, String>,
+    /// The focusable elements, in order.
+    elements: Vec<Element>,
 }
 
-/// Render micron `source` into display lines, optionally highlighting the
-/// `selected` link (by document-order index). `width` is the viewport width
-/// (full-width heading bars and section dividers are filled to it).
-pub fn render(source: &str, selected: Option<usize>, width: u16) -> Vec<Line<'static>> {
+/// Render micron `source` into display lines at viewport `width`, highlighting
+/// the `focus`ed element and drawing fields from their current `values`.
+pub fn render(
+    source: &str,
+    width: u16,
+    focus: Option<usize>,
+    values: &HashMap<String, String>,
+) -> Vec<Line<'static>> {
     let mut literal = false;
     let mut depth = 0usize;
-    let mut walk = LinkWalk {
+    let mut walk = Walk {
         next: 0,
-        selected,
-        targets: Vec::new(),
+        focus,
+        values,
+        elements: Vec::new(),
     };
     source
         .split('\n')
@@ -82,16 +104,17 @@ pub fn render(source: &str, selected: Option<usize>, width: u16) -> Vec<Line<'st
         .collect()
 }
 
-/// The resolvable target of each link in `source`, in document order — what the
-/// Browser follows. No ratatui types, so callers outside the render path stay
-/// styling-free.
-pub fn link_targets(source: &str) -> Vec<String> {
+/// The focusable elements of `source` (links + text fields) in document order —
+/// what the Browser navigates and submits. No ratatui types.
+pub fn elements(source: &str) -> Vec<Element> {
+    let empty = HashMap::new();
     let mut literal = false;
     let mut depth = 0usize;
-    let mut walk = LinkWalk {
+    let mut walk = Walk {
         next: 0,
-        selected: None,
-        targets: Vec::new(),
+        focus: None,
+        values: &empty,
+        elements: Vec::new(),
     };
     for raw in source.split('\n') {
         let _ = render_line(
@@ -102,7 +125,7 @@ pub fn link_targets(source: &str) -> Vec<String> {
             0,
         );
     }
-    walk.targets
+    walk.elements
 }
 
 /// Render one source line, threading the cross-line `literal` block + section
@@ -111,7 +134,7 @@ fn render_line(
     line: &str,
     literal: &mut bool,
     depth: &mut usize,
-    walk: &mut LinkWalk,
+    walk: &mut Walk<'_>,
     width: u16,
 ) -> Line<'static> {
     // `= toggles a literal block; `\`=` inside one is an escaped literal marker.
@@ -155,7 +178,7 @@ fn render_line(
 }
 
 /// A normal text line, indented by its section depth.
-fn body_line(chars: &[char], pre_escape: bool, depth: usize, walk: &mut LinkWalk) -> Line<'static> {
+fn body_line(chars: &[char], pre_escape: bool, depth: usize, walk: &mut Walk<'_>) -> Line<'static> {
     let (mut spans, align) = make_output(chars, body_style(), pre_escape, walk);
     let indent = depth.saturating_sub(1) * SECTION_INDENT;
     if indent > 0 {
@@ -170,7 +193,7 @@ fn render_heading(
     content: &[char],
     depth: usize,
     width: u16,
-    walk: &mut LinkWalk,
+    walk: &mut Walk<'_>,
 ) -> Line<'static> {
     if content.is_empty() {
         return Line::raw("");
@@ -256,7 +279,7 @@ fn make_output(
     chars: &[char],
     base: Style,
     pre_escape: bool,
-    walk: &mut LinkWalk,
+    walk: &mut Walk<'_>,
 ) -> (Vec<Span<'static>>, Alignment) {
     let mut spans: Vec<Span> = Vec::new();
     let mut part = String::new();
@@ -319,19 +342,21 @@ fn make_output(
             'l' => align = Alignment::Left,
             'r' => align = Alignment::Right,
             'a' => align = Alignment::Left, // default alignment
-            '<' => skip_field(chars, &mut i),
+            '<' => emit_field(chars, &mut i, base, fmt, walk, &mut spans),
             '[' => {
-                let (label, url) = read_link(chars, &mut i);
-                // Number every link with a target so the Browser can address it,
-                // even if its label is empty (then show the url).
+                let (label, url, fields) = read_link(chars, &mut i);
+                // Number every link so the Browser can focus + follow it.
                 let idx = walk.next;
                 walk.next += 1;
-                walk.targets.push(url.clone());
+                walk.elements.push(Element::Link {
+                    target: url.clone(),
+                    fields,
+                });
                 let shown = if label.is_empty() { url } else { label };
                 // Links inherit the page's own styling (NomadNet does the same),
-                // with an underline to flag them; the selected link is reversed.
+                // underlined to flag them; the focused element is reversed.
                 let mut style = fmt.style(base).add_modifier(Modifier::UNDERLINED);
-                if walk.selected == Some(idx) {
+                if walk.focus == Some(idx) {
                     style = style.add_modifier(Modifier::REVERSED);
                 }
                 spans.push(Span::styled(shown, style));
@@ -395,19 +420,164 @@ fn take(chars: &[char], i: &mut usize, n: usize) -> Vec<char> {
     out
 }
 
-/// Skip an input field `` `<…`…>`` up to and including its closing `>`.
-fn skip_field(chars: &[char], i: &mut usize) {
-    while let Some(&c) = chars.get(*i) {
-        *i += 1;
-        if c == '>' {
-            break;
+/// The micron field kinds. Checkboxes/radios render read-only this phase.
+enum FieldKind {
+    Text,
+    Checkbox,
+    Radio,
+}
+
+/// A parsed `` `<flags|name`data>`` input field.
+struct FieldSpec {
+    kind: FieldKind,
+    name: String,
+    width: u16,
+    masked: bool,
+    /// Initial text (Text) or label (checkbox/radio).
+    data: String,
+    prechecked: bool,
+}
+
+/// Parse a field block `` `<content`data>`` (cursor `*i` is just past `<`),
+/// advancing past the closing `>`. Mirrors `MicronParser.parse_line` field logic.
+fn parse_field(chars: &[char], i: &mut usize) -> Option<FieldSpec> {
+    // content up to the next backtick.
+    let cstart = *i;
+    let mut j = *i;
+    while j < chars.len() && chars[j] != '`' {
+        j += 1;
+    }
+    if j >= chars.len() {
+        *i = chars.len();
+        return None; // no `, invalid field
+    }
+    let content: String = chars[cstart..j].iter().collect();
+    // data from after the backtick up to '>'.
+    let dstart = j + 1;
+    let mut k = dstart;
+    while k < chars.len() && chars[k] != '>' {
+        k += 1;
+    }
+    if k >= chars.len() {
+        *i = chars.len();
+        return None; // no '>', invalid field
+    }
+    let data: String = chars[dstart..k].iter().collect();
+    *i = k + 1; // past '>'
+
+    let mut kind = FieldKind::Text;
+    let mut masked = false;
+    let mut width = 24u16;
+    let mut prechecked = false;
+    let name;
+    if let Some((flags, rest)) = content.split_once('|') {
+        let comps: Vec<&str> = rest.split('|').collect();
+        let mut flagstr = flags.to_string();
+        if flagstr.contains('^') {
+            kind = FieldKind::Radio;
+            flagstr = flagstr.replace('^', "");
+        } else if flagstr.contains('?') {
+            kind = FieldKind::Checkbox;
+            flagstr = flagstr.replace('?', "");
+        } else if flagstr.contains('!') {
+            masked = true;
+            flagstr = flagstr.replace('!', "");
+        }
+        if !flagstr.is_empty()
+            && let Ok(w) = flagstr.parse::<u16>()
+        {
+            width = w.min(256);
+        }
+        name = comps.first().copied().unwrap_or("").to_string();
+        prechecked = comps.get(2) == Some(&"*");
+    } else {
+        name = content;
+    }
+    Some(FieldSpec {
+        kind,
+        name,
+        width,
+        masked,
+        data,
+        prechecked,
+    })
+}
+
+/// Render an input field, pushing a focusable [`Element::Field`] for text inputs
+/// (checkboxes/radios render read-only this phase).
+fn emit_field(
+    chars: &[char],
+    i: &mut usize,
+    base: Style,
+    fmt: Fmt,
+    walk: &mut Walk<'_>,
+    spans: &mut Vec<Span<'static>>,
+) {
+    let Some(spec) = parse_field(chars, i) else {
+        return;
+    };
+    match spec.kind {
+        FieldKind::Text => {
+            let idx = walk.next;
+            walk.next += 1;
+            let value = walk
+                .values
+                .get(&spec.name)
+                .cloned()
+                .unwrap_or_else(|| spec.data.clone());
+            spans.push(field_span(
+                &value,
+                spec.width,
+                spec.masked,
+                walk.focus == Some(idx),
+            ));
+            walk.elements.push(Element::Field {
+                name: spec.name,
+                default: spec.data,
+            });
+        }
+        FieldKind::Checkbox => {
+            let mark = if spec.prechecked { "[x] " } else { "[ ] " };
+            spans.push(Span::styled(
+                format!("{mark}{}", spec.data),
+                fmt.style(base),
+            ));
+        }
+        FieldKind::Radio => {
+            let mark = if spec.prechecked { "(o) " } else { "( ) " };
+            spans.push(Span::styled(
+                format!("{mark}{}", spec.data),
+                fmt.style(base),
+            ));
         }
     }
 }
 
-/// Read a link `` `[label`url`fields]`` into `(label, url)` — `label` empty when
-/// none is given (the caller then shows the url). Advances past the closing `]`.
-fn read_link(chars: &[char], i: &mut usize) -> (String, String) {
+/// A text-input box: the value (masked as `*`) bounded to `width`, on a field
+/// background; reversed (a cursor cue) when focused.
+fn field_span(value: &str, width: u16, masked: bool, focused: bool) -> Span<'static> {
+    let w = (width as usize).max(1);
+    let shown: String = if masked {
+        "*".repeat(value.chars().count())
+    } else {
+        value.to_string()
+    };
+    let mut s: String = shown.chars().take(w).collect();
+    let len = s.chars().count();
+    if len < w {
+        s.extend(std::iter::repeat_n(' ', w - len));
+    }
+    let mut style = Style::default().bg(FIELD_BG).fg(DEFAULT_FG);
+    if focused {
+        style = style.add_modifier(Modifier::REVERSED);
+    }
+    Span::styled(s, style)
+}
+
+/// Read a link `` `[label`url`fields]`` into `(label, url, fields)`. `label`
+/// empty when none is given (the caller then shows the url); `fields` is the
+/// submit spec (`*`, names, `k=v`). Advances past the closing `]`.
+fn read_link(chars: &[char], i: &mut usize) -> (String, String, Vec<String>) {
     let start = *i;
     let mut j = *i;
     while j < chars.len() && chars[j] != ']' {
@@ -416,24 +586,31 @@ fn read_link(chars: &[char], i: &mut usize) -> (String, String) {
     let data: String = chars[start..j].iter().collect();
     *i = if j < chars.len() { j + 1 } else { j };
 
-    let mut parts = data.split('`');
-    let first = parts.next().unwrap_or("").to_string();
-    match parts.next() {
-        // `label`url[`fields]` — explicit label and target.
-        Some(url) => (first, url.to_string()),
+    let parts: Vec<&str> = data.split('`').collect();
+    let split_fields = |f: &str| -> Vec<String> {
+        f.split('|')
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+            .collect()
+    };
+    match parts.as_slice() {
         // `url]` with no separator — the url is its own label.
-        None => (String::new(), first),
+        [only] => (String::new(), only.to_string(), Vec::new()),
+        [label, url] => (label.to_string(), url.to_string(), Vec::new()),
+        [label, url, fields, ..] => (label.to_string(), url.to_string(), split_fields(fields)),
+        [] => (String::new(), String::new(), Vec::new()),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{link_targets, render as render_sel};
+    use super::{Element, elements, render as render_sel};
     use ratatui::style::Modifier;
+    use std::collections::HashMap;
 
-    /// 1-arg render (no link highlighted, fixed width) for text assertions.
+    /// Render (nothing focused, default values, fixed width) for text assertions.
     fn render(source: &str) -> Vec<ratatui::text::Line<'static>> {
-        render_sel(source, None, 80)
+        render_sel(source, 80, None, &HashMap::new())
     }
 
     /// Concatenated visible text of a rendered line.
@@ -449,7 +626,7 @@ mod tests {
 
     #[test]
     fn heading_is_a_full_width_bar() {
-        let line = &render_sel(">Hi", None, 20)[0];
+        let line = &render_sel(">Hi", 20, None, &HashMap::new())[0];
         assert_eq!(line.width(), 20, "filled to the viewport width");
         assert!(
             line.spans.iter().any(|s| s.style.bg.is_some()),
@@ -461,7 +638,7 @@ mod tests {
     #[test]
     fn section_body_is_indented_by_depth() {
         // A depth-2 heading sets the section; the following body line indents 2.
-        let lines = render_sel(">>Sec\nbody text", None, 40);
+        let lines = render_sel(">>Sec\nbody text", 40, None, &HashMap::new());
         assert!(text_of(&lines[1]).starts_with("  body text"));
     }
 
@@ -517,11 +694,6 @@ mod tests {
     }
 
     #[test]
-    fn input_field_is_skipped() {
-        assert_eq!(text_of(&render("name `<8|user`alice>done")[0]), "name done");
-    }
-
-    #[test]
     fn escaped_backtick_is_literal() {
         assert_eq!(text_of(&render("a\\`b")[0]), "a`b");
     }
@@ -546,17 +718,54 @@ mod tests {
     #[test]
     fn link_targets_collected_in_document_order() {
         let src = "`[Home`:/page/index.mu]\nmid\n`[Files`:/page/files.mu`a|b]\n`[plainurl]";
+        let targets: Vec<String> = elements(src)
+            .into_iter()
+            .filter_map(|e| match e {
+                Element::Link { target, .. } => Some(target),
+                _ => None,
+            })
+            .collect();
         assert_eq!(
-            link_targets(src),
-            vec![":/page/index.mu", ":/page/files.mu", "plainurl"],
+            targets,
+            vec![":/page/index.mu", ":/page/files.mu", "plainurl"]
         );
+    }
+
+    #[test]
+    fn text_field_parsed_and_rendered() {
+        let src = "Name: `<12|user`alice>";
+        match elements(src).as_slice() {
+            [Element::Field { name, default }] => {
+                assert_eq!(name, "user");
+                assert_eq!(default, "alice");
+            }
+            other => panic!("expected one text field, got {} elements", other.len()),
+        }
+        assert!(text_of(&render(src)[0]).contains("alice"));
+    }
+
+    #[test]
+    fn masked_field_hides_value() {
+        let t = text_of(&render("`<!|pw`secret>")[0]);
+        assert!(t.contains("******") && !t.contains("secret"));
+    }
+
+    #[test]
+    fn link_captures_field_spec() {
+        match &elements("`[Go`/page/x.mu`q|name]")[0] {
+            Element::Link { target, fields } => {
+                assert_eq!(target, "/page/x.mu");
+                assert_eq!(fields, &vec!["q".to_string(), "name".to_string()]);
+            }
+            _ => panic!("expected a link"),
+        }
     }
 
     #[test]
     fn selected_link_renders_reversed() {
         let src = "`[One`:/a] `[Two`:/b]";
         // Highlight the second link (index 1).
-        let line = &render_sel(src, Some(1), 80)[0];
+        let line = &render_sel(src, 80, Some(1), &HashMap::new())[0];
         let two = line
             .spans
             .iter()

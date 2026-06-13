@@ -43,6 +43,10 @@ bytes = { version = "1", optional = true }
 # Hex-encode 16-byte destination hashes for display and conversation keys.
 hex = { version = "0.4", optional = true }
 
+# Encode Nomad Network form submissions as the msgpack request map. Already in
+# the lockfile transitively via the `rns-*`/`lxmf` stack.
+rmpv = { version = "1.3", optional = true }
+
 [features]
 default = ["splash"]
 # Native cold-boot splash: a text-only bring-up sequence that doubles as a live
@@ -61,4 +65,5 @@ net = [
     "dep:lxmf-core",
     "dep:bytes",
     "dep:hex",
+    "dep:rmpv",
 ]

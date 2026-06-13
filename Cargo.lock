@@ -587,6 +587,7 @@ dependencies = [
  "hex",
  "lxmf-core",
  "ratatui",
+ "rmpv",
  "rns-crypto",
  "rns-identity",
  "rns-interface",

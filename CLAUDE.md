@@ -33,11 +33,13 @@ A clean three-way split keeps the render path trivial and the logic testable:
   lines flip live and the console opens when the address is up. `cfg(test)` and
   `FOXHOLE_NO_SPLASH` start in `Running`.
 - `src/micron.rs` — pure renderer for Nomad Network **micron** page markup,
-  mirroring NomadNet's `MicronParser.py` (headings, dividers,
-  bold/italic/underline, `` `F``/`` `B`` colours, alignment, escapes, literal
-  blocks). `render(&str, selected: Option<usize>)` highlights the selected link;
-  `link_targets(&str)` lists link targets in order for navigation. Unknown tags
-  are stripped, never fatal. Feeds the Browser tool; unit-tested.
+  mirroring NomadNet's `MicronParser.py` (NomadNet-dark-theme heading bars,
+  section indent, dividers, bold/italic/underline, `` `F``/`` `B`` colours,
+  alignment, escapes, literal blocks). `render(&str, width, focus, &values)`
+  draws the page (highlighting the focused element, filling text fields from
+  `values`); `elements(&str)` lists the focusable `Element`s (links + text
+  fields) the Browser navigates/submits. Unknown tags stripped, never fatal;
+  unit-tested.
 - `src/storage.rs` — `atomic_write` (write-temp → fsync → rename) for durable
   state.
 - `src/store.rs` — *(`net` feature)* encrypted, atomic, per-conversation history

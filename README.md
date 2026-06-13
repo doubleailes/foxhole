@@ -131,9 +131,10 @@ Two-tier layout. **Tools** along the top; **panes** within each.
 The **Browser** tool reads Nomad Network ████ pages: it lists discovered
 `nomadnetwork.node` stations and fetches `index.mu` over a Reticulum link,
 rendering the ████ micron markup. Two panes (`Tab` to switch): a node list, and
-the page viewport where `Up/Down` move between links and `Enter` follows one —
-same-node (`:/page/…`) or to another discovered node — with `Backspace` to go
-back. Input forms are ████████████.
+the page viewport where `Up/Down` move between **links and input fields**, typing
+edits a focused field (masked fields show `*`), and `Enter` follows a link or
+**submits its form** — same-node (`:/page/…`) or to another discovered node —
+with `Backspace` to go back. Checkbox/radio inputs are ████████████.
 
 Additional bindings exist for ████████ and ████████████ but are omitted from
 this release.

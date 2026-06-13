@@ -32,8 +32,13 @@ pub enum NetCommand {
     /// request a path, then report the hop count + next-hop interface.
     RequestPath(String),
     /// Fetch a Nomad Network page: `identity` is the node's hex identity hash,
-    /// `path` the micron page path (e.g. `/page/index.mu`).
-    FetchPage { identity: String, path: String },
+    /// `path` the micron page path (e.g. `/page/index.mu`), `fields` the form
+    /// submission as `(key, value)` pairs (`field_…`/`var_…`), empty for a GET.
+    FetchPage {
+        identity: String,
+        path: String,
+        fields: Vec<(String, String)>,
+    },
 }
 
 /// Which field the New Conversation popup is editing.
@@ -318,11 +323,13 @@ pub struct Page {
     pub path: String,
     /// Fetch progress / outcome.
     pub status: PageStatus,
-    /// Link targets in document order (from `micron::link_targets`), populated
-    /// once the page loads. Empty while fetching/errored.
-    pub links: Vec<String>,
-    /// The selected link index within `links` (Page-pane navigation).
-    pub link_sel: usize,
+    /// Focusable elements (links + text fields) in document order, from
+    /// `micron::elements`. Empty while fetching/errored.
+    pub elements: Vec<crate::micron::Element>,
+    /// The focused element index within `elements` (Page-pane navigation).
+    pub element_sel: usize,
+    /// Current text-field values by name (seeded from each field's default).
+    pub field_values: HashMap<String, String>,
 }
 
 /// Which Browser-tab pane has focus: the node list or the page viewport.
@@ -1111,7 +1118,8 @@ impl App {
 
     /// Browser: two panes (node list / page viewport), switched with Tab.
     /// Nodes — Up/Down select, Enter/`g` open the node's index. Page — Up/Down
-    /// move the link cursor, Enter follow, Backspace back. `r` reloads.
+    /// move the element cursor, type into a focused field, Enter follow a link,
+    /// Backspace back. `r` reloads (unless a field is being edited).
     fn handle_browser_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Tab => {
@@ -1120,12 +1128,7 @@ impl App {
                     BrowserPane::Page => BrowserPane::Nodes,
                 };
             }
-            KeyCode::Char('r') => {
-                if let Some(p) = &self.page {
-                    let (node, path) = (p.node.clone(), p.path.clone());
-                    self.fetch_page(node, path, false);
-                }
-            }
+            KeyCode::Char('r') if !self.editing_field() => self.reload(),
             _ => match self.browser_pane {
                 BrowserPane::Nodes => self.handle_browser_nodes_key(key),
                 BrowserPane::Page => self.handle_browser_page_key(key),
@@ -1145,7 +1148,7 @@ impl App {
             KeyCode::Enter | KeyCode::Char('g') => {
                 if let Some(node) = self.nomad_nodes.get(self.browser_selected) {
                     let id = node.identity.clone();
-                    self.fetch_page(id, "/page/index.mu".to_string(), true);
+                    self.fetch_page(id, "/page/index.mu".to_string(), Vec::new(), true);
                     self.browser_pane = BrowserPane::Page; // focus the page to read/follow
                 }
             }
@@ -1153,46 +1156,123 @@ impl App {
         }
     }
 
-    /// Page-viewport pane keys (link navigation + history).
+    /// Page-viewport pane keys: element navigation, field editing, link follow.
     fn handle_browser_page_key(&mut self, key: KeyEvent) {
-        let link_count = self.page.as_ref().map(|p| p.links.len()).unwrap_or(0);
         match key.code {
-            KeyCode::Up => {
-                if let Some(p) = &mut self.page {
-                    p.link_sel = p.link_sel.saturating_sub(1);
-                }
-            }
-            KeyCode::Down => {
-                if let Some(p) = &mut self.page
-                    && p.link_sel + 1 < link_count
-                {
-                    p.link_sel += 1;
-                }
-            }
+            KeyCode::Up => self.move_element(-1),
+            KeyCode::Down => self.move_element(1),
+            // A focused text field captures typing; otherwise these act on links.
+            KeyCode::Char(c) if self.focused_field_name().is_some() => self.field_push(c),
+            KeyCode::Backspace if self.focused_field_name().is_some() => self.field_pop(),
             KeyCode::Enter => self.follow_link(),
             KeyCode::Backspace => self.go_back(),
             _ => {}
         }
     }
 
-    /// Follow the selected link on the current page, if it resolves.
+    /// Move the page-element cursor by `delta`, clamped.
+    fn move_element(&mut self, delta: isize) {
+        if let Some(p) = &mut self.page {
+            let n = p.elements.len();
+            if n == 0 {
+                return;
+            }
+            let cur = p.element_sel as isize;
+            p.element_sel = cur.saturating_add(delta).clamp(0, n as isize - 1) as usize;
+        }
+    }
+
+    /// Name of the focused element if it is a text field.
+    fn focused_field_name(&self) -> Option<String> {
+        let p = self.page.as_ref()?;
+        match p.elements.get(p.element_sel)? {
+            crate::micron::Element::Field { name, .. } => Some(name.clone()),
+            _ => None,
+        }
+    }
+
+    /// Whether the operator is editing a page text field (so `r` types instead
+    /// of reloading).
+    fn editing_field(&self) -> bool {
+        self.active == Tool::Browser
+            && self.browser_pane == BrowserPane::Page
+            && self.focused_field_name().is_some()
+    }
+
+    /// Append a char to the focused field's value (end-insert editing).
+    fn field_push(&mut self, c: char) {
+        if let Some(name) = self.focused_field_name()
+            && let Some(p) = &mut self.page
+        {
+            p.field_values.entry(name).or_default().push(c);
+        }
+    }
+
+    /// Delete the last char of the focused field's value.
+    fn field_pop(&mut self) {
+        if let Some(name) = self.focused_field_name()
+            && let Some(p) = &mut self.page
+        {
+            p.field_values.entry(name).or_default().pop();
+        }
+    }
+
+    /// Reload the current page (no history push).
+    fn reload(&mut self) {
+        if let Some(p) = &self.page {
+            let (node, path) = (p.node.clone(), p.path.clone());
+            self.fetch_page(node, path, Vec::new(), false);
+        }
+    }
+
+    /// Follow the focused link, submitting its form fields if it has any.
     fn follow_link(&mut self) {
-        let Some(url) = self
+        let Some(crate::micron::Element::Link { target, fields }) = self
             .page
             .as_ref()
-            .and_then(|p| p.links.get(p.link_sel).cloned())
+            .and_then(|p| p.elements.get(p.element_sel))
         else {
             return;
         };
-        match self.resolve_link(&url) {
-            Some((identity, path)) => self.fetch_page(identity, path, true),
+        let (target, fields) = (target.clone(), fields.clone());
+        match self.resolve_link(&target) {
+            Some((identity, path)) => {
+                let form = self.collect_form(&fields);
+                self.fetch_page(identity, path, form, true);
+            }
             None => {
                 // Unsupported scheme or an undiscovered node — surface it inline.
                 if let Some(p) = &mut self.page {
-                    p.status = PageStatus::Error(format!("cannot follow link: {url}"));
+                    p.status = PageStatus::Error(format!("cannot follow link: {target}"));
                 }
             }
         }
+    }
+
+    /// Collect a link's form submission per NomadNet: `*` → every field;
+    /// `name` → `field_<name>`; `k=v` → `var_<k>`. (Checkbox/radio deferred.)
+    fn collect_form(&self, link_fields: &[String]) -> Vec<(String, String)> {
+        let Some(p) = &self.page else {
+            return Vec::new();
+        };
+        let all = link_fields.iter().any(|f| f == "*");
+        let mut out = Vec::new();
+        // Literal `k=v` variables embedded in the link.
+        for f in link_fields {
+            if let Some((k, v)) = f.split_once('=') {
+                out.push((format!("var_{k}"), v.to_string()));
+            }
+        }
+        // Field values (all, or the named ones).
+        for el in &p.elements {
+            if let crate::micron::Element::Field { name, .. } = el
+                && (all || link_fields.iter().any(|f| f == name))
+            {
+                let value = p.field_values.get(name).cloned().unwrap_or_default();
+                out.push((format!("field_{name}"), value));
+            }
+        }
+        out
     }
 
     /// Resolve a micron link `url` to `(node identity, page path)`.
@@ -1229,14 +1309,21 @@ impl App {
     /// Go back to the previous page in history (no-op when empty).
     fn go_back(&mut self) {
         if let Some((node, path)) = self.history.pop() {
-            self.fetch_page(node, path, false);
+            self.fetch_page(node, path, Vec::new(), false);
         }
     }
 
-    /// Queue a page fetch and show the fetching state. When `push_history`, the
-    /// current loaded page is pushed onto the back stack first. Skips a duplicate
-    /// fetch already in flight for the same page.
-    fn fetch_page(&mut self, identity: String, path: String, push_history: bool) {
+    /// Queue a page fetch and show the fetching state. `fields` is the form
+    /// submission (empty for a plain GET). When `push_history`, the current loaded
+    /// page is pushed onto the back stack first. Skips a duplicate fetch already
+    /// in flight for the same page.
+    fn fetch_page(
+        &mut self,
+        identity: String,
+        path: String,
+        fields: Vec<(String, String)>,
+        push_history: bool,
+    ) {
         let already = matches!(
             &self.page,
             Some(p) if p.node == identity && p.path == path && matches!(p.status, PageStatus::Fetching)
@@ -1251,13 +1338,15 @@ impl App {
         self.commands.push_back(NetCommand::FetchPage {
             identity: identity.clone(),
             path: path.clone(),
+            fields,
         });
         self.page = Some(Page {
             node: identity,
             path,
             status: PageStatus::Fetching,
-            links: Vec::new(),
-            link_sel: 0,
+            elements: Vec::new(),
+            element_sel: 0,
+            field_values: HashMap::new(),
         });
     }
 
@@ -1288,26 +1377,36 @@ impl App {
     }
 
     /// Fold a page-fetch result into the Browser view, if it matches the page
-    /// the operator is currently looking at. On success, extract its links.
+    /// the operator is currently looking at. On success, extract its focusable
+    /// elements and seed each text field's value from its default.
     #[cfg_attr(not(feature = "net"), allow(dead_code))]
     pub fn set_page(&mut self, identity: String, path: String, body: Result<String, String>) {
         // Ignore stale results for a page the operator has navigated away from.
         if !matches!(&self.page, Some(p) if p.node == identity && p.path == path) {
             return;
         }
-        let (status, links) = match body {
+        let (status, elements, field_values) = match body {
             Ok(src) => {
-                let links = crate::micron::link_targets(&src);
-                (PageStatus::Loaded(src), links)
+                let elements = crate::micron::elements(&src);
+                let mut field_values = HashMap::new();
+                for el in &elements {
+                    if let crate::micron::Element::Field { name, default, .. } = el {
+                        field_values
+                            .entry(name.clone())
+                            .or_insert_with(|| default.clone());
+                    }
+                }
+                (PageStatus::Loaded(src), elements, field_values)
             }
-            Err(e) => (PageStatus::Error(e), Vec::new()),
+            Err(e) => (PageStatus::Error(e), Vec::new(), HashMap::new()),
         };
         self.page = Some(Page {
             node: identity,
             path,
             status,
-            links,
-            link_sel: 0,
+            elements,
+            element_sel: 0,
+            field_values,
         });
     }
 
@@ -1931,6 +2030,7 @@ mod tests {
             Some(NetCommand::FetchPage {
                 identity: id.clone(),
                 path: "/page/index.mu".to_string(),
+                fields: Vec::new(),
             })
         );
         let page = app.page.as_ref().expect("page set to fetching");
@@ -1949,8 +2049,9 @@ mod tests {
             node: "33".repeat(16),
             path: "/page/index.mu".to_string(),
             status: PageStatus::Fetching,
-            links: Vec::new(),
-            link_sel: 0,
+            elements: Vec::new(),
+            element_sel: 0,
+            field_values: HashMap::new(),
         };
 
         app.page = Some(viewing());
@@ -1981,7 +2082,7 @@ mod tests {
     }
 
     #[test]
-    fn set_page_extracts_links() {
+    fn set_page_extracts_elements_and_seeds_fields() {
         let mut app = App::new();
         let id = "44".repeat(16);
         let path = "/page/index.mu".to_string();
@@ -1989,20 +2090,41 @@ mod tests {
             node: id.clone(),
             path: path.clone(),
             status: PageStatus::Fetching,
-            links: Vec::new(),
-            link_sel: 0,
+            elements: Vec::new(),
+            element_sel: 0,
+            field_values: HashMap::new(),
         });
         app.set_page(
             id,
             path,
-            Ok("`[Home`:/page/a.mu] `[Files`:/page/b.mu]".to_string()),
+            Ok("`[Home`:/page/a.mu] `<user`alice>".to_string()),
         );
         let p = app.page.as_ref().unwrap();
-        assert_eq!(p.links, vec![":/page/a.mu", ":/page/b.mu"]);
+        // A link element followed by a text field element.
+        assert!(matches!(
+            p.elements.as_slice(),
+            [
+                crate::micron::Element::Link { .. },
+                crate::micron::Element::Field { .. }
+            ]
+        ));
+        // The field value is seeded from its default.
+        assert_eq!(
+            p.field_values.get("user").map(String::as_str),
+            Some("alice")
+        );
     }
 
-    /// A Browser viewing a loaded page on `node`, with the given links.
+    /// A Browser viewing a loaded page on `node`, with the given link targets as
+    /// its (link) elements.
     fn browsing(node: &str, path: &str, links: Vec<String>) -> App {
+        let elements = links
+            .into_iter()
+            .map(|target| crate::micron::Element::Link {
+                target,
+                fields: Vec::new(),
+            })
+            .collect();
         let mut app = App::new();
         app.active = Tool::Browser;
         app.browser_pane = BrowserPane::Page;
@@ -2010,8 +2132,9 @@ mod tests {
             node: node.to_string(),
             path: path.to_string(),
             status: PageStatus::Loaded(String::new()),
-            links,
-            link_sel: 0,
+            elements,
+            element_sel: 0,
+            field_values: HashMap::new(),
         });
         app
     }
@@ -2028,7 +2151,7 @@ mod tests {
     }
 
     #[test]
-    fn page_pane_link_cursor_clamps() {
+    fn page_pane_element_cursor_clamps() {
         let node = "55".repeat(16);
         let mut app = browsing(
             &node,
@@ -2036,11 +2159,11 @@ mod tests {
             vec![":/a.mu".to_string(), ":/b.mu".to_string()],
         );
         app.handle_key(press(KeyCode::Down));
-        assert_eq!(app.page.as_ref().unwrap().link_sel, 1);
+        assert_eq!(app.page.as_ref().unwrap().element_sel, 1);
         app.handle_key(press(KeyCode::Down)); // clamp at last
-        assert_eq!(app.page.as_ref().unwrap().link_sel, 1);
+        assert_eq!(app.page.as_ref().unwrap().element_sel, 1);
         app.handle_key(press(KeyCode::Up));
-        assert_eq!(app.page.as_ref().unwrap().link_sel, 0);
+        assert_eq!(app.page.as_ref().unwrap().element_sel, 0);
     }
 
     #[test]
@@ -2053,6 +2176,7 @@ mod tests {
             Some(NetCommand::FetchPage {
                 identity: node.clone(),
                 path: "/page/about.mu".to_string(),
+                fields: Vec::new(),
             })
         );
         // The previous page was pushed to history.
@@ -2073,6 +2197,7 @@ mod tests {
             Some(NetCommand::FetchPage {
                 identity: other_id,
                 path: "/page/index.mu".to_string(),
+                fields: Vec::new(),
             })
         );
     }
@@ -2101,9 +2226,98 @@ mod tests {
             Some(NetCommand::FetchPage {
                 identity: node,
                 path: "/page/one.mu".to_string(),
+                fields: Vec::new(),
             })
         );
         assert!(app.history.is_empty(), "history was popped (not re-pushed)");
+    }
+
+    /// A Browser page with the given pre-built elements, focused on the page pane.
+    fn browsing_elements(node: &str, elements: Vec<crate::micron::Element>) -> App {
+        let mut app = App::new();
+        app.active = Tool::Browser;
+        app.browser_pane = BrowserPane::Page;
+        app.page = Some(Page {
+            node: node.to_string(),
+            path: "/page/index.mu".to_string(),
+            status: PageStatus::Loaded(String::new()),
+            elements,
+            element_sel: 0,
+            field_values: HashMap::new(),
+        });
+        app
+    }
+
+    #[test]
+    fn typing_into_focused_field_edits_its_value() {
+        let mut app = browsing_elements(
+            &"dd".repeat(16),
+            vec![crate::micron::Element::Field {
+                name: "q".to_string(),
+                default: String::new(),
+            }],
+        );
+        app.handle_key(press(KeyCode::Char('h')));
+        app.handle_key(press(KeyCode::Char('i')));
+        assert_eq!(
+            app.page
+                .as_ref()
+                .unwrap()
+                .field_values
+                .get("q")
+                .map(String::as_str),
+            Some("hi")
+        );
+        app.handle_key(press(KeyCode::Backspace));
+        assert_eq!(
+            app.page
+                .as_ref()
+                .unwrap()
+                .field_values
+                .get("q")
+                .map(String::as_str),
+            Some("h")
+        );
+    }
+
+    #[test]
+    fn submit_link_collects_field_and_var_values() {
+        let node = "ee".repeat(16);
+        let mut app = browsing_elements(
+            &node,
+            vec![
+                crate::micron::Element::Field {
+                    name: "q".to_string(),
+                    default: String::new(),
+                },
+                crate::micron::Element::Link {
+                    target: ":/page/search.mu".to_string(),
+                    fields: vec!["v=1".to_string(), "*".to_string()],
+                },
+            ],
+        );
+        app.handle_key(press(KeyCode::Char('x'))); // type into the field
+        app.handle_key(press(KeyCode::Down)); // move to the submit link
+        app.handle_key(press(KeyCode::Enter));
+        let cmd = app.commands.pop_front().expect("a fetch was queued");
+        match cmd {
+            NetCommand::FetchPage {
+                identity,
+                path,
+                fields,
+            } => {
+                assert_eq!(identity, node);
+                assert_eq!(path, "/page/search.mu");
+                assert_eq!(
+                    fields,
+                    vec![
+                        ("var_v".to_string(), "1".to_string()),
+                        ("field_q".to_string(), "x".to_string()),
+                    ]
+                );
+            }
+            other => panic!("expected FetchPage, got {other:?}"),
+        }
     }
 
     #[test]
