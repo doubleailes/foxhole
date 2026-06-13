@@ -126,6 +126,7 @@ Two-tier layout. **Tools** along the top; **panes** within each.
 | `Enter`        | Open node index / follow selected link (Browser)    |
 | `Backspace`    | Back to previous page (Browser, page pane)          |
 | `Ctrl+X`       | Purge compose buffer                                |
+| `Ctrl+K`       | **BURN** — destroy all session data (confirm `BURN`)|
 | `Ctrl+Q`       | ████████ (terminate session)                        |
 
 The **Browser** tool reads Nomad Network ████ pages: it lists discovered

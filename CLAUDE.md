@@ -40,6 +40,11 @@ A clean three-way split keeps the render path trivial and the logic testable:
   `values`); `elements(&str)` lists the focusable `Element`s (links + text
   fields) the Browser navigates/submits. Unknown tags stripped, never fatal;
   unit-tested.
+- `src/burn.rs` — emergency data destruction (Ctrl+K → type `BURN`). `execute(dir)`
+  zero-overwrites + `fsync`es + unlinks every file under `config_dir()`, then
+  removes the tree; `main` runs it after the loop and `process::exit`s. Pure
+  `std::fs`, always compiled, unit-tested. (Best-effort vs FS forensics; the real
+  guarantee is the destroyed identity key making the stores undecryptable.)
 - `src/storage.rs` — `atomic_write` (write-temp → fsync → rename) for durable
   state.
 - `src/store.rs` — *(`net` feature)* encrypted, atomic, per-conversation history

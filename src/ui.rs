@@ -65,6 +65,57 @@ pub fn render(frame: &mut Frame, app: &App) {
     if let Some(ref nc) = app.new_conv {
         render_new_conv_popup(frame, nc);
     }
+    // The burn notice sits above all else — it's the most consequential action.
+    if let Some(ref b) = app.burn_confirm {
+        render_burn_popup(frame, b);
+    }
+}
+
+/// The burn-confirmation modal (Ctrl+K): a red notice listing what gets
+/// destroyed, gated behind typing the confirmation token.
+fn render_burn_popup(frame: &mut Frame, b: &crate::app::BurnConfirm) {
+    let area = centered_rect(60, 11, frame.area());
+    frame.render_widget(Clear, area);
+    let err = tag_style("ERR");
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_set(ASCII_BORDER)
+        .border_style(err)
+        .title(Span::styled(
+            " BURN NOTICE ",
+            err.add_modifier(Modifier::BOLD),
+        ));
+
+    let caret = Span::styled(" ", Style::default().add_modifier(Modifier::REVERSED));
+    let mut lines = vec![
+        Line::styled(
+            "  DESTROY ALL SESSION DATA. This cannot be undone.",
+            err.add_modifier(Modifier::BOLD),
+        ),
+        Line::raw("    - identity (your cryptographic identity)"),
+        Line::raw("    - known peers and propagation nodes"),
+        Line::raw("    - all conversation history"),
+        Line::raw("    - settings and Reticulum state"),
+        Line::raw(""),
+        Line::from(vec![
+            Span::raw(format!("  Type {} to confirm:  ", crate::app::BURN_TOKEN)),
+            Span::raw(b.input.clone()),
+            caret,
+        ]),
+    ];
+    if b.error {
+        lines.push(Line::styled(
+            format!("  not {} — nothing burned", crate::app::BURN_TOKEN),
+            err,
+        ));
+    } else {
+        lines.push(Line::raw("  [Enter] burn    [Esc] cancel"));
+    }
+
+    let para = Paragraph::new(lines)
+        .block(block)
+        .wrap(Wrap { trim: false });
+    frame.render_widget(para, area);
 }
 
 /// Modal for adding a conversation by LXMF address (Ctrl+O). The focused field
@@ -784,6 +835,7 @@ fn render_guide(frame: &mut Frame, app: &App, area: Rect) {
         "  Ctrl+S           Send to selected peer".to_string(),
         "  Ctrl+R           Sync now from propagation node (on demand)".to_string(),
         "  Ctrl+X           Purge compose buffer".to_string(),
+        "  Ctrl+K           BURN — destroy all session data (confirm: BURN)".to_string(),
         "  Ctrl+Q           Quit".to_string(),
     ];
     render_scroll(
