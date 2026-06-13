@@ -12,6 +12,7 @@
 
 mod app;
 mod config;
+mod micron;
 #[cfg(feature = "net")]
 mod net;
 #[cfg(feature = "splash")]
@@ -225,6 +226,16 @@ fn apply_net_event(app: &mut App, ev: NetEvent) {
         NetEvent::Sync(status) => app.sync_status = status,
         NetEvent::MsgStatus { id, status } => app.set_msg_status(id, status),
         NetEvent::Path { hash, hops, iface } => app.record_path(hash, hops, iface),
+        NetEvent::NomadNode {
+            identity,
+            name,
+            last_seen,
+        } => app.upsert_nomad(identity, name, last_seen),
+        NetEvent::Page {
+            identity,
+            path,
+            body,
+        } => app.set_page(identity, path, body),
         // Handled in `run` (loads history); nothing to fold into UI state here.
         NetEvent::StoreKey(_) => {}
     }

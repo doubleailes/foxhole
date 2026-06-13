@@ -19,7 +19,7 @@ use ratatui::symbols::border;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
-use crate::app::{App, NetColumn, Pane, Tool, path_summary};
+use crate::app::{App, NetColumn, PageStatus, Pane, Tool, path_summary};
 
 /// Pure 7-bit ASCII border set. Used by every pane so the layout is stable on
 /// terminals with no box-drawing glyphs.
@@ -185,6 +185,7 @@ fn render_tool(frame: &mut Frame, app: &App, area: Rect) {
     match app.active {
         Tool::Conversations => render_conversations(frame, app, area),
         Tool::Network => render_network(frame, app, area),
+        Tool::Browser => render_browser(frame, app, area),
         Tool::Log => render_log(frame, app, area),
         Tool::Interfaces => render_interfaces(frame, app, area),
         Tool::Guide => render_guide(frame, app, area),
@@ -588,6 +589,94 @@ fn last_probe_line(app: &App) -> Line<'static> {
         }
         None => Line::raw(""),
     }
+}
+
+/// Browser tool: discovered Nomad Network nodes (left) and the current micron
+/// page (right). Phase 1 is read-only — `Enter` fetches a node's index page.
+fn render_browser(frame: &mut Frame, app: &App, area: Rect) {
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // path + status header
+            Constraint::Min(3),    // node list | page viewport
+            Constraint::Length(1), // legend
+        ])
+        .split(area);
+
+    // Header: which page, and how the fetch is going.
+    let header = match &app.page {
+        Some(p) => {
+            let status = match &p.status {
+                PageStatus::Fetching => "fetching...",
+                PageStatus::Loaded(_) => "ok",
+                PageStatus::Error(_) => "error",
+            };
+            Line::from(vec![
+                Span::styled("PAGE ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(format!("{}  [{status}]", p.path)),
+            ])
+        }
+        None => Line::styled("PAGE  (select a node, press Enter)", ts_style()),
+    };
+    frame.render_widget(Paragraph::new(header), rows[0]);
+
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(34), Constraint::Percentage(66)])
+        .split(rows[1]);
+    render_nomad_list(frame, app, cols[0]);
+    render_page(frame, app, cols[1]);
+
+    let legend = Line::styled("[Up/Dn] node  [Enter] open index  [r] reload", ts_style());
+    frame.render_widget(Paragraph::new(legend), rows[2]);
+}
+
+/// The discovered Nomad node list, with a last-seen UTC stamp per row.
+fn render_nomad_list(frame: &mut Frame, app: &App, area: Rect) {
+    let lines: Vec<Line> = if app.nomad_nodes.is_empty() {
+        vec![Line::raw("  (none discovered)")]
+    } else {
+        app.nomad_nodes
+            .iter()
+            .enumerate()
+            .map(|(i, n)| {
+                let selected = i == app.browser_selected;
+                let marker = if selected { "> " } else { "  " };
+                let ts = match n.last_seen {
+                    0 => "--:--:--".to_string(),
+                    t => format!("{}Z", fmt_time(t)),
+                };
+                let mut style = Style::default();
+                if selected {
+                    style = style.add_modifier(Modifier::REVERSED);
+                }
+                Line::from(Span::styled(
+                    format!("{marker}{:<12.12} {ts}", n.label()),
+                    style,
+                ))
+            })
+            .collect()
+    };
+    frame.render_widget(
+        Paragraph::new(lines).block(pane_block("NODES", app.active == Tool::Browser)),
+        area,
+    );
+}
+
+/// The page viewport: rendered micron, or the fetch state.
+fn render_page(frame: &mut Frame, app: &App, area: Rect) {
+    let lines: Vec<Line> = match &app.page {
+        None => vec![Line::styled("  no page loaded", ts_style())],
+        Some(p) => match &p.status {
+            PageStatus::Fetching => vec![Line::styled("  fetching page...", ts_style())],
+            PageStatus::Error(e) => vec![Line::styled(format!("  error: {e}"), tag_style("ERR"))],
+            PageStatus::Loaded(src) => crate::micron::render(src),
+        },
+    };
+    let para = Paragraph::new(lines)
+        .block(pane_block("PAGE", false))
+        .wrap(Wrap { trim: false });
+    frame.render_widget(para, area);
 }
 
 /// Log tool: the system/application log scrollback, timestamped (UTC) and tinted.

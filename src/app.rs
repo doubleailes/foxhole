@@ -30,6 +30,9 @@ pub enum NetCommand {
     /// Operator-initiated path probe (rnpath-style) for a hex destination hash:
     /// request a path, then report the hop count + next-hop interface.
     RequestPath(String),
+    /// Fetch a Nomad Network page: `identity` is the node's hex identity hash,
+    /// `path` the micron page path (e.g. `/page/index.mu`).
+    FetchPage { identity: String, path: String },
 }
 
 /// Which field the New Conversation popup is editing.
@@ -77,8 +80,10 @@ impl NewConv {
 pub enum Tool {
     /// LXMF messaging: per-peer conversations plus the compose buffer.
     Conversations,
-    /// Discovered peers, propagation nodes, and Nomadnet page servers.
+    /// Discovered peers and propagation nodes.
     Network,
+    /// Nomad Network page browser (micron pages served by `nomadnetwork.node`).
+    Browser,
     /// System/application log (banners, diagnostics).
     Log,
     /// Reticulum interface status.
@@ -90,9 +95,10 @@ pub enum Tool {
 impl Tool {
     /// Tab order, left to right. Drives both the menu strip and Ctrl+N/P
     /// cycling, so there is a single source of truth for ordering.
-    pub const ALL: [Tool; 5] = [
+    pub const ALL: [Tool; 6] = [
         Tool::Conversations,
         Tool::Network,
+        Tool::Browser,
         Tool::Log,
         Tool::Interfaces,
         Tool::Guide,
@@ -103,6 +109,7 @@ impl Tool {
         match self {
             Tool::Conversations => "Conversations",
             Tool::Network => "Network",
+            Tool::Browser => "Browser",
             Tool::Log => "Log",
             Tool::Interfaces => "Interfaces",
             Tool::Guide => "Guide",
@@ -114,6 +121,7 @@ impl Tool {
         match self {
             Tool::Conversations => "CONV",
             Tool::Network => "NET",
+            Tool::Browser => "WEB",
             Tool::Log => "LOG",
             Tool::Interfaces => "IFACE",
             Tool::Guide => "GUIDE",
@@ -218,6 +226,21 @@ pub enum NetEvent {
         hops: Option<u8>,
         iface: Option<String>,
     },
+    /// A discovered Nomad Network node (from the recent-announce cache).
+    /// `identity` is its hex identity hash (what a page fetch addresses);
+    /// `last_seen` is the announce timestamp (Unix epoch seconds, UTC).
+    NomadNode {
+        identity: String,
+        name: Option<String>,
+        last_seen: u64,
+    },
+    /// Result of a Nomad Network page fetch: `body` is the raw micron source on
+    /// success, or an error message.
+    Page {
+        identity: String,
+        path: String,
+        body: Result<String, String>,
+    },
 }
 
 /// A discovered propagation node, shown in the Network tab.
@@ -258,6 +281,47 @@ pub struct PathProbe {
     pub at: u64,
     pub hops: Option<u8>,
     pub iface: Option<String>,
+}
+
+/// A discovered Nomad Network node, shown in the Browser tab. Keyed by the
+/// node's hex **identity** hash — what a page fetch addresses.
+pub struct NomadNode {
+    /// Hex identity hash (`sha256(public_key)[..16]`).
+    pub identity: String,
+    /// Announced node name, if any.
+    pub name: Option<String>,
+    /// When last heard via the announce cache (Unix epoch **seconds, UTC**).
+    pub last_seen: u64,
+}
+
+impl NomadNode {
+    /// What to show in the node list: the name, else a shortened identity hash.
+    pub fn label(&self) -> String {
+        match &self.name {
+            Some(n) if !n.is_empty() => n.clone(),
+            _ => format!("{}\u{2026}", short_hash(&self.identity)),
+        }
+    }
+}
+
+/// A Nomad Network page being viewed in the Browser tab.
+pub struct Page {
+    /// Hex identity hash of the serving node.
+    pub node: String,
+    /// Micron page path (e.g. `/page/index.mu`).
+    pub path: String,
+    /// Fetch progress / outcome.
+    pub status: PageStatus,
+}
+
+/// Lifecycle of a page fetch.
+pub enum PageStatus {
+    /// The fetch is in flight.
+    Fetching,
+    /// Loaded: the raw micron source (rendered by `crate::micron`).
+    Loaded(String),
+    /// The fetch failed; the string is a human-readable reason.
+    Error(String),
 }
 
 /// Delivery state of an outbound message, shown inline in the thread. `None`
@@ -494,6 +558,12 @@ pub struct App {
     pub net_col: NetColumn,
     /// Latest rnpath-style path probe per hex destination hash (Network tab).
     pub path_probes: HashMap<String, PathProbe>,
+    /// Discovered Nomad Network nodes (Browser tab).
+    pub nomad_nodes: Vec<NomadNode>,
+    /// Highlighted row in the Browser tab's node list.
+    pub browser_selected: usize,
+    /// The page currently being viewed/fetched in the Browser tab, if any.
+    pub page: Option<Page>,
     /// This node's own LXMF address (hex), once the network task reports it.
     pub local_address: Option<String>,
     /// When `Some`, a propagation sync is running and the pop-up shows this text.
@@ -552,6 +622,9 @@ impl App {
             node_selected: 0,
             net_col: NetColumn::Peers,
             path_probes: HashMap::new(),
+            nomad_nodes: Vec::new(),
+            browser_selected: 0,
+            page: None,
             local_address: None,
             sync_status: None,
             new_conv: None,
@@ -777,6 +850,7 @@ impl App {
         match self.active {
             Tool::Conversations => self.handle_conversations_key(ctrl, key),
             Tool::Network => self.handle_network_key(ctrl, key),
+            Tool::Browser => self.handle_browser_key(key),
             _ => {}
         }
     }
@@ -887,6 +961,91 @@ impl App {
                 iface,
             },
         );
+    }
+
+    /// Browser: navigate the node list and fetch a node's index page. Up/Down
+    /// move the selection; Enter/`g` open the selected node's `/page/index.mu`;
+    /// `r` re-fetches the current page. (Phase 1: no link navigation.)
+    fn handle_browser_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Up => self.browser_selected = self.browser_selected.saturating_sub(1),
+            KeyCode::Down => {
+                if self.browser_selected + 1 < self.nomad_nodes.len() {
+                    self.browser_selected += 1;
+                }
+            }
+            KeyCode::Enter | KeyCode::Char('g') => {
+                if let Some(node) = self.nomad_nodes.get(self.browser_selected) {
+                    self.fetch_page(node.identity.clone(), "/page/index.mu".to_string());
+                }
+            }
+            KeyCode::Char('r') => {
+                if let Some(page) = &self.page {
+                    let (node, path) = (page.node.clone(), page.path.clone());
+                    self.fetch_page(node, path);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Queue a page fetch and show the fetching state — unless one is already in
+    /// flight for the same page (avoid stacking duplicate requests).
+    fn fetch_page(&mut self, identity: String, path: String) {
+        let already = matches!(
+            &self.page,
+            Some(p) if p.node == identity && p.path == path && matches!(p.status, PageStatus::Fetching)
+        );
+        if already {
+            return;
+        }
+        self.commands.push_back(NetCommand::FetchPage {
+            identity: identity.clone(),
+            path: path.clone(),
+        });
+        self.page = Some(Page {
+            node: identity,
+            path,
+            status: PageStatus::Fetching,
+        });
+    }
+
+    /// Record/refresh a discovered Nomad Network node (dedupe by identity hash;
+    /// `last_seen` is the announce timestamp). Mirrors [`App::upsert_peer`].
+    #[cfg_attr(not(feature = "net"), allow(dead_code))]
+    pub fn upsert_nomad(&mut self, identity: String, name: Option<String>, last_seen: u64) {
+        if let Some(node) = self.nomad_nodes.iter_mut().find(|n| n.identity == identity) {
+            if name.is_some() {
+                node.name = name;
+            }
+            node.last_seen = node.last_seen.max(last_seen);
+        } else {
+            self.nomad_nodes.push(NomadNode {
+                identity,
+                name,
+                last_seen,
+            });
+        }
+    }
+
+    /// Fold a page-fetch result into the Browser view, if it matches the page
+    /// the operator is currently looking at.
+    #[cfg_attr(not(feature = "net"), allow(dead_code))]
+    pub fn set_page(&mut self, identity: String, path: String, body: Result<String, String>) {
+        // Ignore stale results for a page the operator has since navigated away
+        // from (Phase 1 has a single page, but this keeps it correct).
+        if !matches!(&self.page, Some(p) if p.node == identity && p.path == path) {
+            return;
+        }
+        let status = match body {
+            Ok(src) => PageStatus::Loaded(src),
+            Err(e) => PageStatus::Error(e),
+        };
+        self.page = Some(Page {
+            node: identity,
+            path,
+            status,
+        });
     }
 
     /// Cycle focus between Conversations panes (bound to Tab).
@@ -1478,6 +1637,76 @@ mod tests {
             ),
             "an [RT] log line was emitted"
         );
+    }
+
+    #[test]
+    fn upsert_nomad_dedupes_and_keeps_newest_last_seen() {
+        let mut app = App::new();
+        let id = "11".repeat(16);
+        app.upsert_nomad(id.clone(), Some("hub".to_string()), 100);
+        app.upsert_nomad(id.clone(), None, 250); // newer announce, no name update
+        assert_eq!(app.nomad_nodes.len(), 1);
+        let n = &app.nomad_nodes[0];
+        assert_eq!(n.name.as_deref(), Some("hub"));
+        assert_eq!(n.last_seen, 250);
+    }
+
+    #[test]
+    fn browser_enter_queues_index_fetch() {
+        let mut app = App::new();
+        app.active = Tool::Browser;
+        let id = "22".repeat(16);
+        app.upsert_nomad(id.clone(), Some("node".to_string()), 1);
+        app.browser_selected = 0;
+        app.handle_key(press(KeyCode::Enter));
+        assert_eq!(
+            app.commands.pop_front(),
+            Some(NetCommand::FetchPage {
+                identity: id.clone(),
+                path: "/page/index.mu".to_string(),
+            })
+        );
+        let page = app.page.as_ref().expect("page set to fetching");
+        assert_eq!(page.node, id);
+        assert!(matches!(page.status, PageStatus::Fetching));
+    }
+
+    #[test]
+    fn set_page_folds_ok_and_err_for_current_page() {
+        let mut app = App::new();
+        let id = "33".repeat(16);
+        let path = "/page/index.mu".to_string();
+        let viewing = || Page {
+            node: "33".repeat(16),
+            path: "/page/index.mu".to_string(),
+            status: PageStatus::Fetching,
+        };
+
+        app.page = Some(viewing());
+        app.set_page(id.clone(), path.clone(), Ok(">Hello".to_string()));
+        assert!(matches!(
+            app.page.as_ref().unwrap().status,
+            PageStatus::Loaded(_)
+        ));
+
+        app.page = Some(viewing());
+        app.set_page(id, path, Err("timeout".to_string()));
+        assert!(matches!(
+            app.page.as_ref().unwrap().status,
+            PageStatus::Error(_)
+        ));
+
+        // A result for a page we're no longer viewing is ignored.
+        app.page = Some(viewing());
+        app.set_page(
+            "99".repeat(16),
+            "/other.mu".to_string(),
+            Ok("x".to_string()),
+        );
+        assert!(matches!(
+            app.page.as_ref().unwrap().status,
+            PageStatus::Fetching
+        ));
     }
 
     #[test]

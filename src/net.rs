@@ -30,9 +30,11 @@ use lxmf_core::router::{
     DirectDeliveryPlanInput, DirectReusableLinkState, DirectRouteSnapshot, LxmRouter,
     OutboundAction, RouterConfig,
 };
+use rns_crypto::sha::{name_hash, truncated_hash};
 use rns_identity::destination::{DestType, Destination, Direction};
 use rns_identity::identity::Identity;
 use rns_runtime::lifecycle::ShutdownSignal;
+use rns_runtime::link_client::LinkClient;
 use rns_runtime::link_manager::LinkManager;
 use rns_runtime::reticulum;
 use rns_transport::constants::PATHFINDER_M;
@@ -96,6 +98,13 @@ const DEFAULT_HUB_PORT: u16 = 4242;
 /// LXMF inbox aspect — the full dotted destination name.
 const LXMF_DELIVERY: &str = "lxmf.delivery";
 const LXMF_PROPAGATION: &str = "lxmf.propagation";
+/// Nomad Network node aspect — the destination that serves micron pages.
+const NOMAD_NODE: &str = "nomadnetwork.node";
+
+/// Overall timeout for one Nomad Network page fetch (link + request + response).
+const PAGE_FETCH_TIMEOUT: Duration = Duration::from_secs(30);
+/// Hop count used for a page link when the node's announce hop count is unknown.
+const DEFAULT_PAGE_HOPS: u8 = 8;
 
 /// Re-announce our delivery destination on this cadence so peers keep a path.
 const ANNOUNCE_INTERVAL: Duration = Duration::from_secs(300);
@@ -257,6 +266,13 @@ async fn run_inner(
     .await
     .map_err(|e| format!("reticulum init: {e:?}"))?;
     let transport = handle.transport_tx.clone();
+    // Initiator-side client for Nomad Network page fetches. `Identity` is not
+    // `Clone`, but `LinkClient` is — so reload a second identity copy here and
+    // clone the client into each fetch task. Built from the same on-disk file.
+    let link_client = LinkClient::new(
+        handle.transport_tx.clone(),
+        Identity::from_file(&id_path).map_err(|e| format!("load identity (links): {e:?}"))?,
+    );
     handle
         .enable_on_network_discovery(Arc::new(
             lxmf_core::discovery_stamper::LxmfDiscoveryStamper::default(),
@@ -353,6 +369,10 @@ async fn run_inner(
     let mut last_path_request: HashMap<[u8; 16], f64> = HashMap::new();
     // Operator path probes awaiting resolution: dest -> (due_time, already_rearmed).
     let mut pending_paths: HashMap<[u8; 16], (f64, bool)> = HashMap::new();
+    // Nomad Network discovery: the node aspect's name-hash, and the last-known
+    // hop count per node identity (hex) for sizing page links.
+    let nomad_name_hash = name_hash(NOMAD_NODE);
+    let mut nomad_hops: HashMap<String, u8> = HashMap::new();
     let mut tracker = StatusTracker::default();
     let mut ticks: u32 = 0;
     let mut syncing = false;
@@ -521,6 +541,39 @@ async fn run_inner(
                         }
                         Err(e) => sys(format!("[SYS] path probe: bad address: {e}")).await,
                     },
+                    NetCommand::FetchPage { identity, path } => match parse_hash(&identity) {
+                        Ok(id) => {
+                            // The 30 s query blocks, so run it off the select loop.
+                            let hops = nomad_hops.get(&identity).copied().unwrap_or(DEFAULT_PAGE_HOPS);
+                            let id8 = identity.get(..8).unwrap_or(&identity);
+                            sys(format!("[SYS] page fetch {path} from {id8}.. ({hops} hops)")).await;
+                            let lc = link_client.clone();
+                            let ev = events.clone();
+                            tokio::spawn(async move {
+                                let result = lc
+                                    .query(id, NOMAD_NODE, &path, Vec::new(), hops, PAGE_FETCH_TIMEOUT)
+                                    .await;
+                                let log = match &result {
+                                    Ok(b) => format!("[SYS] page fetch {path}: ok, {} bytes", b.len()),
+                                    Err(e) => format!("[SYS] page fetch {path}: FAILED — {e}"),
+                                };
+                                let _ = ev.send(NetEvent::Sys(log)).await;
+                                let body = result
+                                    .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+                                    .map_err(|e| e.to_string());
+                                let _ = ev.send(NetEvent::Page { identity, path, body }).await;
+                            });
+                        }
+                        Err(e) => {
+                            let _ = events
+                                .send(NetEvent::Page {
+                                    identity,
+                                    path,
+                                    body: Err(format!("bad node address: {e}")),
+                                })
+                                .await;
+                        }
+                    },
                 }
             }
             _ = send_tick.tick() => {
@@ -566,6 +619,13 @@ async fn run_inner(
                 }
 
                 resolve_path_probes(&handle, &mut pending_paths, events).await;
+
+                // Poll the recent-announce cache for Nomad Network nodes (every
+                // ~10 s). Pull-based discovery avoids the announce-handler that
+                // `LinkClient::query` deregisters mid-fetch.
+                if ticks.is_multiple_of(10) {
+                    discover_nomad_nodes(&handle, &nomad_name_hash, &mut nomad_hops, events).await;
+                }
 
                 dispatch(&mut router, &mut link_delivery, &known, &hops, &mut last_path_request, &mut tracker, &transport, events).await;
             }
@@ -759,6 +819,79 @@ async fn resolve_path_probes(
                 iface,
             })
             .await;
+    }
+}
+
+/// Scan the transport's recent-announce cache for Nomad Network nodes and report
+/// each (deduped UI-side) with its announce timestamp. The node's identity hash
+/// — `sha256(public_key)[..16]`, what a page fetch addresses — is derived from
+/// the announced public key; its hop count is cached for sizing page links.
+async fn discover_nomad_nodes(
+    handle: &reticulum::ReticulumHandle,
+    nomad_name_hash: &[u8; 10],
+    nomad_hops: &mut HashMap<String, u8>,
+    events: &mpsc::Sender<NetEvent>,
+) {
+    let Some(TransportQueryResponse::Announces(entries)) = handle
+        .query_control(TransportQuery::GetRecentAnnounces)
+        .await
+    else {
+        return;
+    };
+    for e in entries {
+        if &e.name_hash != nomad_name_hash {
+            continue;
+        }
+        let Some(pk) = e.public_key else { continue };
+        let id_hash = truncated_hash(&pk);
+        let identity = hex::encode(id_hash);
+        let name = nomad_name_from_app_data(e.app_data.as_deref());
+        // Log the first time we see each node.
+        if nomad_hops.insert(identity.clone(), e.hops).is_none() {
+            // Cross-check: the destination a fetch addresses should equal the
+            // announced one. A mismatch (never expected) means a derivation bug.
+            let derived = Destination::hash_from_name_and_identity(NOMAD_NODE, Some(&id_hash));
+            if derived != e.dest_hash {
+                let _ = events
+                    .send(NetEvent::Sys(format!(
+                        "[SYS] WARN nomad {}.. derived dest {}.. != announced {}..",
+                        &identity[..8],
+                        &hex::encode(derived)[..8],
+                        &hex::encode(e.dest_hash)[..8],
+                    )))
+                    .await;
+            }
+            let _ = events
+                .send(NetEvent::Sys(format!(
+                    "[SYS] nomad node {}.. dest {}.. ({} hops) {}",
+                    &identity[..8],
+                    &hex::encode(e.dest_hash)[..8],
+                    e.hops,
+                    name.as_deref().unwrap_or("?"),
+                )))
+                .await;
+        }
+        let _ = events
+            .send(NetEvent::NomadNode {
+                identity,
+                name,
+                last_seen: e.timestamp as u64,
+            })
+            .await;
+    }
+}
+
+/// Best-effort node name from a `nomadnetwork.node` announce's app data (UTF-8,
+/// trimmed). Returns `None` when empty or unprintable. (Calibrate against real
+/// announces if a node encodes its name differently.)
+fn nomad_name_from_app_data(data: Option<&[u8]>) -> Option<String> {
+    let bytes = data?;
+    let s = String::from_utf8_lossy(bytes);
+    let t = s.trim();
+    if t.is_empty() || t.chars().any(|c| c.is_control()) {
+        None
+    } else {
+        Some(t.to_string())
     }
 }
 

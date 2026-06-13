@@ -32,13 +32,20 @@ A clean three-way split keeps the render path trivial and the logic testable:
   events (`StoreKey`, `Local`, transport/identity banners) into `mark_boot` so
   lines flip live and the console opens when the address is up. `cfg(test)` and
   `FOXHOLE_NO_SPLASH` start in `Running`.
+- `src/micron.rs` — pure renderer for Nomad Network **micron** page markup
+  (`render(&str) -> Vec<Line>`): a forgiving subset (headings, dividers,
+  bold/italic/underline, `` `F``/`` `B`` colours, links as label-only). Unknown
+  tags are stripped, never fatal. Feeds the Browser tool; unit-tested.
 - `src/storage.rs` — `atomic_write` (write-temp → fsync → rename) for durable
   state.
 - `src/store.rs` — *(`net` feature)* encrypted, atomic, per-conversation history
   store: `FXC1` blob → `rns_crypto::token` (AES-256-CBC + HMAC) → `atomic_write`,
   key HKDF-derived from the identity. Corruption/foreign files are skipped on load.
 - `src/net.rs` — *(in progress, behind the `net` feature)* live LXMF/Reticulum
-  stack: identity, `ReticulumHandle`, `LxmRouter`, announce/delivery tasks.
+  stack: identity, `ReticulumHandle`, `LxmRouter`, announce/delivery tasks. Also
+  Nomad Network node discovery (recent-announce-cache poll for
+  `nomadnetwork.node`) and page fetching via `LinkClient::query` (spawned off the
+  select loop), reported as `NetEvent::{NomadNode,Page}`.
 
 ## Networking (the `net` feature)
 

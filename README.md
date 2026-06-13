@@ -109,7 +109,7 @@ build (`--no-default-features`) omits the sequence entirely.
 Two-tier layout. **Tools** along the top; **panes** within each.
 
 ```
- Conversations | Network | Log | Interfaces | Guide
+ Conversations | Network | Browser | Log | Interfaces | Guide
 ```
 
 | Key            | Action                                              |
@@ -117,11 +117,18 @@ Two-tier layout. **Tools** along the top; **panes** within each.
 | `Ctrl+N/Ctrl+P`| Cycle tools (tabs)                                  |
 | `Ctrl+O`       | Open a conversation by raw LXMF address             |
 | `Tab`          | Cycle panes (Peers / Thread / Transmit)             |
-| `Up/Down`      | Select contact (Peers pane)                         |
+| `Up/Down`      | Select contact / node                               |
 | `Ctrl+S`       | Transmit                                            |
 | `Ctrl+R`       | Sync from propagation node (operator-initiated)     |
+| `p`            | Path probe selected peer/node (Network, rnpath)     |
+| `Enter`        | Open page index of selected Nomad node (Browser)    |
 | `Ctrl+X`       | Purge compose buffer                                |
 | `Ctrl+Q`       | ████████ (terminate session)                        |
+
+The **Browser** tool reads Nomad Network ████ pages: it lists discovered
+`nomadnetwork.node` stations and fetches their `index.mu` over a Reticulum link,
+rendering the ████ micron markup. Read-only in this release; link traversal is
+████████████.
 
 Additional bindings exist for ████████ and ████████████ but are omitted from
 this release.
