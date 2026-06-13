@@ -160,6 +160,8 @@ impl Pane {
 /// protocol task knows which peer to address.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Outbound {
+    /// Correlation id linking this send to its thread entry (for status updates).
+    pub id: u64,
     /// Destination peer (display name offline; hex destination hash under `net`).
     pub peer: String,
     /// The message text.
@@ -204,6 +206,8 @@ pub enum NetEvent {
     /// The derived 64-byte conversation-store key, handed up once at startup so
     /// `main` can load history and persist new messages.
     StoreKey([u8; 64]),
+    /// Delivery-status update for an outbound message (by its correlation id).
+    MsgStatus { id: u64, status: MsgStatus },
 }
 
 /// A discovered propagation node, shown in the Network tab.
@@ -214,6 +218,27 @@ pub struct Node {
     pub name: Option<String>,
 }
 
+/// Delivery state of an outbound message, shown inline in the thread. `None`
+/// for inbound/system lines (no marker). The terminal states are produced by
+/// the `net` delivery path.
+#[cfg_attr(not(feature = "net"), allow(dead_code))]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MsgStatus {
+    /// Inbound `[RX]` / `[SYS]` / informational — no status marker.
+    #[default]
+    None,
+    /// `[TX]` queued / in flight.
+    Sending,
+    /// Transmitted opportunistically (single packet, no delivery proof).
+    Sent,
+    /// Direct (link) delivery confirmed by a proof.
+    Delivered,
+    /// Deposited to a propagation node; the recipient pulls it later.
+    Propagated,
+    /// Delivery was attempted and ultimately gave up.
+    Failed,
+}
+
 /// One scrollback line: when it occurred (Unix epoch **seconds, UTC**) and its
 /// text. `at == 0` marks an unknown time (rendered `--:--:--`). The timestamp is
 /// captured at creation so the UI can show it without re-reading the clock.
@@ -221,14 +246,21 @@ pub struct Node {
 pub struct Entry {
     pub at: u64,
     pub text: String,
+    /// Correlation id for outbound messages (matches an `Outbound`). 0 = none.
+    /// Session-local — not persisted.
+    pub id: u64,
+    /// Delivery status (outbound only).
+    pub status: MsgStatus,
 }
 
 impl Entry {
-    /// An entry stamped with the current UTC time.
+    /// An entry stamped with the current UTC time (no id, no status).
     pub fn now(text: String) -> Self {
         Self {
             at: now_secs(),
             text,
+            id: 0,
+            status: MsgStatus::None,
         }
     }
 }
@@ -321,6 +353,8 @@ pub struct App {
     pub config: Config,
     /// Commands queued for the network task; drained by `main` after key input.
     pub commands: VecDeque<NetCommand>,
+    /// Monotonic id source for correlating outbound messages with their status.
+    pub next_msg_id: u64,
     /// Peer keys whose on-disk copy is stale; `main` drains this and persists
     /// each changed conversation. Keeps `App` itself free of I/O.
     pub dirty: Vec<String>,
@@ -365,6 +399,7 @@ impl App {
             new_conv: None,
             config: Config::default(),
             commands: VecDeque::new(),
+            next_msg_id: 1,
             dirty: Vec::new(),
             outbound: VecDeque::new(),
             syslog: Vec::new(),
@@ -644,22 +679,51 @@ impl App {
     /// No-op on an empty/whitespace draft so a stray Ctrl+S doesn't emit a
     /// blank frame.
     pub fn transmit(&mut self) {
-        let Some(conv) = self.conversations.get_mut(self.selected) else {
-            return;
+        let body = match self.conversations.get(self.selected) {
+            Some(conv) => conv.draft.trim().to_string(),
+            None => return,
         };
-        let body = conv.draft.trim().to_string();
         if body.is_empty() {
             return;
         }
-        conv.messages.push(Entry::now(format!("[TX] {body}")));
+        let id = self.next_id();
+        let conv = &mut self.conversations[self.selected];
+        let mut entry = Entry::now(format!("[TX] {body}"));
+        entry.id = id;
+        entry.status = MsgStatus::Sending;
+        conv.messages.push(entry);
         conv.draft.clear();
         let peer = conv.peer.clone();
         // `conv`'s borrow ends above; safe to touch `self.outbound`/`dirty` now.
         self.outbound.push_back(Outbound {
+            id,
             peer: peer.clone(),
             body,
         });
         self.mark_dirty(&peer);
+    }
+
+    /// Next correlation id for an outbound message.
+    fn next_id(&mut self) -> u64 {
+        let id = self.next_msg_id;
+        self.next_msg_id += 1;
+        id
+    }
+
+    /// Update the delivery status of the outbound message with this id (wherever
+    /// it lives), and mark its conversation dirty so the status is persisted.
+    pub fn set_msg_status(&mut self, id: u64, status: MsgStatus) {
+        let mut hit = None;
+        for conv in &mut self.conversations {
+            if let Some(entry) = conv.messages.iter_mut().find(|e| e.id == id) {
+                entry.status = status;
+                hit = Some(conv.peer.clone());
+                break;
+            }
+        }
+        if let Some(peer) = hit {
+            self.mark_dirty(&peer);
+        }
     }
 
     /// Discard the selected conversation's draft without transmitting (Ctrl+X).
@@ -1059,5 +1123,35 @@ mod tests {
         app.handle_key(press(KeyCode::Char('z'))); // non-hex → normalizes to empty
         app.handle_key(press(KeyCode::Enter));
         assert!(app.new_conv.as_ref().is_some_and(|nc| nc.error), "stays open with error");
+    }
+
+    #[test]
+    fn transmit_stamps_id_and_sending_status() {
+        let mut app = App::new();
+        app.conversations[0].draft = "hi".to_string();
+        app.handle_key(ctrl('s'));
+        let entry = app.conversations[0].messages.last().unwrap();
+        assert!(entry.id > 0);
+        assert_eq!(entry.status, MsgStatus::Sending);
+        assert_eq!(app.outbound.back().unwrap().id, entry.id, "Outbound shares the id");
+    }
+
+    #[test]
+    fn set_msg_status_updates_matching_entry_and_marks_dirty() {
+        let mut app = App::new();
+        app.conversations[0].draft = "yo".to_string();
+        app.handle_key(ctrl('s'));
+        let id = app.conversations[0].messages.last().unwrap().id;
+        app.dirty.clear();
+
+        app.set_msg_status(id, MsgStatus::Delivered);
+        assert_eq!(
+            app.conversations[0].messages.last().unwrap().status,
+            MsgStatus::Delivered
+        );
+        let peer = app.conversations[0].peer.clone();
+        assert!(app.dirty.iter().any(|p| p == &peer));
+
+        app.set_msg_status(999_999, MsgStatus::Failed); // unknown id: no-op
     }
 }

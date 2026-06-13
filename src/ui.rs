@@ -219,13 +219,32 @@ where
     lines.into_iter().map(|s| Line::raw(s.into())).collect()
 }
 
-/// One timestamped, tactically-tinted scrollback entry: muted `HH:MM:SS` UTC
-/// followed by the body coloured by its category.
+/// One timestamped, tactically-tinted scrollback entry: muted `HH:MM:SS` UTC,
+/// the body coloured by its category, and a delivery-status token for outbound
+/// messages.
 fn styled_entry(e: &crate::app::Entry) -> Line<'static> {
-    Line::from(vec![
+    let mut spans = vec![
         Span::styled(format!("{}  ", fmt_time(e.at)), ts_style()),
         Span::styled(e.text.clone(), line_style(&e.text)),
-    ])
+    ];
+    if let Some((label, cat)) = status_token(e.status) {
+        spans.push(Span::styled(format!("  {label}"), tag_style(cat)));
+    }
+    Line::from(spans)
+}
+
+/// Inline label + palette category for an outbound message's status (`None` for
+/// inbound/system lines, which carry no marker).
+fn status_token(status: crate::app::MsgStatus) -> Option<(&'static str, &'static str)> {
+    use crate::app::MsgStatus;
+    match status {
+        MsgStatus::None => None,
+        MsgStatus::Sending => Some(("[sending]", "OPS")),
+        MsgStatus::Sent => Some(("[sent]", "OPS")),
+        MsgStatus::Delivered => Some(("[delivered]", "DLV")),
+        MsgStatus::Propagated => Some(("[propagated]", "CFG")),
+        MsgStatus::Failed => Some(("[failed]", "ERR")),
+    }
 }
 
 /// Muted grey-green for timestamps.
@@ -519,8 +538,20 @@ fn render_transmit(frame: &mut Frame, app: &App, area: Rect) {
 
 #[cfg(test)]
 mod tests {
-    use super::{centered_rect, fmt_time, leading_tag, line_style, sys_category, tag_style};
+    use super::{
+        centered_rect, fmt_time, leading_tag, line_style, status_token, sys_category, tag_style,
+    };
+    use crate::app::MsgStatus;
     use ratatui::layout::Rect;
+
+    #[test]
+    fn status_tokens_map_to_palette() {
+        assert!(status_token(MsgStatus::None).is_none());
+        assert_eq!(status_token(MsgStatus::Sending), Some(("[sending]", "OPS")));
+        assert_eq!(status_token(MsgStatus::Delivered), Some(("[delivered]", "DLV")));
+        assert_eq!(status_token(MsgStatus::Propagated), Some(("[propagated]", "CFG")));
+        assert_eq!(status_token(MsgStatus::Failed), Some(("[failed]", "ERR")));
+    }
 
     #[test]
     fn leading_tag_extracts_bracket() {

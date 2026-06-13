@@ -20,12 +20,13 @@ use std::path::{Path, PathBuf};
 use rns_crypto::{hkdf, sha, token};
 use rns_identity::identity::Identity;
 
-use crate::app::{Conversation, Entry};
+use crate::app::{Conversation, Entry, MsgStatus};
 use crate::config::config_dir;
 
-/// File-format magic + version. Bump the version when the layout changes.
+/// File-format magic + version. v2 adds a per-message status byte; v1 files
+/// (no byte) still load (status defaults to `None`).
 const MAGIC: &[u8; 4] = b"FXC1";
-const VERSION: u8 = 1;
+const VERSION: u8 = 2;
 
 /// Domain-separation salt for the store-key derivation.
 const KEY_SALT: &[u8] = b"foxhole.conversations.v1";
@@ -104,14 +105,41 @@ fn serialize(conv: &Conversation) -> Vec<u8> {
     b.extend_from_slice(&(conv.messages.len() as u32).to_be_bytes());
     for m in &conv.messages {
         b.extend_from_slice(&m.at.to_be_bytes());
+        b.push(status_to_u8(m.status));
         put_text(&mut b, &m.text);
     }
     b
 }
 
+/// Persisted status code. In-flight (`Sending`) and `None` both write as 0 — an
+/// app that quit mid-send shouldn't reload a stale "sending".
+fn status_to_u8(s: MsgStatus) -> u8 {
+    match s {
+        MsgStatus::None | MsgStatus::Sending => 0,
+        MsgStatus::Sent => 2,
+        MsgStatus::Delivered => 3,
+        MsgStatus::Propagated => 4,
+        MsgStatus::Failed => 5,
+    }
+}
+
+fn status_from_u8(b: u8) -> MsgStatus {
+    match b {
+        2 => MsgStatus::Sent,
+        3 => MsgStatus::Delivered,
+        4 => MsgStatus::Propagated,
+        5 => MsgStatus::Failed,
+        _ => MsgStatus::None,
+    }
+}
+
 fn deserialize(data: &[u8]) -> Option<Conversation> {
     let mut r = Reader::new(data);
-    if r.take(4)? != MAGIC || r.u8()? != VERSION {
+    if r.take(4)? != MAGIC {
+        return None;
+    }
+    let version = r.u8()?;
+    if version != 1 && version != 2 {
         return None;
     }
     let peer = r.str()?;
@@ -122,8 +150,19 @@ fn deserialize(data: &[u8]) -> Option<Conversation> {
     let mut messages = Vec::with_capacity(count.min(4096));
     for _ in 0..count {
         let at = r.u64()?;
+        // v2 carries a status byte; v1 doesn't (→ None). `id` is session-local.
+        let status = if version >= 2 {
+            status_from_u8(r.u8()?)
+        } else {
+            MsgStatus::None
+        };
         let text = r.text()?;
-        messages.push(Entry { at, text });
+        messages.push(Entry {
+            at,
+            text,
+            id: 0,
+            status,
+        });
     }
 
     let mut conv = Conversation::new(peer);
@@ -205,10 +244,14 @@ mod tests {
             Entry {
                 at: 1_700_000_000,
                 text: "[RX] line one\nline two".to_string(), // multi-line
+                id: 0,
+                status: MsgStatus::None,
             },
             Entry {
                 at: 1_700_000_050,
                 text: "[TX] reply".to_string(),
+                id: 7, // session-local — must NOT survive
+                status: MsgStatus::Delivered,
             },
         ];
         c
@@ -218,7 +261,39 @@ mod tests {
         assert_eq!(a.peer, b.peer);
         assert_eq!(a.display_name, b.display_name);
         assert_eq!(a.unread, b.unread);
-        assert_eq!(a.messages, b.messages);
+        assert_eq!(a.messages.len(), b.messages.len());
+        // Compare persisted fields only — `id` is session-local (always 0 back).
+        for (x, y) in a.messages.iter().zip(&b.messages) {
+            assert_eq!((x.at, &x.text, x.status), (y.at, &y.text, y.status));
+        }
+    }
+
+    #[test]
+    fn status_byte_mapping() {
+        assert_eq!(status_to_u8(MsgStatus::Sending), 0, "in-flight persists as none");
+        assert_eq!(status_to_u8(MsgStatus::None), 0);
+        assert_eq!(status_from_u8(status_to_u8(MsgStatus::Delivered)), MsgStatus::Delivered);
+        assert_eq!(status_from_u8(status_to_u8(MsgStatus::Failed)), MsgStatus::Failed);
+        assert_eq!(status_from_u8(99), MsgStatus::None, "unknown code is None");
+    }
+
+    #[test]
+    fn loads_legacy_v1_blob() {
+        // Hand-build a v1 blob (no per-message status byte).
+        let mut b = Vec::new();
+        b.extend_from_slice(b"FXC1");
+        b.push(1u8);
+        put_str(&mut b, "deadbeefdeadbeefdeadbeefdeadbeef");
+        put_str(&mut b, "");
+        b.extend_from_slice(&0u32.to_be_bytes()); // unread
+        b.extend_from_slice(&1u32.to_be_bytes()); // 1 message
+        b.extend_from_slice(&1_700_000_000u64.to_be_bytes());
+        put_text(&mut b, "[RX] legacy");
+
+        let conv = deserialize(&b).expect("v1 blob still loads");
+        assert_eq!(conv.messages.len(), 1);
+        assert_eq!(conv.messages[0].text, "[RX] legacy");
+        assert_eq!(conv.messages[0].status, MsgStatus::None);
     }
 
     #[test]

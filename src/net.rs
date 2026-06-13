@@ -14,7 +14,7 @@
 //! (Direct) delivery are Phase 3; `outbound_rx` is drained with an interim
 //! notice until then.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -40,8 +40,45 @@ use rns_transport::messages::{
     AnnounceHandlerEvent, OutboundRequest, TransportMessage, TransportQuery, TransportQueryResponse,
 };
 
-use crate::app::{NetCommand, NetEvent, Outbound, PeerKind};
+use crate::app::{MsgStatus, NetCommand, NetEvent, Outbound, PeerKind};
 use crate::config::{Config, config_dir};
+
+/// Tracks outbound messages in flight so delivery outcomes can be reported back
+/// to the UI by the message's correlation id. Keyed by the LXMF message hash
+/// (which the router/link-delivery results also carry).
+#[derive(Default)]
+struct StatusTracker {
+    /// msg hash -> the UI entry id that should reflect its status.
+    ids: HashMap<[u8; 32], u64>,
+    /// Hashes being delivered via a propagation node (so `Complete` reads as
+    /// `Propagated` rather than `Delivered`).
+    propagated: HashSet<[u8; 32]>,
+}
+
+impl StatusTracker {
+    /// The entry id for a message hash, if we're tracking it.
+    fn id_for(&self, hash: Option<[u8; 32]>) -> Option<u64> {
+        hash.and_then(|h| self.ids.get(&h).copied())
+    }
+
+    /// Stop tracking a now-terminal message.
+    fn forget(&mut self, hash: &[u8; 32]) {
+        self.ids.remove(hash);
+        self.propagated.remove(hash);
+    }
+}
+
+/// Emit a status update for `hash`'s message, if it's being tracked.
+async fn emit_status(
+    events: &mpsc::Sender<NetEvent>,
+    tracker: &StatusTracker,
+    hash: Option<[u8; 32]>,
+    status: MsgStatus,
+) {
+    if let Some(id) = tracker.id_for(hash) {
+        let _ = events.send(NetEvent::MsgStatus { id, status }).await;
+    }
+}
 
 /// Cache of peer destination hash (hex) -> 64-byte public key, learned from
 /// `lxmf.delivery` announces. Hex-keyed to match `lxmf_core`'s own convention
@@ -286,6 +323,7 @@ async fn run_inner(
     let mut known_dirty = false;
     let mut hops: HopCache = HashMap::new();
     let mut last_path_request: HashMap<[u8; 16], f64> = HashMap::new();
+    let mut tracker = StatusTracker::default();
     let mut ticks: u32 = 0;
     let mut syncing = false;
 
@@ -396,8 +434,12 @@ async fn run_inner(
             Some(out) = outbound_rx.recv() => {
                 match build_message(&identity, &lxmf_hash, &out) {
                     Ok(msg) => {
+                        // Link this message's hash to its UI entry id for status.
+                        if let Some(h) = msg.hash {
+                            tracker.ids.insert(h, out.id);
+                        }
                         router.send(msg);
-                        dispatch(&mut router, &mut link_delivery, &known, &hops, &mut last_path_request, &transport, events).await;
+                        dispatch(&mut router, &mut link_delivery, &known, &hops, &mut last_path_request, &mut tracker, &transport, events).await;
                     }
                     Err(e) => {
                         let _ = events.send(NetEvent::Sys(format!("[SYS] send: {e}"))).await;
@@ -428,7 +470,7 @@ async fn run_inner(
                 // Advance in-flight link deliveries.
                 link_delivery.drain_events(&known);
                 for result in link_delivery.tick() {
-                    handle_delivery_result(&mut router, &known, &transport, events, result).await;
+                    handle_delivery_result(&mut router, &known, &mut tracker, &transport, events, result).await;
                 }
 
                 // Advance an in-progress propagation sync + surface downloads.
@@ -464,7 +506,7 @@ async fn run_inner(
                     known_dirty = false;
                 }
 
-                dispatch(&mut router, &mut link_delivery, &known, &hops, &mut last_path_request, &transport, events).await;
+                dispatch(&mut router, &mut link_delivery, &known, &hops, &mut last_path_request, &mut tracker, &transport, events).await;
             }
             _ = announce_tick.tick() => {
                 announce(&transport, &mut delivery, &identity, &config.display_name, events).await;
@@ -608,6 +650,10 @@ async fn requeue_after_path_request(
     note: &str,
 ) {
     let now = now_secs();
+    // Count the attempt so a never-reachable peer eventually expires to Failed
+    // (the router emits OutboundAction::Failed once attempts exceed its max),
+    // rather than re-queuing — and showing `[sending]` — forever.
+    message.delivery_attempts += 1;
     message.last_delivery_attempt = now;
     message.next_delivery_attempt = now + PATH_REQUEST_WAIT;
     if request_path(transport, last_path_request, request_hash, now) {
@@ -662,12 +708,14 @@ fn save_known(path: &Path, known: &KnownKeys) -> std::io::Result<()> {
 /// Drain the router's outbound queue and act on each decision. Direct messages
 /// are handed to the link-delivery manager; if that can't start (no path yet) we
 /// request a path and re-queue. Opportunistic is the single-packet last resort.
+#[allow(clippy::too_many_arguments)] // cohesive caches passed by the event loop
 async fn dispatch(
     router: &mut LxmRouter,
     link_delivery: &mut LinkDeliveryManager,
     known: &KnownKeys,
     hops: &HopCache,
     last_path_request: &mut HashMap<[u8; 16], f64>,
+    tracker: &mut StatusTracker,
     transport: &mpsc::Sender<TransportMessage>,
     events: &mpsc::Sender<NetEvent>,
 ) {
@@ -721,7 +769,8 @@ async fn dispatch(
                 }
             }
             OutboundAction::DeliverOpportunistic { message, dest_hash } => {
-                send_opportunistic(router, known, transport, events, message, dest_hash).await;
+                send_opportunistic(router, known, tracker, transport, events, message, dest_hash)
+                    .await;
             }
             OutboundAction::DeliverPropagated {
                 mut message,
@@ -742,8 +791,26 @@ async fn dispatch(
                     .await;
                     continue;
                 }
-                let target_cost = router.get_stamp_cost(&prop_hash).unwrap_or(0);
                 let recipient = message.destination_hash;
+                if !known.contains_key(&hex::encode(recipient)) {
+                    // We also need the *recipient's* key to encrypt the payload
+                    // (a propagation deposit is still end-to-end encrypted). If we
+                    // have never heard their announce, ask for a path and retry —
+                    // don't drop the message (which would strand it at `[sending]`).
+                    requeue_after_path_request(
+                        router,
+                        transport,
+                        last_path_request,
+                        message,
+                        recipient,
+                        events,
+                        "recipient identity unknown — can't encrypt",
+                    )
+                    .await;
+                    continue;
+                }
+                let target_cost = router.get_stamp_cost(&prop_hash).unwrap_or(0);
+                let msg_hash = message.hash;
                 let packed = message.pack_propagated_encrypted_with_stamp(
                     |plaintext| encrypt_to_recipient(known, &recipient, plaintext),
                     target_cost,
@@ -755,6 +822,10 @@ async fn dispatch(
                             .start_packed_delivery(message, prop_hash, hop, wrapper, false)
                         {
                             Ok(_) => {
+                                // Mark the hash so its Complete reads as Propagated.
+                                if let Some(h) = msg_hash {
+                                    tracker.propagated.insert(h);
+                                }
                                 let _ = events
                                     .send(NetEvent::Sys(format!(
                                         "[SYS] depositing to propagation node {} ...",
@@ -777,6 +848,12 @@ async fn dispatch(
                         }
                     }
                     Err(e) => {
+                        // Recipient key was present, so this is a genuine packing
+                        // error (not a transient unknown-identity) → terminal.
+                        emit_status(events, tracker, msg_hash, MsgStatus::Failed).await;
+                        if let Some(h) = msg_hash {
+                            tracker.forget(&h);
+                        }
                         let _ = events
                             .send(NetEvent::Sys(format!("[SYS] propagation pack failed: {e}")))
                             .await;
@@ -784,6 +861,10 @@ async fn dispatch(
                 }
             }
             OutboundAction::Failed(m) | OutboundAction::Expired(m) => {
+                emit_status(events, tracker, m.hash, MsgStatus::Failed).await;
+                if let Some(h) = m.hash {
+                    tracker.forget(&h);
+                }
                 let _ = events
                     .send(NetEvent::Sys(format!(
                         "[SYS] delivery to {} failed",
@@ -801,6 +882,7 @@ async fn dispatch(
 async fn handle_delivery_result(
     router: &mut LxmRouter,
     known: &KnownKeys,
+    tracker: &mut StatusTracker,
     transport: &mpsc::Sender<TransportMessage>,
     events: &mpsc::Sender<NetEvent>,
     result: DeliveryResult,
@@ -812,9 +894,23 @@ async fn handle_delivery_result(
             if let Some(h) = msg_hash {
                 router.mark_outbound_delivered(&h);
             }
-            let _ = events
-                .send(NetEvent::Sys("[SYS] delivered (direct)".to_string()))
-                .await;
+            // A propagation deposit reads as Propagated; a peer link as Delivered.
+            let propagated = msg_hash.is_some_and(|h| tracker.propagated.contains(&h));
+            let status = if propagated {
+                MsgStatus::Propagated
+            } else {
+                MsgStatus::Delivered
+            };
+            emit_status(events, tracker, msg_hash, status).await;
+            if let Some(h) = msg_hash {
+                tracker.forget(&h);
+            }
+            let label = if propagated {
+                "deposited to propagation node"
+            } else {
+                "delivered (direct)"
+            };
+            let _ = events.send(NetEvent::Sys(format!("[SYS] {label}"))).await;
         }
         DeliveryResult::Rejected {
             message,
@@ -857,7 +953,8 @@ async fn handle_delivery_result(
                         hex::encode(dest_hash)
                     )))
                     .await;
-                send_opportunistic(router, known, transport, events, message, dest_hash).await;
+                send_opportunistic(router, known, tracker, transport, events, message, dest_hash)
+                    .await;
             }
         }
     }
@@ -962,11 +1059,13 @@ async fn try_sync(
 async fn send_opportunistic(
     router: &mut LxmRouter,
     known: &KnownKeys,
+    tracker: &mut StatusTracker,
     transport: &mpsc::Sender<TransportMessage>,
     events: &mpsc::Sender<NetEvent>,
     message: LxMessage,
     dest_hash: [u8; 16],
 ) {
+    let msg_hash = message.hash;
     let mut missing = false;
     let packed = message.pack_opportunistic_encrypted(|plaintext| match known.get(&hex::encode(dest_hash)) {
         Some(pk) => Identity::from_public_key(pk)
@@ -1036,6 +1135,11 @@ async fn send_opportunistic(
             destination_hash: dest_hash,
         }))
         .await;
+    // Opportunistic has no proof, so this is the terminal state for it: Sent.
+    emit_status(events, tracker, msg_hash, MsgStatus::Sent).await;
+    if let Some(h) = msg_hash {
+        tracker.forget(&h);
+    }
     let _ = events
         .send(NetEvent::Sys(format!("[SYS] sent to {}", hex::encode(dest_hash))))
         .await;

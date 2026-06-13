@@ -203,6 +203,7 @@ fn apply_net_event(app: &mut App, ev: NetEvent) {
             app.deliver(&source, &body);
         }
         NetEvent::Sync(status) => app.sync_status = status,
+        NetEvent::MsgStatus { id, status } => app.set_msg_status(id, status),
         // Handled in `run` (loads history); nothing to fold into UI state here.
         NetEvent::StoreKey(_) => {}
     }
