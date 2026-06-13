@@ -37,6 +37,13 @@ const ASCII_BORDER: border::Set = border::Set {
 /// Draw the whole interface: the tab strip, the active tool's body (fills all
 /// slack), and a fixed status bar.
 pub fn render(frame: &mut Frame, app: &App) {
+    // The cold-boot splash owns the whole frame until it hands off to console.
+    #[cfg(feature = "splash")]
+    if app.state == crate::app::AppState::Splash {
+        crate::splash::render(frame, app);
+        return;
+    }
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -107,11 +114,15 @@ fn render_new_conv_popup(frame: &mut Frame, nc: &crate::app::NewConv) {
             tag_style("ERR"),
         ));
     } else {
-        lines.push(Line::raw("  destination hash, e.g. a1b2…  (colons/spaces ok)"));
+        lines.push(Line::raw(
+            "  destination hash, e.g. a1b2…  (colons/spaces ok)",
+        ));
     }
     lines.push(Line::raw("  [Tab] field   [Enter] open   [Esc] cancel"));
 
-    let para = Paragraph::new(lines).block(block).wrap(Wrap { trim: false });
+    let para = Paragraph::new(lines)
+        .block(block)
+        .wrap(Wrap { trim: false });
     frame.render_widget(para, area);
 }
 
@@ -141,7 +152,9 @@ fn render_sync_popup(frame: &mut Frame, status: &str) {
         Line::raw(format!("  {status}")),
         Line::raw("  pulling messages — please wait"),
     ];
-    let para = Paragraph::new(lines).block(block).wrap(Wrap { trim: false });
+    let para = Paragraph::new(lines)
+        .block(block)
+        .wrap(Wrap { trim: false });
     frame.render_widget(para, area);
 }
 
@@ -197,7 +210,13 @@ fn pane_block(title: &str, active: bool) -> Block<'_> {
 /// Render a read-only scrollback pane: a bordered block whose view is pinned to
 /// the newest lines so fresh content is always visible without manual
 /// scrolling. Shared by every list/log-style tool.
-fn render_scrollback(frame: &mut Frame, title: &str, lines: Vec<Line<'static>>, active: bool, area: Rect) {
+fn render_scrollback(
+    frame: &mut Frame,
+    title: &str,
+    lines: Vec<Line<'static>>,
+    active: bool,
+    area: Rect,
+) {
     // Inner height excludes the top/bottom border rows. Offset so the last
     // `inner_h` lines are shown (approximate for wrapped lines — fine here).
     let inner_h = area.height.saturating_sub(2) as usize;
@@ -256,15 +275,33 @@ fn ts_style() -> Style {
 fn tag_style(tag: &str) -> Style {
     let base = Style::default();
     match tag {
-        "RX" => base.fg(Color::Rgb(110, 143, 114)).add_modifier(Modifier::BOLD), // Field Green
-        "TX" | "RT" | "LNK" => base.fg(Color::Rgb(79, 107, 88)).add_modifier(Modifier::BOLD), // Ranger Green
-        "DLV" => base.fg(Color::Rgb(143, 166, 122)).add_modifier(Modifier::BOLD), // Success Olive
-        "CFG" | "SYS" => base.fg(Color::Rgb(90, 111, 99)).add_modifier(Modifier::BOLD), // Slate-Olive
-        "ID" => base.fg(Color::Rgb(140, 153, 114)).add_modifier(Modifier::BOLD), // Olive Drab
-        "SEC" => base.fg(Color::Rgb(122, 90, 58)).add_modifier(Modifier::BOLD), // Weathered Brown
-        "WRN" => base.fg(Color::Rgb(159, 139, 60)).add_modifier(Modifier::BOLD), // Faded Brass
-        "ERR" => base.fg(Color::Rgb(122, 62, 62)).add_modifier(Modifier::BOLD), // Dark Dried Red
-        "OPS" => base.fg(Color::Rgb(139, 143, 135)).add_modifier(Modifier::DIM), // Desaturated Grey
+        "RX" => base
+            .fg(Color::Rgb(110, 143, 114))
+            .add_modifier(Modifier::BOLD), // Field Green
+        "TX" | "RT" | "LNK" => base
+            .fg(Color::Rgb(79, 107, 88))
+            .add_modifier(Modifier::BOLD), // Ranger Green
+        "DLV" => base
+            .fg(Color::Rgb(143, 166, 122))
+            .add_modifier(Modifier::BOLD), // Success Olive
+        "CFG" | "SYS" => base
+            .fg(Color::Rgb(90, 111, 99))
+            .add_modifier(Modifier::BOLD), // Slate-Olive
+        "ID" => base
+            .fg(Color::Rgb(140, 153, 114))
+            .add_modifier(Modifier::BOLD), // Olive Drab
+        "SEC" => base
+            .fg(Color::Rgb(122, 90, 58))
+            .add_modifier(Modifier::BOLD), // Weathered Brown
+        "WRN" => base
+            .fg(Color::Rgb(159, 139, 60))
+            .add_modifier(Modifier::BOLD), // Faded Brass
+        "ERR" => base
+            .fg(Color::Rgb(122, 62, 62))
+            .add_modifier(Modifier::BOLD), // Dark Dried Red
+        "OPS" => base
+            .fg(Color::Rgb(139, 143, 135))
+            .add_modifier(Modifier::DIM), // Desaturated Grey
         _ => base.fg(Color::Rgb(90, 111, 99)),
     }
 }
@@ -548,8 +585,14 @@ mod tests {
     fn status_tokens_map_to_palette() {
         assert!(status_token(MsgStatus::None).is_none());
         assert_eq!(status_token(MsgStatus::Sending), Some(("[sending]", "OPS")));
-        assert_eq!(status_token(MsgStatus::Delivered), Some(("[delivered]", "DLV")));
-        assert_eq!(status_token(MsgStatus::Propagated), Some(("[propagated]", "CFG")));
+        assert_eq!(
+            status_token(MsgStatus::Delivered),
+            Some(("[delivered]", "DLV"))
+        );
+        assert_eq!(
+            status_token(MsgStatus::Propagated),
+            Some(("[propagated]", "CFG"))
+        );
         assert_eq!(status_token(MsgStatus::Failed), Some(("[failed]", "ERR")));
     }
 
@@ -570,10 +613,19 @@ mod tests {
     fn system_lines_classified_by_keyword() {
         assert_eq!(sys_category("[SYS] delivered (direct)"), "DLV");
         assert_eq!(sys_category("[SYS] delivery to X failed (timeout)"), "ERR");
-        assert_eq!(sys_category("[SYS] direct data not decodable as LXMF"), "WRN");
-        assert_eq!(sys_category("[SYS] no key for X yet — requesting path"), "RT");
+        assert_eq!(
+            sys_category("[SYS] direct data not decodable as LXMF"),
+            "WRN"
+        );
+        assert_eq!(
+            sys_category("[SYS] no key for X yet — requesting path"),
+            "RT"
+        );
         assert_eq!(sys_category("[SYS] sent to X"), "OPS");
-        assert_eq!(sys_category("[SYS] peer X identified on inbound link"), "ID");
+        assert_eq!(
+            sys_category("[SYS] peer X identified on inbound link"),
+            "ID"
+        );
         assert_eq!(sys_category("[SYS] inbound link established"), "LNK");
         assert_eq!(sys_category("[SYS] using existing RNS config"), "CFG");
         assert_eq!(sys_category("[SYS] something else entirely"), "SYS");
@@ -585,7 +637,11 @@ mod tests {
     fn formats_utc_hms() {
         assert_eq!(fmt_time(0), "--:--:--", "unknown time");
         assert_eq!(fmt_time(3661), "01:01:01");
-        assert_eq!(fmt_time(86_400 + 3661), "01:01:01", "time-of-day wraps daily");
+        assert_eq!(
+            fmt_time(86_400 + 3661),
+            "01:01:01",
+            "time-of-day wraps daily"
+        );
         assert_eq!(fmt_time(1_700_000_000), "22:13:20", "known UTC instant");
     }
 

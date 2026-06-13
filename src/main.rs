@@ -14,6 +14,8 @@ mod app;
 mod config;
 #[cfg(feature = "net")]
 mod net;
+#[cfg(feature = "splash")]
+mod splash;
 mod storage;
 #[cfg(feature = "net")]
 mod store;
@@ -100,6 +102,12 @@ async fn run(
     #[cfg(feature = "net")]
     let mut store_key: Option<[u8; 64]> = None;
 
+    // Cold-boot bring-up clock: ticked *only* while the splash is showing (the
+    // select branch's `if` precondition gates on `state == Splash`), so the
+    // steady-state loop stays purely event-driven with no idle wakeups. Without
+    // the `splash` feature the state is never `Splash`, so the branch is inert.
+    let mut splash_tick = tokio::time::interval(std::time::Duration::from_millis(120));
+
     while !app.should_quit {
         terminal.draw(|frame| ui::render(frame, app))?;
 
@@ -158,6 +166,11 @@ async fn run(
                     apply_net_event(app, ev);
                 }
             },
+
+            // --- Cold-boot splash clock (only while the splash is up) -----------
+            _ = splash_tick.tick(), if app.state == app::AppState::Splash => {
+                app.tick_splash();
+            },
         }
 
         // Persist any conversation whose history changed this iteration. Skips
@@ -186,6 +199,13 @@ async fn run(
 
 /// Fold a single network event into UI state.
 fn apply_net_event(app: &mut App, ev: NetEvent) {
+    // While the cold-boot splash is up, let the real readiness events flip its
+    // bring-up lines to their reported status (live monitor).
+    #[cfg(feature = "splash")]
+    if app.state == app::AppState::Splash {
+        mark_boot_from_event(app, &ev);
+    }
+
     match ev {
         NetEvent::Sys(line) => app.push_log(line),
         NetEvent::Local(addr) => app.local_address = Some(addr),
@@ -206,6 +226,33 @@ fn apply_net_event(app: &mut App, ev: NetEvent) {
         NetEvent::MsgStatus { id, status } => app.set_msg_status(id, status),
         // Handled in `run` (loads history); nothing to fold into UI state here.
         NetEvent::StoreKey(_) => {}
+    }
+}
+
+/// Flip cold-boot lines to their reported status as the real bring-up events
+/// arrive: encrypted store + cache on the store key, mesh + console on the local
+/// address (which also opens the hand-off), and best-effort accents off the
+/// transport/identity banners. Steps not reached this way still appear on the
+/// timer, so a changed banner string only loses an early accent, never a line.
+#[cfg(feature = "splash")]
+fn mark_boot_from_event(app: &mut App, ev: &NetEvent) {
+    use crate::app::BootStep;
+    match ev {
+        NetEvent::StoreKey(_) => {
+            app.mark_boot(BootStep::Store);
+            app.mark_boot(BootStep::Cache);
+        }
+        NetEvent::Local(_) => {
+            app.mark_boot(BootStep::Mesh);
+            app.mark_boot(BootStep::Console);
+        }
+        NetEvent::Sys(line) if line.contains("transport online") => {
+            app.mark_boot(BootStep::Iface);
+        }
+        NetEvent::Sys(line) if line.contains("identity ") => {
+            app.mark_boot(BootStep::Identity);
+        }
+        _ => {}
     }
 }
 
