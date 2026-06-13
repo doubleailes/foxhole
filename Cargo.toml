@@ -1,0 +1,60 @@
+[package]
+name = "foxhole"
+version = "0.1.0"
+edition = "2024"
+description = "FoxHole — off-grid, keyboard-only, monochrome LXMF comms terminal"
+
+[dependencies]
+# TUI framework. The crossterm backend is enabled by default.
+ratatui = "0.30"
+
+# Terminal control + async input. `event-stream` gives us `EventStream`, a
+# futures Stream of input events we can multiplex with network I/O via select!.
+crossterm = { version = "0.29", features = ["event-stream"] }
+
+# Async runtime: keeps network packet processing off the render path.
+tokio = { version = "1", features = ["full"] }
+
+# Provides `StreamExt::next()` for crossterm's `EventStream` (tokio-family,
+# lightweight). Avoids pulling the full `futures` crate just for one combinator.
+tokio-stream = "0.1"
+
+# --- Protocol layer (live, behind the `net` feature) ---------------------------
+# LXMF messaging over Reticulum. Both upstreams are Cargo *workspaces* of path
+# crates (no `rslxmf`/`rsreticulum` package exists), so we depend on the member
+# crates directly as sibling checkouts. `rsLXMF` itself path-depends `rsReticulum`
+# via its workspace, so the two repos must sit next to this one; no `[patch]` is
+# needed. All are edition 2024, tokio-based, and AGPL-3.0-or-later — linking them
+# makes a distributed FoxHole binary a combined AGPL work (see docs/lxmf-integration.md).
+#
+# Optional so the default build stays dependency-light and offline; `--features net`
+# pulls the whole stack and arms `src/net.rs`.
+rns-crypto    = { path = "../rsReticulum/crates/rns-crypto",    optional = true }
+rns-wire      = { path = "../rsReticulum/crates/rns-wire",      optional = true }
+rns-identity  = { path = "../rsReticulum/crates/rns-identity",  optional = true }
+rns-transport = { path = "../rsReticulum/crates/rns-transport", optional = true }
+rns-interface = { path = "../rsReticulum/crates/rns-interface", optional = true }
+rns-runtime   = { path = "../rsReticulum/crates/rns-runtime",   optional = true }
+lxmf-core     = { path = "../rsLXMF/crates/lxmf-core",          optional = true }
+
+# `bytes::Bytes` is the wire-buffer type the transport's `OutboundRequest` takes.
+bytes = { version = "1", optional = true }
+
+# Hex-encode 16-byte destination hashes for display and conversation keys.
+hex = { version = "0.4", optional = true }
+
+[features]
+default = []
+# Live LXMF/Reticulum protocol stack. Flips the status bar to NET:ON and brings up
+# the real transport + LXMF router in `src/net.rs` (see docs/lxmf-integration.md).
+net = [
+    "dep:rns-crypto",
+    "dep:rns-wire",
+    "dep:rns-identity",
+    "dep:rns-transport",
+    "dep:rns-interface",
+    "dep:rns-runtime",
+    "dep:lxmf-core",
+    "dep:bytes",
+    "dep:hex",
+]
