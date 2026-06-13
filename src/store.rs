@@ -270,10 +270,20 @@ mod tests {
 
     #[test]
     fn status_byte_mapping() {
-        assert_eq!(status_to_u8(MsgStatus::Sending), 0, "in-flight persists as none");
+        assert_eq!(
+            status_to_u8(MsgStatus::Sending),
+            0,
+            "in-flight persists as none"
+        );
         assert_eq!(status_to_u8(MsgStatus::None), 0);
-        assert_eq!(status_from_u8(status_to_u8(MsgStatus::Delivered)), MsgStatus::Delivered);
-        assert_eq!(status_from_u8(status_to_u8(MsgStatus::Failed)), MsgStatus::Failed);
+        assert_eq!(
+            status_from_u8(status_to_u8(MsgStatus::Delivered)),
+            MsgStatus::Delivered
+        );
+        assert_eq!(
+            status_from_u8(status_to_u8(MsgStatus::Failed)),
+            MsgStatus::Failed
+        );
         assert_eq!(status_from_u8(99), MsgStatus::None, "unknown code is None");
     }
 
