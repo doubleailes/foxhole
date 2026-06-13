@@ -13,7 +13,7 @@
 //!     Conversations tool has three panes (peer list, thread, transmit); the
 //!     other tools are read-only single views.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
@@ -27,6 +27,9 @@ pub enum NetCommand {
     SetPropagationNode(Option<String>),
     /// Pull queued messages from the configured propagation node now.
     SyncNow,
+    /// Operator-initiated path probe (rnpath-style) for a hex destination hash:
+    /// request a path, then report the hop count + next-hop interface.
+    RequestPath(String),
 }
 
 /// Which field the New Conversation popup is editing.
@@ -208,6 +211,13 @@ pub enum NetEvent {
     StoreKey([u8; 64]),
     /// Delivery-status update for an outbound message (by its correlation id).
     MsgStatus { id: u64, status: MsgStatus },
+    /// Result of an rnpath-style path probe for a hex destination hash:
+    /// `hops`/`iface` are `None` when no path is known.
+    Path {
+        hash: String,
+        hops: Option<u8>,
+        iface: Option<String>,
+    },
 }
 
 /// A discovered propagation node, shown in the Network tab.
@@ -216,6 +226,38 @@ pub struct Node {
     pub hash: String,
     /// Announced display name, if any.
     pub name: Option<String>,
+    /// When this node was last heard via an announce (Unix epoch **seconds,
+    /// UTC**); `0` if never (e.g. seeded offline). Rendered as `--:--:--`.
+    pub last_seen: u64,
+}
+
+/// The two columns of the Network tab; `net_col` tracks which has focus.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NetColumn {
+    /// Known `lxmf.delivery` peers (the conversations roster).
+    Peers,
+    /// `lxmf.propagation` store-and-forward nodes.
+    Nodes,
+}
+
+impl NetColumn {
+    /// Toggle to the other column (Tab / Left / Right).
+    fn other(self) -> Self {
+        match self {
+            NetColumn::Peers => NetColumn::Nodes,
+            NetColumn::Nodes => NetColumn::Peers,
+        }
+    }
+}
+
+/// The last rnpath-style probe result for a destination, shown in the Network
+/// tab and logged. `hops`/`iface` are `None` when no path is known.
+#[cfg_attr(not(feature = "net"), allow(dead_code))]
+pub struct PathProbe {
+    /// When the probe resolved (Unix epoch **seconds, UTC**).
+    pub at: u64,
+    pub hops: Option<u8>,
+    pub iface: Option<String>,
 }
 
 /// Delivery state of an outbound message, shown inline in the thread. `None`
@@ -273,6 +315,23 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
+/// First 8 chars of a hex hash for compact display (whole thing if shorter).
+fn short_hash(hash: &str) -> &str {
+    hash.get(..8).unwrap_or(hash)
+}
+
+/// Render an rnpath probe outcome: `"3 hops via AutoInterface"`, `"1 hop via …"`,
+/// or `"no path"` when unresolved.
+pub fn path_summary(hops: Option<u8>, iface: Option<&str>) -> String {
+    match hops {
+        Some(n) => {
+            let unit = if n == 1 { "hop" } else { "hops" };
+            format!("{n} {unit} via {}", iface.unwrap_or("?"))
+        }
+        None => "no path".to_string(),
+    }
+}
+
 /// Reduce a typed LXMF address to canonical form: lowercase hex digits only, so
 /// `a1:b2 c3`, `A1B2C3`, and `<a1b2c3>` all normalize the same. The caller
 /// validates the length (a destination hash is 16 bytes → 32 hex chars).
@@ -303,6 +362,9 @@ pub struct Conversation {
     /// only job is to force the first save, after which the file persists.
     #[cfg_attr(not(feature = "net"), allow(dead_code))]
     pub pinned: bool,
+    /// When this peer was last heard via an announce (Unix epoch **seconds,
+    /// UTC**); `0` if never (seeded/offline). Shown in the Network tab.
+    pub last_seen: u64,
 }
 
 impl Conversation {
@@ -315,6 +377,7 @@ impl Conversation {
             draft: String::new(),
             unread: 0,
             pinned: false,
+            last_seen: 0,
         }
     }
 
@@ -426,6 +489,11 @@ pub struct App {
     pub nodes: Vec<Node>,
     /// Highlighted row in the Network tab's propagation-node list.
     pub node_selected: usize,
+    /// Which Network-tab column has focus (Peers reuses `selected`, Nodes
+    /// reuses `node_selected` for the in-column cursor).
+    pub net_col: NetColumn,
+    /// Latest rnpath-style path probe per hex destination hash (Network tab).
+    pub path_probes: HashMap<String, PathProbe>,
     /// This node's own LXMF address (hex), once the network task reports it.
     pub local_address: Option<String>,
     /// When `Some`, a propagation sync is running and the pop-up shows this text.
@@ -482,6 +550,8 @@ impl App {
             selected: 0,
             nodes: Vec::new(),
             node_selected: 0,
+            net_col: NetColumn::Peers,
+            path_probes: HashMap::new(),
             local_address: None,
             sync_status: None,
             new_conv: None,
@@ -511,15 +581,18 @@ impl App {
     /// (so they appear in the peer list and can be messaged); propagation nodes
     /// go to the Network-tab registry. Keyed by hex destination hash.
     pub fn upsert_peer(&mut self, kind: PeerKind, hash: String, name: Option<String>) {
+        let now = now_secs();
         match kind {
             PeerKind::Delivery => {
                 if let Some(conv) = self.conversations.iter_mut().find(|c| c.peer == hash) {
                     if name.is_some() {
                         conv.display_name = name;
                     }
+                    conv.last_seen = now;
                 } else {
                     let mut conv = Conversation::new(hash);
                     conv.display_name = name;
+                    conv.last_seen = now;
                     self.conversations.push(conv);
                 }
             }
@@ -528,8 +601,13 @@ impl App {
                     if name.is_some() {
                         node.name = name;
                     }
+                    node.last_seen = now;
                 } else {
-                    self.nodes.push(Node { hash, name });
+                    self.nodes.push(Node {
+                        hash,
+                        name,
+                        last_seen: now,
+                    });
                 }
             }
         }
@@ -733,26 +811,82 @@ impl App {
         }
     }
 
-    /// Network: navigate the propagation-node list, set the active node, sync.
+    /// Network: two columns (peers | nodes). Up/Down move within the focused
+    /// column; Tab/Left/Right switch columns; Enter opens a peer's conversation
+    /// or sets a node active; `p` path-probes the selection; `s` syncs.
     fn handle_network_key(&mut self, _ctrl: bool, key: KeyEvent) {
         match key.code {
-            KeyCode::Up => self.node_selected = self.node_selected.saturating_sub(1),
-            KeyCode::Down => {
-                if self.node_selected + 1 < self.nodes.len() {
-                    self.node_selected += 1;
+            KeyCode::Up => match self.net_col {
+                NetColumn::Peers => self.select_prev(),
+                NetColumn::Nodes => self.node_selected = self.node_selected.saturating_sub(1),
+            },
+            KeyCode::Down => match self.net_col {
+                NetColumn::Peers => self.select_next(),
+                NetColumn::Nodes => {
+                    if self.node_selected + 1 < self.nodes.len() {
+                        self.node_selected += 1;
+                    }
                 }
-            }
-            KeyCode::Enter => {
-                if let Some(node) = self.nodes.get(self.node_selected) {
-                    let hash = node.hash.clone();
-                    self.config.propagation_node = Some(hash.clone());
-                    self.commands
-                        .push_back(NetCommand::SetPropagationNode(Some(hash)));
+            },
+            KeyCode::Left | KeyCode::Right | KeyCode::Tab => self.net_col = self.net_col.other(),
+            KeyCode::Enter => match self.net_col {
+                // Jump straight from the roster into the chat.
+                NetColumn::Peers => {
+                    if self.selected_conv().is_some() {
+                        self.active = Tool::Conversations;
+                        self.focus = Pane::Transmit;
+                        self.mark_selected_read();
+                    }
+                }
+                NetColumn::Nodes => {
+                    if let Some(node) = self.nodes.get(self.node_selected) {
+                        let hash = node.hash.clone();
+                        self.config.propagation_node = Some(hash.clone());
+                        self.commands
+                            .push_back(NetCommand::SetPropagationNode(Some(hash)));
+                    }
+                }
+            },
+            // rnpath-style path probe of the focused selection.
+            KeyCode::Char('p') => {
+                if let Some(hash) = self.focused_net_hash() {
+                    self.syslog.push(Entry::now(format!(
+                        "[RT] PATH {}.. requesting",
+                        short_hash(&hash)
+                    )));
+                    self.commands.push_back(NetCommand::RequestPath(hash));
                 }
             }
             KeyCode::Char('s') => self.commands.push_back(NetCommand::SyncNow),
             _ => {}
         }
+    }
+
+    /// The hex destination hash of the focused Network-tab selection, if any.
+    fn focused_net_hash(&self) -> Option<String> {
+        match self.net_col {
+            NetColumn::Peers => self.selected_conv().map(|c| c.peer.clone()),
+            NetColumn::Nodes => self.nodes.get(self.node_selected).map(|n| n.hash.clone()),
+        }
+    }
+
+    /// Record an rnpath probe result: store it for the Network tab and log a
+    /// tagged `[RT]` line so the Log tab keeps the history.
+    #[cfg_attr(not(feature = "net"), allow(dead_code))]
+    pub fn record_path(&mut self, hash: String, hops: Option<u8>, iface: Option<String>) {
+        let summary = path_summary(hops, iface.as_deref());
+        self.syslog.push(Entry::now(format!(
+            "[RT] PATH {}..: {summary}",
+            short_hash(&hash)
+        )));
+        self.path_probes.insert(
+            hash,
+            PathProbe {
+                at: now_secs(),
+                hops,
+                iface,
+            },
+        );
     }
 
     /// Cycle focus between Conversations panes (bound to Tab).
@@ -1203,22 +1337,23 @@ mod tests {
         assert!(app.should_quit);
     }
 
+    /// A propagation node with a given hash/name (no last-seen).
+    fn node(hash: &str, name: Option<&str>) -> Node {
+        Node {
+            hash: hash.to_string(),
+            name: name.map(str::to_string),
+            last_seen: 0,
+        }
+    }
+
     #[test]
     fn network_tab_selects_and_sets_propagation_node() {
         let mut app = App::new();
         app.active = Tool::Network;
+        app.net_col = NetColumn::Nodes; // focus the right column
         let n0 = "aa".repeat(16); // 32 hex chars = 16 bytes
         let n1 = "bb".repeat(16);
-        app.nodes = vec![
-            Node {
-                hash: n0.clone(),
-                name: Some("n0".to_string()),
-            },
-            Node {
-                hash: n1,
-                name: None,
-            },
-        ];
+        app.nodes = vec![node(&n0, Some("n0")), node(&n1, None)];
 
         // Down moves the selection and clamps at the last row.
         app.handle_key(press(KeyCode::Down));
@@ -1242,16 +1377,106 @@ mod tests {
     }
 
     #[test]
-    fn network_keys_are_inert_with_no_nodes() {
+    fn network_node_column_inert_with_no_nodes() {
         let mut app = App::new();
         app.active = Tool::Network;
+        app.net_col = NetColumn::Nodes;
         app.handle_key(press(KeyCode::Down));
         app.handle_key(press(KeyCode::Enter));
         assert_eq!(app.node_selected, 0);
         assert!(app.config.propagation_node.is_none());
         assert!(
             app.commands.is_empty(),
-            "Enter on an empty list does nothing"
+            "Enter on an empty node list does nothing"
+        );
+    }
+
+    #[test]
+    fn network_columns_toggle_and_navigate_independently() {
+        let mut app = App::new();
+        app.active = Tool::Network;
+        app.nodes = vec![node(&"aa".repeat(16), None), node(&"bb".repeat(16), None)];
+        // Defaults to the Peers column.
+        assert_eq!(app.net_col, NetColumn::Peers);
+
+        // Up/Down move the peer cursor (seeded with 3 conversations).
+        app.handle_key(press(KeyCode::Down));
+        assert_eq!(app.selected, 1);
+        assert_eq!(app.node_selected, 0, "node cursor untouched while on Peers");
+
+        // Tab / Left / Right switch the focused column.
+        app.handle_key(press(KeyCode::Tab));
+        assert_eq!(app.net_col, NetColumn::Nodes);
+        app.handle_key(press(KeyCode::Down));
+        assert_eq!(app.node_selected, 1);
+        assert_eq!(app.selected, 1, "peer cursor untouched while on Nodes");
+        app.handle_key(press(KeyCode::Left));
+        assert_eq!(app.net_col, NetColumn::Peers);
+        app.handle_key(press(KeyCode::Right));
+        assert_eq!(app.net_col, NetColumn::Nodes);
+    }
+
+    #[test]
+    fn enter_on_peer_opens_its_conversation() {
+        let mut app = App::new();
+        app.active = Tool::Network;
+        app.net_col = NetColumn::Peers;
+        app.selected = 1; // "bob"
+        app.handle_key(press(KeyCode::Enter));
+        assert_eq!(app.active, Tool::Conversations);
+        assert_eq!(app.focus, Pane::Transmit);
+        assert_eq!(app.selected, 1);
+    }
+
+    #[test]
+    fn p_queues_path_probe_for_focused_selection() {
+        let mut app = App::new();
+        app.active = Tool::Network;
+        let n0 = "cc".repeat(16);
+        app.nodes = vec![node(&n0, None)];
+
+        // On the Peers column: probes the selected peer's key.
+        app.net_col = NetColumn::Peers;
+        app.selected = 0;
+        let peer = app.conversations[0].peer.clone();
+        app.handle_key(press(KeyCode::Char('p')));
+        assert_eq!(
+            app.commands.pop_front(),
+            Some(NetCommand::RequestPath(peer))
+        );
+
+        // On the Nodes column: probes the selected node's hash.
+        app.net_col = NetColumn::Nodes;
+        app.handle_key(press(KeyCode::Char('p')));
+        assert_eq!(app.commands.pop_front(), Some(NetCommand::RequestPath(n0)));
+    }
+
+    #[test]
+    fn upsert_peer_stamps_last_seen() {
+        let mut app = App::new();
+        let peer = "dd".repeat(16);
+        app.upsert_peer(PeerKind::Delivery, peer.clone(), None);
+        let conv = app.conversations.iter().find(|c| c.peer == peer).unwrap();
+        assert!(conv.last_seen > 0, "delivery peer stamped");
+
+        let nodehash = "ee".repeat(16);
+        app.upsert_peer(PeerKind::Propagation, nodehash.clone(), None);
+        let n = app.nodes.iter().find(|n| n.hash == nodehash).unwrap();
+        assert!(n.last_seen > 0, "propagation node stamped");
+    }
+
+    #[test]
+    fn record_path_stores_probe_and_logs() {
+        let mut app = App::new();
+        let hash = "ff".repeat(16);
+        app.record_path(hash.clone(), Some(3), Some("AutoInterface".to_string()));
+        let p = app.path_probes.get(&hash).expect("probe stored");
+        assert_eq!(p.hops, Some(3));
+        assert!(
+            app.syslog.iter().any(
+                |e| e.text.contains("[RT] PATH") && e.text.contains("3 hops via AutoInterface")
+            ),
+            "an [RT] log line was emitted"
         );
     }
 
