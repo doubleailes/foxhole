@@ -95,6 +95,13 @@ hand-editing the interface manifest under `~/.config/foxhole/██████�
 former entry hub at ████████████████████████████`:4965` has been
 **decommissioned**; current ingress points are ████████████████.
 
+**Cold-boot sequence.** On launch the terminal runs a brief ASCII bring-up
+monitor — encrypted store, identity keys, network interface, mesh stack — that
+reports each subsystem's status as it actually comes up, then drops into the
+console the moment the operator address is live. Pure text, no emblem image.
+`FOXHOLE_NO_SPLASH=1` boots straight to console; any key skips. The leanest
+build (`--no-default-features`) omits the sequence entirely.
+
 ---
 
 ## 4. OPERATOR CONSOLE

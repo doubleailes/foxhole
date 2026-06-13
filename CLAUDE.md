@@ -25,6 +25,13 @@ A clean three-way split keeps the render path trivial and the logic testable:
   glyph-only so it degrades on a mono display, while scrollback *content* is
   tinted by a tactical palette (`tag_style`: RX/TX/DLV/LNK/RT/CFG/WRN/ERR/…,
   muted timestamps).
+- `src/splash.rs` — *(default-on `splash` feature)* pure renderer for the
+  cold-boot bring-up monitor (text only, no image). State lives in `App`
+  (`AppState::{Splash,Running}`, `BootStep`/`Boot`); `main` advances it on a
+  120 ms `select!` tick gated on `state == Splash`, and folds real readiness
+  events (`StoreKey`, `Local`, transport/identity banners) into `mark_boot` so
+  lines flip live and the console opens when the address is up. `cfg(test)` and
+  `FOXHOLE_NO_SPLASH` start in `Running`.
 - `src/storage.rs` — `atomic_write` (write-temp → fsync → rename) for durable
   state.
 - `src/store.rs` — *(`net` feature)* encrypted, atomic, per-conversation history

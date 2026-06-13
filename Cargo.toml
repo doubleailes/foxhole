@@ -44,7 +44,11 @@ bytes = { version = "1", optional = true }
 hex = { version = "0.4", optional = true }
 
 [features]
-default = []
+default = ["splash"]
+# Native cold-boot splash: a text-only bring-up sequence that doubles as a live
+# readiness monitor (see src/splash.rs). Pure ASCII, no extra dependencies — the
+# feature only gates FoxHole's own code; `--no-default-features` drops it.
+splash = []
 # Live LXMF/Reticulum protocol stack. Flips the status bar to NET:ON and brings up
 # the real transport + LXMF router in `src/net.rs` (see docs/lxmf-integration.md).
 net = [

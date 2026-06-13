@@ -328,6 +328,89 @@ impl Conversation {
     }
 }
 
+/// Top-level screen: the cold-boot bring-up splash, or the operator console.
+/// Initial state is [`AppState::Splash`] only when the `splash` feature is on
+/// and `FOXHOLE_NO_SPLASH` is unset; otherwise the console shows immediately.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AppState {
+    /// The boot bring-up monitor is playing (rendered by `src/splash.rs`).
+    Splash,
+    /// The operator console (the normal three-tier UI).
+    Running,
+}
+
+/// One line in the cold-boot sequence. The variant order *is* the reveal order
+/// and the single source of truth shared by the marker (`app`) and the renderer
+/// (`splash`). Each line appears on a timer, or earlier if its real readiness
+/// event arrives first (see [`App::mark_boot`]).
+#[cfg(feature = "splash")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BootStep {
+    Boot,
+    SelfTest,
+    Identity,
+    Store,
+    Cache,
+    Iface,
+    Mesh,
+    Console,
+}
+
+#[cfg(feature = "splash")]
+impl BootStep {
+    /// Reveal order, top to bottom.
+    pub const ALL: [BootStep; 8] = [
+        BootStep::Boot,
+        BootStep::SelfTest,
+        BootStep::Identity,
+        BootStep::Store,
+        BootStep::Cache,
+        BootStep::Iface,
+        BootStep::Mesh,
+        BootStep::Console,
+    ];
+
+    /// Position within [`BootStep::ALL`] — its timed reveal slot.
+    fn index(self) -> usize {
+        Self::ALL.iter().position(|&s| s == self).unwrap_or(0)
+    }
+}
+
+/// Boot-sequence progress. The tick counter *is* the clock — `main` advances it
+/// on a timer so `App` stays free of `Instant`/I/O — paired with which steps a
+/// real network event has reported in.
+#[cfg(feature = "splash")]
+pub struct Boot {
+    /// Timer ticks elapsed (driven by `main`'s splash interval while in Splash).
+    ticks: u32,
+    /// Steps confirmed by a real readiness event (vs. mere timed reveal).
+    marks: [bool; BootStep::ALL.len()],
+    /// Tick at which the operator address went live (`Local`); `None` until then.
+    /// Starts the short hand-off to the console.
+    ready_at: Option<u32>,
+}
+
+/// Ticks between successive lines appearing (timed-reveal pacing).
+#[cfg(feature = "splash")]
+const TICKS_PER_STEP: u32 = 1;
+/// Linger after the last line / after readiness before opening the console.
+#[cfg(feature = "splash")]
+const HOLD_TICKS: u32 = 4;
+/// Hard cap: never hold the operator at the splash beyond this many ticks.
+#[cfg(feature = "splash")]
+const MAX_TICKS: u32 = 33;
+
+#[cfg(feature = "splash")]
+impl Boot {
+    fn new() -> Self {
+        Self {
+            ticks: 0,
+            marks: [false; BootStep::ALL.len()],
+            ready_at: None,
+        }
+    }
+}
+
 /// Whole-program UI state.
 pub struct App {
     /// Active top-level tool (drives the tab strip + key delegation).
@@ -367,6 +450,11 @@ pub struct App {
     /// Set when the operator requests shutdown (Ctrl+Q); the main loop checks
     /// this each iteration.
     pub should_quit: bool,
+    /// Current top-level screen (cold-boot splash vs. console).
+    pub state: AppState,
+    /// Boot-sequence progress (only meaningful while `state == Splash`).
+    #[cfg(feature = "splash")]
+    pub boot: Boot,
 }
 
 impl Default for App {
@@ -404,6 +492,18 @@ impl App {
             outbound: VecDeque::new(),
             syslog: Vec::new(),
             should_quit: false,
+            // Cold-boot through the splash unless it's compiled out, suppressed,
+            // or under unit tests (which exercise the console directly).
+            state: if cfg!(feature = "splash")
+                && !cfg!(test)
+                && std::env::var_os("FOXHOLE_NO_SPLASH").is_none()
+            {
+                AppState::Splash
+            } else {
+                AppState::Running
+            },
+            #[cfg(feature = "splash")]
+            boot: Boot::new(),
         }
     }
 
@@ -444,6 +544,12 @@ impl App {
             return;
         }
 
+        // While the boot splash is up, any key dismisses it straight to console.
+        if self.state == AppState::Splash {
+            self.state = AppState::Running;
+            return;
+        }
+
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
         // The New Conversation modal, when open, captures all input.
@@ -464,6 +570,49 @@ impl App {
             // --- Delegated to the active tool -----------------------------------
             _ => self.handle_tool_key(ctrl, key),
         }
+    }
+
+    /// Advance the boot sequence by one timer tick and decide whether to hand
+    /// off to the console. The console opens once the bring-up has settled —
+    /// after the operator address is live (`net`), or after the timed reveal
+    /// finishes (offline) — and always by the `MAX_TICKS` hard cap so a stalled
+    /// stack never traps the operator. No-op once running.
+    pub fn tick_splash(&mut self) {
+        // No-op without the `splash` feature (the state is never `Splash`).
+        #[cfg(feature = "splash")]
+        {
+            if self.state != AppState::Splash {
+                return;
+            }
+            self.boot.ticks += 1;
+            let t = self.boot.ticks;
+            let all_done = BootStep::ALL.iter().all(|&s| self.boot_done(s));
+            // Live builds wait for the real address; offline builds use the timer.
+            let last_reveal = (BootStep::ALL.len() as u32 - 1) * TICKS_PER_STEP;
+            let timed_ok = !cfg!(feature = "net") && t >= last_reveal + HOLD_TICKS;
+            let ready_ok = self.boot.ready_at.is_some_and(|r| t >= r + HOLD_TICKS);
+            if t >= MAX_TICKS || (all_done && (timed_ok || ready_ok)) {
+                self.state = AppState::Running;
+            }
+        }
+    }
+
+    /// Mark a boot step confirmed by a real readiness event (so its line flips
+    /// to its reported status ahead of the timer). The final `Console` step is
+    /// driven by the operator address going live and starts the hand-off clock.
+    #[cfg(feature = "splash")]
+    pub fn mark_boot(&mut self, step: BootStep) {
+        self.boot.marks[step.index()] = true;
+        if step == BootStep::Console && self.boot.ready_at.is_none() {
+            self.boot.ready_at = Some(self.boot.ticks);
+        }
+    }
+
+    /// Whether a boot line should render as reported: its real event arrived, or
+    /// the timed reveal has reached it.
+    #[cfg(feature = "splash")]
+    pub fn boot_done(&self, step: BootStep) -> bool {
+        self.boot.marks[step.index()] || self.boot.ticks >= step.index() as u32 * TICKS_PER_STEP
     }
 
     /// Open the New Conversation popup (Ctrl+O), focused on the address field.
@@ -663,7 +812,11 @@ impl App {
     /// display name is filled. Loaded conversations are not re-marked dirty.
     #[cfg_attr(not(feature = "net"), allow(dead_code))]
     pub fn load_conversation(&mut self, mut loaded: Conversation) {
-        if let Some(existing) = self.conversations.iter_mut().find(|c| c.peer == loaded.peer) {
+        if let Some(existing) = self
+            .conversations
+            .iter_mut()
+            .find(|c| c.peer == loaded.peer)
+        {
             loaded.messages.append(&mut existing.messages);
             existing.messages = loaded.messages;
             if existing.display_name.is_none() {
@@ -802,6 +955,57 @@ mod tests {
     /// Just the text of each entry (timestamps are non-deterministic).
     fn texts(entries: &[Entry]) -> Vec<&str> {
         entries.iter().map(|e| e.text.as_str()).collect()
+    }
+
+    /// A fresh app forced into the boot splash (tests otherwise start running).
+    #[cfg(feature = "splash")]
+    fn booting() -> App {
+        let mut app = App::new();
+        app.state = AppState::Splash;
+        app.boot = Boot::new();
+        app
+    }
+
+    #[cfg(feature = "splash")]
+    #[test]
+    fn any_key_dismisses_splash() {
+        let mut app = booting();
+        app.handle_key(press(KeyCode::Char('x')));
+        assert_eq!(app.state, AppState::Running);
+    }
+
+    #[cfg(feature = "splash")]
+    #[test]
+    fn boot_reveals_in_order_then_hands_off() {
+        let mut app = booting();
+        // At tick 0 only the first line shows; the last is still pending.
+        assert!(app.boot_done(BootStep::Boot));
+        assert!(!app.boot_done(BootStep::Console));
+        // The clock must reach the console within the hard cap (via the timed
+        // path offline, or the cap under `net` where no real address arrives).
+        for _ in 0..=MAX_TICKS {
+            if app.state == AppState::Running {
+                break;
+            }
+            app.tick_splash();
+        }
+        assert_eq!(app.state, AppState::Running);
+        assert!(BootStep::ALL.iter().all(|&s| app.boot_done(s)));
+    }
+
+    #[cfg(feature = "splash")]
+    #[test]
+    fn local_address_marks_console_and_opens_handoff() {
+        let mut app = booting();
+        app.mark_boot(BootStep::Console); // what NetEvent::Local triggers
+        assert!(app.boot_done(BootStep::Console));
+        for _ in 0..=MAX_TICKS {
+            if app.state == AppState::Running {
+                break;
+            }
+            app.tick_splash();
+        }
+        assert_eq!(app.state, AppState::Running);
     }
 
     #[test]
@@ -1045,7 +1249,10 @@ mod tests {
         app.handle_key(press(KeyCode::Enter));
         assert_eq!(app.node_selected, 0);
         assert!(app.config.propagation_node.is_none());
-        assert!(app.commands.is_empty(), "Enter on an empty list does nothing");
+        assert!(
+            app.commands.is_empty(),
+            "Enter on an empty list does nothing"
+        );
     }
 
     #[test]
@@ -1053,10 +1260,9 @@ mod tests {
         let mut app = App::new();
         let before = app.conversations.len();
         // Colons / spaces / case are tolerated → 32 hex chars.
-        assert!(app.start_conversation(
-            "A1:b2:c3:d4 e5 f6:00:11:22:33:44:55:66:77:88:99",
-            "Bravo-6"
-        ));
+        assert!(
+            app.start_conversation("A1:b2:c3:d4 e5 f6:00:11:22:33:44:55:66:77:88:99", "Bravo-6")
+        );
         assert_eq!(app.conversations.len(), before + 1);
         let conv = app.conversations.last().unwrap();
         assert_eq!(conv.peer, "a1b2c3d4e5f600112233445566778899");
@@ -1122,7 +1328,10 @@ mod tests {
         app.handle_key(ctrl('o'));
         app.handle_key(press(KeyCode::Char('z'))); // non-hex → normalizes to empty
         app.handle_key(press(KeyCode::Enter));
-        assert!(app.new_conv.as_ref().is_some_and(|nc| nc.error), "stays open with error");
+        assert!(
+            app.new_conv.as_ref().is_some_and(|nc| nc.error),
+            "stays open with error"
+        );
     }
 
     #[test]
@@ -1133,7 +1342,11 @@ mod tests {
         let entry = app.conversations[0].messages.last().unwrap();
         assert!(entry.id > 0);
         assert_eq!(entry.status, MsgStatus::Sending);
-        assert_eq!(app.outbound.back().unwrap().id, entry.id, "Outbound shares the id");
+        assert_eq!(
+            app.outbound.back().unwrap().id,
+            entry.id,
+            "Outbound shares the id"
+        );
     }
 
     #[test]
