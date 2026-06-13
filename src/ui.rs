@@ -725,7 +725,8 @@ fn render_page(frame: &mut Frame, app: &App, area: Rect) {
             PageStatus::Error(e) => vec![Line::styled(format!("  error: {e}"), tag_style("ERR"))],
             PageStatus::Loaded(src) => {
                 let selected = if focused { Some(p.link_sel) } else { None };
-                crate::micron::render(src, selected)
+                // Match the pane's inner width so heading bars/dividers fill it.
+                crate::micron::render(src, selected, area.width.saturating_sub(2))
             }
         },
     };

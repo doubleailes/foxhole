@@ -8,25 +8,42 @@
 //! `#` comments, a leading `-` divider (`-X` sets the fill char), `\` escape,
 //! and `` `= `` literal blocks.
 //!
-//! Links render as their label and are numbered in document order — the Browser
-//! highlights the selected one (`render`'s `selected` arg) and follows its target
-//! ([`link_targets`]). Input fields are skipped and remote partials show a
-//! placeholder (forms are a later phase). Colours use 3-nibble (`f80`),
-//! grayscale (`g50`) and truecolor (`Tff8800`) forms. Anything unrecognised is
+//! Visuals follow the NomadNet dark theme: light-grey (`ddd`) body text,
+//! sections rendered as **full-width depth-shaded heading bars** with their
+//! bodies indented by depth, and `─`-filled dividers — hence `render` takes the
+//! viewport `width`. Colours use 3-nibble (`f80`), grayscale (`g50`) and
+//! truecolor (`Tff8800`) forms. Links render in the page's own style (underlined,
+//! reversed when selected), are numbered in document order so the Browser can
+//! follow one ([`link_targets`]). Input fields are skipped and remote partials
+//! show a placeholder (forms are a later phase). Anything unrecognised is
 //! dropped — never fatal, never leaks the control byte.
 
 use ratatui::layout::Alignment;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
-/// Link label colour (the selected link is additionally `REVERSED`).
-const LINK: Color = Color::Rgb(110, 160, 180);
-/// Section-heading colour (faded brass), matching the tactical palette.
-const HEADING: Color = Color::Rgb(159, 139, 60);
-/// Spaces of indent per heading depth level (mirrors `SECTION_INDENT`).
+/// NomadNet dark-theme default foreground (`ddd`) — light-grey body text.
+const DEFAULT_FG: Color = Color::Rgb(0xdd, 0xdd, 0xdd);
+/// Section-content indent per depth level (NomadNet `SECTION_INDENT`).
 const SECTION_INDENT: usize = 2;
-/// Divider width when a `-` line is expanded.
-const DIVIDER_W: usize = 48;
+/// Default horizontal-divider glyph (NomadNet uses U+2500); a page's `-X`
+/// overrides it.
+const DIVIDER_CH: char = '\u{2500}';
+
+/// Body text style — the default grey, the base every line builds on.
+fn body_style() -> Style {
+    Style::default().fg(DEFAULT_FG)
+}
+
+/// `(bg, fg)` for a section heading at `depth`, shading darker with depth —
+/// the NomadNet dark theme (`STYLES_DARK` heading1/2/3).
+fn heading_palette(depth: usize) -> (Color, Color) {
+    match depth {
+        0 | 1 => (Color::Rgb(0xbb, 0xbb, 0xbb), Color::Rgb(0x22, 0x22, 0x22)),
+        2 => (Color::Rgb(0x99, 0x99, 0x99), Color::Rgb(0x11, 0x11, 0x11)),
+        _ => (Color::Rgb(0x77, 0x77, 0x77), Color::Rgb(0, 0, 0)),
+    }
+}
 
 /// Cross-line link bookkeeping for a render pass: links are numbered in document
 /// order so the Browser can select one, and their targets are collected for
@@ -41,9 +58,11 @@ struct LinkWalk {
 }
 
 /// Render micron `source` into display lines, optionally highlighting the
-/// `selected` link (by its document-order index).
-pub fn render(source: &str, selected: Option<usize>) -> Vec<Line<'static>> {
+/// `selected` link (by document-order index). `width` is the viewport width
+/// (full-width heading bars and section dividers are filled to it).
+pub fn render(source: &str, selected: Option<usize>, width: u16) -> Vec<Line<'static>> {
     let mut literal = false;
+    let mut depth = 0usize;
     let mut walk = LinkWalk {
         next: 0,
         selected,
@@ -55,7 +74,9 @@ pub fn render(source: &str, selected: Option<usize>) -> Vec<Line<'static>> {
             render_line(
                 raw.strip_suffix('\r').unwrap_or(raw),
                 &mut literal,
+                &mut depth,
                 &mut walk,
+                width,
             )
         })
         .collect()
@@ -66,6 +87,7 @@ pub fn render(source: &str, selected: Option<usize>) -> Vec<Line<'static>> {
 /// styling-free.
 pub fn link_targets(source: &str) -> Vec<String> {
     let mut literal = false;
+    let mut depth = 0usize;
     let mut walk = LinkWalk {
         next: 0,
         selected: None,
@@ -75,15 +97,23 @@ pub fn link_targets(source: &str) -> Vec<String> {
         let _ = render_line(
             raw.strip_suffix('\r').unwrap_or(raw),
             &mut literal,
+            &mut depth,
             &mut walk,
+            0,
         );
     }
     walk.targets
 }
 
-/// Render one source line, threading the cross-line `literal` block state and
-/// the link walk.
-fn render_line(line: &str, literal: &mut bool, walk: &mut LinkWalk) -> Line<'static> {
+/// Render one source line, threading the cross-line `literal` block + section
+/// `depth` state and the link walk.
+fn render_line(
+    line: &str,
+    literal: &mut bool,
+    depth: &mut usize,
+    walk: &mut LinkWalk,
+    width: u16,
+) -> Line<'static> {
     // `= toggles a literal block; `\`=` inside one is an escaped literal marker.
     if line == "`=" {
         *literal = !*literal;
@@ -91,7 +121,7 @@ fn render_line(line: &str, literal: &mut bool, walk: &mut LinkWalk) -> Line<'sta
     }
     if *literal {
         let text = if line == "\\`=" { "`=" } else { line };
-        return Line::raw(text.to_string());
+        return Line::styled(text.to_string(), body_style());
     }
     if line.is_empty() {
         return Line::raw("");
@@ -101,55 +131,90 @@ fn render_line(line: &str, literal: &mut bool, walk: &mut LinkWalk) -> Line<'sta
 
     // A leading backslash escapes the line's first control char.
     if chars[0] == '\\' {
-        let (spans, align) = make_output(&chars[1..], Style::default(), true, walk);
-        return Line::from(spans).alignment(align);
+        return body_line(&chars[1..], true, *depth, walk);
     }
 
     match chars[0] {
         '#' => Line::raw(""), // comment
         '`' if chars.get(1) == Some(&'{') => {
-            Line::styled("[partial]", Style::default().add_modifier(Modifier::DIM))
+            Line::styled("[partial]", body_style().add_modifier(Modifier::DIM))
         }
         '<' => {
-            // Section-depth reset, then render the remainder.
-            let (spans, align) = make_output(&chars[1..], Style::default(), false, walk);
-            Line::from(spans).alignment(align)
+            // Section-depth reset, then render the remainder as body.
+            *depth = 0;
+            body_line(&chars[1..], false, 0, walk)
         }
-        '>' => render_heading(&chars, walk),
-        '-' => render_divider(&chars),
-        _ => {
-            let (spans, align) = make_output(&chars, Style::default(), false, walk);
-            Line::from(spans).alignment(align)
+        '>' => {
+            let d = chars.iter().take_while(|&&c| c == '>').count();
+            *depth = d;
+            render_heading(&chars[d..], d, width, walk)
         }
+        '-' => render_divider(&chars, *depth, width),
+        _ => body_line(&chars, false, *depth, walk),
     }
 }
 
-/// `>`-prefixed heading: depth = number of `>`, the rest is the (formatted) title.
-fn render_heading(chars: &[char], walk: &mut LinkWalk) -> Line<'static> {
-    let depth = chars.iter().take_while(|&&c| c == '>').count();
-    let rest = &chars[depth..];
-    if rest.is_empty() {
-        return Line::raw("");
-    }
-    let base = Style::default().fg(HEADING).add_modifier(Modifier::BOLD);
-    let (mut spans, align) = make_output(rest, base, false, walk);
+/// A normal text line, indented by its section depth.
+fn body_line(chars: &[char], pre_escape: bool, depth: usize, walk: &mut LinkWalk) -> Line<'static> {
+    let (mut spans, align) = make_output(chars, body_style(), pre_escape, walk);
     let indent = depth.saturating_sub(1) * SECTION_INDENT;
     if indent > 0 {
-        spans.insert(0, Span::raw(" ".repeat(indent)));
+        spans.insert(0, Span::styled(" ".repeat(indent), body_style()));
     }
     Line::from(spans).alignment(align)
 }
 
-/// A leading `-` is a horizontal divider; `-X` uses `X` as the fill character.
-fn render_divider(chars: &[char]) -> Line<'static> {
-    let fill = match chars.get(1) {
-        Some(&c) if chars.len() == 2 && c.is_ascii_graphic() => c,
-        _ => '-',
+/// A `>`-section heading: a full-width depth-shaded bar, its (indented, aligned)
+/// title painted over the heading background.
+fn render_heading(
+    content: &[char],
+    depth: usize,
+    width: u16,
+    walk: &mut LinkWalk,
+) -> Line<'static> {
+    if content.is_empty() {
+        return Line::raw("");
+    }
+    let (bg, fg) = heading_palette(depth);
+    let base = Style::default().fg(fg).bg(bg);
+    let (mut spans, align) = make_output(content, base, false, walk);
+
+    let bar = Style::default().bg(bg);
+    let indent = depth.saturating_sub(1) * SECTION_INDENT;
+    if indent > 0 {
+        spans.insert(0, Span::styled(" ".repeat(indent), bar));
+    }
+    // Fill the rest of the row with the heading background, placing the title per
+    // its alignment (indent + title is the content block).
+    let used: usize = spans.iter().map(|s| s.width()).sum();
+    let total = (width as usize).max(used);
+    let slack = total - used;
+    let (left, right) = match align {
+        Alignment::Center => (slack / 2, slack - slack / 2),
+        Alignment::Right => (slack, 0),
+        Alignment::Left => (0, slack),
     };
-    Line::styled(
-        fill.to_string().repeat(DIVIDER_W),
-        Style::default().fg(HEADING),
-    )
+    if left > 0 {
+        spans.insert(0, Span::styled(" ".repeat(left), bar));
+    }
+    if right > 0 {
+        spans.push(Span::styled(" ".repeat(right), bar));
+    }
+    Line::from(spans)
+}
+
+/// A horizontal divider, filled to the (section-indented) width. A page's `-X`
+/// sets the fill char; a bare `-` uses the default rule glyph.
+fn render_divider(chars: &[char], depth: usize, width: u16) -> Line<'static> {
+    let fill = match chars.get(1) {
+        Some(&c) if chars.len() == 2 && !c.is_control() => c,
+        _ => DIVIDER_CH,
+    };
+    let indent = depth.saturating_sub(1) * SECTION_INDENT;
+    let len = (width as usize).saturating_sub(indent * 2).max(1);
+    let mut s = " ".repeat(indent);
+    s.extend(std::iter::repeat_n(fill, len));
+    Line::styled(s, body_style())
 }
 
 /// Mutable inline-formatting state, turned into a `Style` for each text run.
@@ -263,7 +328,9 @@ fn make_output(
                 walk.next += 1;
                 walk.targets.push(url.clone());
                 let shown = if label.is_empty() { url } else { label };
-                let mut style = base.fg(LINK).add_modifier(Modifier::UNDERLINED);
+                // Links inherit the page's own styling (NomadNet does the same),
+                // with an underline to flag them; the selected link is reversed.
+                let mut style = fmt.style(base).add_modifier(Modifier::UNDERLINED);
                 if walk.selected == Some(idx) {
                     style = style.add_modifier(Modifier::REVERSED);
                 }
@@ -364,9 +431,9 @@ mod tests {
     use super::{link_targets, render as render_sel};
     use ratatui::style::Modifier;
 
-    /// 1-arg render (no link highlighted) for the text-content assertions below.
+    /// 1-arg render (no link highlighted, fixed width) for text assertions.
     fn render(source: &str) -> Vec<ratatui::text::Line<'static>> {
-        render_sel(source, None)
+        render_sel(source, None, 80)
     }
 
     /// Concatenated visible text of a rendered line.
@@ -376,10 +443,26 @@ mod tests {
 
     #[test]
     fn heading_strips_markers_and_keeps_text() {
-        // Depth 1, no indent (the common form on real pages).
-        assert_eq!(text_of(&render(">Messages")[0]), "Messages");
-        // Deeper headings are indented by (depth-1)*2 but keep the title.
+        assert!(text_of(&render(">Messages")[0]).contains("Messages"));
         assert!(text_of(&render(">>Deep")[0]).contains("Deep"));
+    }
+
+    #[test]
+    fn heading_is_a_full_width_bar() {
+        let line = &render_sel(">Hi", None, 20)[0];
+        assert_eq!(line.width(), 20, "filled to the viewport width");
+        assert!(
+            line.spans.iter().any(|s| s.style.bg.is_some()),
+            "carries a heading background"
+        );
+        assert!(text_of(line).contains("Hi"));
+    }
+
+    #[test]
+    fn section_body_is_indented_by_depth() {
+        // A depth-2 heading sets the section; the following body line indents 2.
+        let lines = render_sel(">>Sec\nbody text", None, 40);
+        assert!(text_of(&lines[1]).starts_with("  body text"));
     }
 
     #[test]
@@ -388,9 +471,9 @@ mod tests {
     }
 
     #[test]
-    fn divider_line_is_ascii_dashes() {
+    fn divider_uses_rule_glyph_filled_to_width() {
         let t = text_of(&render("---")[0]);
-        assert!(t.chars().all(|c| c == '-') && !t.is_empty() && t.is_ascii());
+        assert!(t.chars().all(|c| c == '\u{2500}') && !t.is_empty());
     }
 
     #[test]
@@ -473,7 +556,7 @@ mod tests {
     fn selected_link_renders_reversed() {
         let src = "`[One`:/a] `[Two`:/b]";
         // Highlight the second link (index 1).
-        let line = &render_sel(src, Some(1))[0];
+        let line = &render_sel(src, Some(1), 80)[0];
         let two = line
             .spans
             .iter()
