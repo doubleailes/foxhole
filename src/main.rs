@@ -11,6 +11,7 @@
 //!   3. Multiplex keyboard input and inbound messages in one `select!` loop.
 
 mod app;
+mod burn;
 mod config;
 mod micron;
 #[cfg(feature = "net")]
@@ -22,7 +23,7 @@ mod storage;
 mod store;
 mod ui;
 
-use std::io::{self, Stdout};
+use std::io::{self, Stdout, Write};
 
 use crossterm::cursor;
 use crossterm::event::{Event, EventStream};
@@ -85,7 +86,21 @@ async fn main() -> io::Result<()> {
 
     // `_guard` drops as this returns, restoring the terminal whether `run`
     // finished cleanly or propagated an I/O error.
-    run(&mut terminal, &mut app, net_rx, outbound_tx, command_tx).await
+    let result = run(&mut terminal, &mut app, net_rx, outbound_tx, command_tx).await;
+
+    // Burn notice: the operator confirmed destruction. Restore the terminal,
+    // shred the config dir, report, and exit hard — `process::exit` skips the
+    // `TerminalGuard` drop (hence the explicit restore) and kills the net task
+    // before it can recreate anything.
+    if app.burn {
+        let _ = restore_terminal();
+        let report = burn::execute(&config::config_dir());
+        print!("{}", report.render());
+        let _ = io::stdout().flush();
+        std::process::exit(0);
+    }
+
+    result
 }
 
 /// The render + event loop. Draws the current state, then waits on whichever

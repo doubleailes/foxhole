@@ -80,6 +80,18 @@ impl NewConv {
     }
 }
 
+/// The exact token the operator must type to confirm a burn.
+pub const BURN_TOKEN: &str = "BURN";
+
+/// Modal state for the burn confirmation (Ctrl+K). Destroying all session data
+/// is gated behind typing [`BURN_TOKEN`] so it can't fire by accident.
+pub struct BurnConfirm {
+    /// The confirmation token as typed so far.
+    pub input: String,
+    /// Set when the last Enter had the wrong token; cleared on edit.
+    pub error: bool,
+}
+
 /// A top-level tool, rendered as a tab in the menu strip. Each tool owns its
 /// own body layout and key handling (see `ui` and [`App::handle_tool_key`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -687,6 +699,11 @@ pub struct App {
     pub sync_status: Option<String>,
     /// When `Some`, the New Conversation popup is open (and captures all input).
     pub new_conv: Option<NewConv>,
+    /// When `Some`, the burn-confirmation modal is open (captures all input).
+    pub burn_confirm: Option<BurnConfirm>,
+    /// Set once the operator confirms a burn; `main` shreds the config dir and
+    /// exits. (The wipe itself is I/O — done outside `App`.)
+    pub burn: bool,
     /// Persisted operator settings (display name, hub, active propagation node).
     pub config: Config,
     /// Commands queued for the network task; drained by `main` after key input.
@@ -751,6 +768,8 @@ impl App {
             local_address: None,
             sync_status: None,
             new_conv: None,
+            burn_confirm: None,
+            burn: false,
             config: Config::default(),
             commands: VecDeque::new(),
             next_msg_id: 1,
@@ -826,6 +845,12 @@ impl App {
 
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
+        // The burn-confirmation modal, when open, captures all input.
+        if self.burn_confirm.is_some() {
+            self.handle_burn_key(key);
+            return;
+        }
+
         // The New Conversation modal, when open, captures all input.
         if self.new_conv.is_some() {
             self.handle_new_conv_key(ctrl, key);
@@ -854,6 +879,7 @@ impl App {
             // --- Program-global --------------------------------------------------
             (true, KeyCode::Char('q')) => self.should_quit = true,
             (true, KeyCode::Char('o')) => self.open_new_conv(),
+            (true, KeyCode::Char('k')) => self.open_burn(),
 
             // --- Tool (tab) switching -------------------------------------------
             (true, KeyCode::Char('n')) => self.active = self.active.next(),
@@ -927,6 +953,44 @@ impl App {
             field: NewConvField::Address,
             error: false,
         });
+    }
+
+    /// Open the burn-confirmation modal (Ctrl+K).
+    fn open_burn(&mut self) {
+        self.burn_confirm = Some(BurnConfirm {
+            input: String::new(),
+            error: false,
+        });
+    }
+
+    /// Key handling while the burn modal is open: type the token, Enter to
+    /// confirm (only when it exactly matches), Esc to cancel.
+    fn handle_burn_key(&mut self, key: KeyEvent) {
+        let Some(b) = &mut self.burn_confirm else {
+            return;
+        };
+        match key.code {
+            KeyCode::Esc => self.burn_confirm = None,
+            KeyCode::Enter => {
+                if b.input == BURN_TOKEN {
+                    // Confirmed — `main` shreds the config dir and exits.
+                    self.burn = true;
+                    self.should_quit = true;
+                    self.burn_confirm = None;
+                } else {
+                    b.error = true;
+                }
+            }
+            KeyCode::Backspace => {
+                b.input.pop();
+                b.error = false;
+            }
+            KeyCode::Char(c) => {
+                b.input.push(c);
+                b.error = false;
+            }
+            _ => {}
+        }
     }
 
     /// Key handling while the New Conversation modal is open.
@@ -1858,6 +1922,51 @@ mod tests {
         assert!(!app.should_quit);
         app.handle_key(ctrl('q'));
         assert!(app.should_quit);
+    }
+
+    /// Type a string into the open burn modal.
+    fn type_burn(app: &mut App, s: &str) {
+        for c in s.chars() {
+            app.handle_key(press(KeyCode::Char(c)));
+        }
+    }
+
+    #[test]
+    fn ctrl_k_opens_burn_and_token_confirms() {
+        let mut app = App::new();
+        app.handle_key(ctrl('k'));
+        assert!(app.burn_confirm.is_some(), "burn modal opened");
+        assert!(!app.burn && !app.should_quit);
+
+        type_burn(&mut app, BURN_TOKEN);
+        app.handle_key(press(KeyCode::Enter));
+        assert!(app.burn, "burn confirmed");
+        assert!(app.should_quit, "and quitting");
+        assert!(app.burn_confirm.is_none(), "modal closed");
+    }
+
+    #[test]
+    fn wrong_burn_token_does_not_burn() {
+        let mut app = App::new();
+        app.handle_key(ctrl('k'));
+        type_burn(&mut app, "burn"); // lowercase — not the token
+        app.handle_key(press(KeyCode::Enter));
+        assert!(!app.burn, "no burn for the wrong token");
+        assert!(!app.should_quit);
+        assert!(app.burn_confirm.as_ref().unwrap().error, "error flagged");
+        // Editing clears the error; the modal stays open until Esc or the token.
+        app.handle_key(press(KeyCode::Backspace));
+        assert!(!app.burn_confirm.as_ref().unwrap().error);
+    }
+
+    #[test]
+    fn esc_cancels_burn() {
+        let mut app = App::new();
+        app.handle_key(ctrl('k'));
+        type_burn(&mut app, BURN_TOKEN);
+        app.handle_key(press(KeyCode::Esc));
+        assert!(app.burn_confirm.is_none(), "cancelled");
+        assert!(!app.burn && !app.should_quit, "nothing burned");
     }
 
     /// A propagation node with a given hash/name (no last-seen).
