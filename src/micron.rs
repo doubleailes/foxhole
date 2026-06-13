@@ -8,16 +8,18 @@
 //! `#` comments, a leading `-` divider (`-X` sets the fill char), `\` escape,
 //! and `` `= `` literal blocks.
 //!
-//! Read-only (Phase 1): links render as their label, fields are skipped, remote
-//! partials show a placeholder. Colours use 3-nibble (`f80`), grayscale (`g50`)
-//! and truecolor (`Tff8800`) forms. Anything unrecognised is dropped — never
-//! fatal, never leaks the control byte.
+//! Links render as their label and are numbered in document order — the Browser
+//! highlights the selected one (`render`'s `selected` arg) and follows its target
+//! ([`link_targets`]). Input fields are skipped and remote partials show a
+//! placeholder (forms are a later phase). Colours use 3-nibble (`f80`),
+//! grayscale (`g50`) and truecolor (`Tff8800`) forms. Anything unrecognised is
+//! dropped — never fatal, never leaks the control byte.
 
 use ratatui::layout::Alignment;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
-/// Link label colour — links are inert in Phase 1 but still flagged.
+/// Link label colour (the selected link is additionally `REVERSED`).
 const LINK: Color = Color::Rgb(110, 160, 180);
 /// Section-heading colour (faded brass), matching the tactical palette.
 const HEADING: Color = Color::Rgb(159, 139, 60);
@@ -26,17 +28,62 @@ const SECTION_INDENT: usize = 2;
 /// Divider width when a `-` line is expanded.
 const DIVIDER_W: usize = 48;
 
-/// Render micron `source` into display lines.
-pub fn render(source: &str) -> Vec<Line<'static>> {
+/// Cross-line link bookkeeping for a render pass: links are numbered in document
+/// order so the Browser can select one, and their targets are collected for
+/// navigation.
+struct LinkWalk {
+    /// Index assigned to the next link encountered.
+    next: usize,
+    /// The link index to highlight (`REVERSED`), if any.
+    selected: Option<usize>,
+    /// Each link's resolvable target (the `url` of `label`url`fields`), in order.
+    targets: Vec<String>,
+}
+
+/// Render micron `source` into display lines, optionally highlighting the
+/// `selected` link (by its document-order index).
+pub fn render(source: &str, selected: Option<usize>) -> Vec<Line<'static>> {
     let mut literal = false;
+    let mut walk = LinkWalk {
+        next: 0,
+        selected,
+        targets: Vec::new(),
+    };
     source
         .split('\n')
-        .map(|raw| render_line(raw.strip_suffix('\r').unwrap_or(raw), &mut literal))
+        .map(|raw| {
+            render_line(
+                raw.strip_suffix('\r').unwrap_or(raw),
+                &mut literal,
+                &mut walk,
+            )
+        })
         .collect()
 }
 
-/// Render one source line, threading the cross-line `literal` block state.
-fn render_line(line: &str, literal: &mut bool) -> Line<'static> {
+/// The resolvable target of each link in `source`, in document order — what the
+/// Browser follows. No ratatui types, so callers outside the render path stay
+/// styling-free.
+pub fn link_targets(source: &str) -> Vec<String> {
+    let mut literal = false;
+    let mut walk = LinkWalk {
+        next: 0,
+        selected: None,
+        targets: Vec::new(),
+    };
+    for raw in source.split('\n') {
+        let _ = render_line(
+            raw.strip_suffix('\r').unwrap_or(raw),
+            &mut literal,
+            &mut walk,
+        );
+    }
+    walk.targets
+}
+
+/// Render one source line, threading the cross-line `literal` block state and
+/// the link walk.
+fn render_line(line: &str, literal: &mut bool, walk: &mut LinkWalk) -> Line<'static> {
     // `= toggles a literal block; `\`=` inside one is an escaped literal marker.
     if line == "`=" {
         *literal = !*literal;
@@ -54,7 +101,7 @@ fn render_line(line: &str, literal: &mut bool) -> Line<'static> {
 
     // A leading backslash escapes the line's first control char.
     if chars[0] == '\\' {
-        let (spans, align) = make_output(&chars[1..], Style::default(), true);
+        let (spans, align) = make_output(&chars[1..], Style::default(), true, walk);
         return Line::from(spans).alignment(align);
     }
 
@@ -65,27 +112,27 @@ fn render_line(line: &str, literal: &mut bool) -> Line<'static> {
         }
         '<' => {
             // Section-depth reset, then render the remainder.
-            let (spans, align) = make_output(&chars[1..], Style::default(), false);
+            let (spans, align) = make_output(&chars[1..], Style::default(), false, walk);
             Line::from(spans).alignment(align)
         }
-        '>' => render_heading(&chars),
+        '>' => render_heading(&chars, walk),
         '-' => render_divider(&chars),
         _ => {
-            let (spans, align) = make_output(&chars, Style::default(), false);
+            let (spans, align) = make_output(&chars, Style::default(), false, walk);
             Line::from(spans).alignment(align)
         }
     }
 }
 
 /// `>`-prefixed heading: depth = number of `>`, the rest is the (formatted) title.
-fn render_heading(chars: &[char]) -> Line<'static> {
+fn render_heading(chars: &[char], walk: &mut LinkWalk) -> Line<'static> {
     let depth = chars.iter().take_while(|&&c| c == '>').count();
     let rest = &chars[depth..];
     if rest.is_empty() {
         return Line::raw("");
     }
     let base = Style::default().fg(HEADING).add_modifier(Modifier::BOLD);
-    let (mut spans, align) = make_output(rest, base, false);
+    let (mut spans, align) = make_output(rest, base, false, walk);
     let indent = depth.saturating_sub(1) * SECTION_INDENT;
     if indent > 0 {
         spans.insert(0, Span::raw(" ".repeat(indent)));
@@ -140,7 +187,12 @@ impl Fmt {
 /// Parse one line's inline micron into styled spans plus its alignment. Mirrors
 /// `MicronParser.make_output`: each backtick consumes exactly one command (plus
 /// its arguments), so nothing desyncs and no control byte leaks.
-fn make_output(chars: &[char], base: Style, pre_escape: bool) -> (Vec<Span<'static>>, Alignment) {
+fn make_output(
+    chars: &[char],
+    base: Style,
+    pre_escape: bool,
+    walk: &mut LinkWalk,
+) -> (Vec<Span<'static>>, Alignment) {
     let mut spans: Vec<Span> = Vec::new();
     let mut part = String::new();
     let mut fmt = Fmt::default();
@@ -204,13 +256,18 @@ fn make_output(chars: &[char], base: Style, pre_escape: bool) -> (Vec<Span<'stat
             'a' => align = Alignment::Left, // default alignment
             '<' => skip_field(chars, &mut i),
             '[' => {
-                let label = read_link(chars, &mut i);
-                if !label.is_empty() {
-                    spans.push(Span::styled(
-                        label,
-                        base.fg(LINK).add_modifier(Modifier::UNDERLINED),
-                    ));
+                let (label, url) = read_link(chars, &mut i);
+                // Number every link with a target so the Browser can address it,
+                // even if its label is empty (then show the url).
+                let idx = walk.next;
+                walk.next += 1;
+                walk.targets.push(url.clone());
+                let shown = if label.is_empty() { url } else { label };
+                let mut style = base.fg(LINK).add_modifier(Modifier::UNDERLINED);
+                if walk.selected == Some(idx) {
+                    style = style.add_modifier(Modifier::REVERSED);
                 }
+                spans.push(Span::styled(shown, style));
             }
             _ => {} // unknown single-char tag — consumed, ignored
         }
@@ -281,9 +338,9 @@ fn skip_field(chars: &[char], i: &mut usize) {
     }
 }
 
-/// Read a link `` `[label`url`fields]`` and return its display label (the url
-/// when no explicit label is given). Advances past the closing `]`.
-fn read_link(chars: &[char], i: &mut usize) -> String {
+/// Read a link `` `[label`url`fields]`` into `(label, url)` — `label` empty when
+/// none is given (the caller then shows the url). Advances past the closing `]`.
+fn read_link(chars: &[char], i: &mut usize) -> (String, String) {
     let start = *i;
     let mut j = *i;
     while j < chars.len() && chars[j] != ']' {
@@ -293,24 +350,24 @@ fn read_link(chars: &[char], i: &mut usize) -> String {
     *i = if j < chars.len() { j + 1 } else { j };
 
     let mut parts = data.split('`');
-    let first = parts.next().unwrap_or("");
+    let first = parts.next().unwrap_or("").to_string();
     match parts.next() {
-        // `label`url[`fields]` — show the label, or the url if unlabelled.
-        Some(url) => {
-            if first.is_empty() {
-                url.to_string()
-            } else {
-                first.to_string()
-            }
-        }
+        // `label`url[`fields]` — explicit label and target.
+        Some(url) => (first, url.to_string()),
         // `url]` with no separator — the url is its own label.
-        None => first.to_string(),
+        None => (String::new(), first),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::render;
+    use super::{link_targets, render as render_sel};
+    use ratatui::style::Modifier;
+
+    /// 1-arg render (no link highlighted) for the text-content assertions below.
+    fn render(source: &str) -> Vec<ratatui::text::Line<'static>> {
+        render_sel(source, None)
+    }
 
     /// Concatenated visible text of a rendered line.
     fn text_of(line: &ratatui::text::Line) -> String {
@@ -401,5 +458,33 @@ mod tests {
         // Between `= markers, control chars are shown as-is.
         let out = render("`=\n`!not bold`!\n`=");
         assert_eq!(text_of(&out[1]), "`!not bold`!");
+    }
+
+    #[test]
+    fn link_targets_collected_in_document_order() {
+        let src = "`[Home`:/page/index.mu]\nmid\n`[Files`:/page/files.mu`a|b]\n`[plainurl]";
+        assert_eq!(
+            link_targets(src),
+            vec![":/page/index.mu", ":/page/files.mu", "plainurl"],
+        );
+    }
+
+    #[test]
+    fn selected_link_renders_reversed() {
+        let src = "`[One`:/a] `[Two`:/b]";
+        // Highlight the second link (index 1).
+        let line = &render_sel(src, Some(1))[0];
+        let two = line
+            .spans
+            .iter()
+            .find(|s| s.content.as_ref() == "Two")
+            .expect("second link present");
+        let one = line
+            .spans
+            .iter()
+            .find(|s| s.content.as_ref() == "One")
+            .expect("first link present");
+        assert!(two.style.add_modifier.contains(Modifier::REVERSED));
+        assert!(!one.style.add_modifier.contains(Modifier::REVERSED));
     }
 }

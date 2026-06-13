@@ -228,9 +228,10 @@ fn apply_net_event(app: &mut App, ev: NetEvent) {
         NetEvent::Path { hash, hops, iface } => app.record_path(hash, hops, iface),
         NetEvent::NomadNode {
             identity,
+            dest,
             name,
             last_seen,
-        } => app.upsert_nomad(identity, name, last_seen),
+        } => app.upsert_nomad(identity, dest, name, last_seen),
         NetEvent::Page {
             identity,
             path,

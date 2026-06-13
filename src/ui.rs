@@ -19,7 +19,7 @@ use ratatui::symbols::border;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
-use crate::app::{App, NetColumn, PageStatus, Pane, Tool, path_summary};
+use crate::app::{App, BrowserPane, NetColumn, PageStatus, Pane, Scroll, Tool, path_summary};
 
 /// Pure 7-bit ASCII border set. Used by every pane so the layout is stable on
 /// terminals with no box-drawing glyphs.
@@ -230,6 +230,44 @@ fn render_scrollback(
     frame.render_widget(para, area);
 }
 
+/// Total visual rows `lines` occupy once wrapped at `width` — so PageDown/End can
+/// reach the true bottom of wrapped content (line count alone under-counts).
+fn wrapped_height(lines: &[Line], width: u16) -> usize {
+    if width == 0 {
+        return lines.len();
+    }
+    let w = width as usize;
+    lines
+        .iter()
+        .map(|l| match l.width() {
+            0 => 1,
+            lw => lw.div_ceil(w),
+        })
+        .sum()
+}
+
+/// Render a scrollable text pane: like [`render_scrollback`] but driven by a
+/// [`Scroll`] (operator PageUp/PageDown/Home/End) rather than always pinning to
+/// the bottom. The `scroll` clamps itself to the content/viewport at render time.
+fn render_scroll(
+    frame: &mut Frame,
+    title: &str,
+    lines: Vec<Line<'static>>,
+    active: bool,
+    scroll: &Scroll,
+    area: Rect,
+) {
+    let inner_h = area.height.saturating_sub(2);
+    let inner_w = area.width.saturating_sub(2);
+    let content = wrapped_height(&lines, inner_w).min(u16::MAX as usize) as u16;
+    let off = scroll.visible(content, inner_h);
+    let para = Paragraph::new(lines)
+        .block(pane_block(title, active))
+        .wrap(Wrap { trim: false })
+        .scroll((off, 0));
+    frame.render_widget(para, area);
+}
+
 /// Plain (untinted) scrollback lines for static panes (Network/Interfaces/Guide).
 fn plain_lines<I, S>(lines: I) -> Vec<Line<'static>>
 where
@@ -390,7 +428,14 @@ fn render_conversations(frame: &mut Frame, app: &App, area: Rect) {
         ),
         None => ("THREAD".to_string(), Vec::new(), false),
     };
-    render_scrollback(frame, &title, lines, thread_active, top[1]);
+    render_scroll(
+        frame,
+        &title,
+        lines,
+        thread_active,
+        &app.thread_scroll,
+        top[1],
+    );
 
     render_transmit(frame, app, rows[1]);
 }
@@ -627,8 +672,13 @@ fn render_browser(frame: &mut Frame, app: &App, area: Rect) {
     render_nomad_list(frame, app, cols[0]);
     render_page(frame, app, cols[1]);
 
-    let legend = Line::styled("[Up/Dn] node  [Enter] open index  [r] reload", ts_style());
-    frame.render_widget(Paragraph::new(legend), rows[2]);
+    let legend = match app.browser_pane {
+        BrowserPane::Nodes => "[Tab] page  [Up/Dn] node  [Enter] open  [r] reload",
+        BrowserPane::Page => {
+            "[Tab] nodes  [Up/Dn] link  [Enter] follow  [Bksp] back  [PgUp/PgDn] scroll"
+        }
+    };
+    frame.render_widget(Paragraph::new(Line::styled(legend, ts_style())), rows[2]);
 }
 
 /// The discovered Nomad node list, with a last-seen UTC stamp per row.
@@ -657,32 +707,42 @@ fn render_nomad_list(frame: &mut Frame, app: &App, area: Rect) {
             })
             .collect()
     };
+    let focused = app.browser_pane == BrowserPane::Nodes;
     frame.render_widget(
-        Paragraph::new(lines).block(pane_block("NODES", app.active == Tool::Browser)),
+        Paragraph::new(lines).block(pane_block("NODES", focused)),
         area,
     );
 }
 
-/// The page viewport: rendered micron, or the fetch state.
+/// The page viewport: rendered micron (with the selected link highlighted while
+/// the Page pane holds focus), or the fetch state.
 fn render_page(frame: &mut Frame, app: &App, area: Rect) {
+    let focused = app.browser_pane == BrowserPane::Page;
     let lines: Vec<Line> = match &app.page {
         None => vec![Line::styled("  no page loaded", ts_style())],
         Some(p) => match &p.status {
             PageStatus::Fetching => vec![Line::styled("  fetching page...", ts_style())],
             PageStatus::Error(e) => vec![Line::styled(format!("  error: {e}"), tag_style("ERR"))],
-            PageStatus::Loaded(src) => crate::micron::render(src),
+            PageStatus::Loaded(src) => {
+                let selected = if focused { Some(p.link_sel) } else { None };
+                crate::micron::render(src, selected)
+            }
         },
     };
-    let para = Paragraph::new(lines)
-        .block(pane_block("PAGE", false))
-        .wrap(Wrap { trim: false });
-    frame.render_widget(para, area);
+    render_scroll(frame, "PAGE", lines, focused, &app.page_scroll, area);
 }
 
 /// Log tool: the system/application log scrollback, timestamped (UTC) and tinted.
 fn render_log(frame: &mut Frame, app: &App, area: Rect) {
     let lines = app.syslog.iter().map(styled_entry).collect();
-    render_scrollback(frame, "SYSTEM LOG (UTC)", lines, false, area);
+    render_scroll(
+        frame,
+        "SYSTEM LOG (UTC)",
+        lines,
+        false,
+        &app.log_scroll,
+        area,
+    );
 }
 
 /// Interfaces tool: Reticulum interface status. Stub until the stack reports
@@ -698,13 +758,14 @@ fn render_interfaces(frame: &mut Frame, _app: &App, area: Rect) {
 }
 
 /// Guide tool: static help text.
-fn render_guide(frame: &mut Frame, _app: &App, area: Rect) {
+fn render_guide(frame: &mut Frame, app: &App, area: Rect) {
     let lines = [
         "FoxHole — off-grid LXMF comms terminal".to_string(),
         String::new(),
         "Tabs (Ctrl+N / Ctrl+P to switch):".to_string(),
         "  Conversations  Send and receive LXMF messages.".to_string(),
-        "  Network        Discovered peers, propagation nodes, page servers.".to_string(),
+        "  Network        Discovered peers and propagation nodes.".to_string(),
+        "  Browser        Read Nomad Network pages (micron).".to_string(),
         "  Log            System and diagnostic messages.".to_string(),
         "  Interfaces     Reticulum interface status.".to_string(),
         "  Guide          This help.".to_string(),
@@ -712,14 +773,25 @@ fn render_guide(frame: &mut Frame, _app: &App, area: Rect) {
         "Keys:".to_string(),
         "  Ctrl+N / Ctrl+P  Next / previous tab".to_string(),
         "  Ctrl+O           New conversation by LXMF address".to_string(),
-        "  Tab              Cycle panes (Peers / Thread / Transmit)".to_string(),
-        "  Up / Down        Select peer (Peers pane)".to_string(),
+        "  Tab              Cycle panes (Peers / Thread / Transmit; Browser cols)".to_string(),
+        "  Up / Down        Select peer / node / link".to_string(),
+        "  PgUp / PgDn      Scroll the focused text pane".to_string(),
+        "  Home / End       Jump to top / bottom".to_string(),
+        "  Enter            Send / open node / follow link".to_string(),
+        "  Backspace        Browser: back to previous page".to_string(),
         "  Ctrl+S           Send to selected peer".to_string(),
         "  Ctrl+R           Sync now from propagation node (on demand)".to_string(),
         "  Ctrl+X           Purge compose buffer".to_string(),
         "  Ctrl+Q           Quit".to_string(),
     ];
-    render_scrollback(frame, "GUIDE", plain_lines(lines), false, area);
+    render_scroll(
+        frame,
+        "GUIDE",
+        plain_lines(lines),
+        false,
+        &app.guide_scroll,
+        area,
+    );
 }
 
 /// Single-line metadata strip plus the keybinding legend. Never focusable.
@@ -774,9 +846,20 @@ fn render_transmit(frame: &mut Frame, app: &App, area: Rect) {
 mod tests {
     use super::{
         centered_rect, fmt_time, leading_tag, line_style, status_token, sys_category, tag_style,
+        wrapped_height,
     };
     use crate::app::MsgStatus;
     use ratatui::layout::Rect;
+    use ratatui::text::Line;
+
+    #[test]
+    fn wrapped_height_counts_wrapped_rows() {
+        let lines = [Line::raw("ab"), Line::raw("abcdef"), Line::raw("")];
+        // width 3: "ab"→1, "abcdef"→2, ""→1  = 4 visual rows.
+        assert_eq!(wrapped_height(&lines, 3), 4);
+        // width 0 falls back to the raw line count.
+        assert_eq!(wrapped_height(&lines, 0), 3);
+    }
 
     #[test]
     fn status_tokens_map_to_palette() {

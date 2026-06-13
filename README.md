@@ -117,18 +117,23 @@ Two-tier layout. **Tools** along the top; **panes** within each.
 | `Ctrl+N/Ctrl+P`| Cycle tools (tabs)                                  |
 | `Ctrl+O`       | Open a conversation by raw LXMF address             |
 | `Tab`          | Cycle panes (Peers / Thread / Transmit)             |
-| `Up/Down`      | Select contact / node                               |
+| `Up/Down`      | Select contact / node / link                        |
+| `PgUp/PgDn`    | Scroll the focused text pane (page / log / thread)  |
+| `Home/End`     | Jump to top / bottom of the focused pane            |
 | `Ctrl+S`       | Transmit                                            |
 | `Ctrl+R`       | Sync from propagation node (operator-initiated)     |
 | `p`            | Path probe selected peer/node (Network, rnpath)     |
-| `Enter`        | Open page index of selected Nomad node (Browser)    |
+| `Enter`        | Open node index / follow selected link (Browser)    |
+| `Backspace`    | Back to previous page (Browser, page pane)          |
 | `Ctrl+X`       | Purge compose buffer                                |
 | `Ctrl+Q`       | ████████ (terminate session)                        |
 
 The **Browser** tool reads Nomad Network ████ pages: it lists discovered
-`nomadnetwork.node` stations and fetches their `index.mu` over a Reticulum link,
-rendering the ████ micron markup. Read-only in this release; link traversal is
-████████████.
+`nomadnetwork.node` stations and fetches `index.mu` over a Reticulum link,
+rendering the ████ micron markup. Two panes (`Tab` to switch): a node list, and
+the page viewport where `Up/Down` move between links and `Enter` follows one —
+same-node (`:/page/…`) or to another discovered node — with `Backspace` to go
+back. Input forms are ████████████.
 
 Additional bindings exist for ████████ and ████████████ but are omitted from
 this release.

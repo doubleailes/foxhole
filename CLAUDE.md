@@ -32,10 +32,12 @@ A clean three-way split keeps the render path trivial and the logic testable:
   events (`StoreKey`, `Local`, transport/identity banners) into `mark_boot` so
   lines flip live and the console opens when the address is up. `cfg(test)` and
   `FOXHOLE_NO_SPLASH` start in `Running`.
-- `src/micron.rs` — pure renderer for Nomad Network **micron** page markup
-  (`render(&str) -> Vec<Line>`): a forgiving subset (headings, dividers,
-  bold/italic/underline, `` `F``/`` `B`` colours, links as label-only). Unknown
-  tags are stripped, never fatal. Feeds the Browser tool; unit-tested.
+- `src/micron.rs` — pure renderer for Nomad Network **micron** page markup,
+  mirroring NomadNet's `MicronParser.py` (headings, dividers,
+  bold/italic/underline, `` `F``/`` `B`` colours, alignment, escapes, literal
+  blocks). `render(&str, selected: Option<usize>)` highlights the selected link;
+  `link_targets(&str)` lists link targets in order for navigation. Unknown tags
+  are stripped, never fatal. Feeds the Browser tool; unit-tested.
 - `src/storage.rs` — `atomic_write` (write-temp → fsync → rename) for durable
   state.
 - `src/store.rs` — *(`net` feature)* encrypted, atomic, per-conversation history

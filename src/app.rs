@@ -13,6 +13,7 @@
 //!     Conversations tool has three panes (peer list, thread, transmit); the
 //!     other tools are read-only single views.
 
+use std::cell::Cell;
 use std::collections::{HashMap, VecDeque};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -227,10 +228,12 @@ pub enum NetEvent {
         iface: Option<String>,
     },
     /// A discovered Nomad Network node (from the recent-announce cache).
-    /// `identity` is its hex identity hash (what a page fetch addresses);
-    /// `last_seen` is the announce timestamp (Unix epoch seconds, UTC).
+    /// `identity` is its hex identity hash (what a page fetch addresses), `dest`
+    /// its hex destination hash (what links embed); `last_seen` is the announce
+    /// timestamp (Unix epoch seconds, UTC).
     NomadNode {
         identity: String,
+        dest: String,
         name: Option<String>,
         last_seen: u64,
     },
@@ -288,6 +291,9 @@ pub struct PathProbe {
 pub struct NomadNode {
     /// Hex identity hash (`sha256(public_key)[..16]`).
     pub identity: String,
+    /// Hex **destination** hash — what micron links embed; lets the Browser
+    /// resolve a cross-node link back to this node's identity.
+    pub dest: String,
     /// Announced node name, if any.
     pub name: Option<String>,
     /// When last heard via the announce cache (Unix epoch **seconds, UTC**).
@@ -312,6 +318,18 @@ pub struct Page {
     pub path: String,
     /// Fetch progress / outcome.
     pub status: PageStatus,
+    /// Link targets in document order (from `micron::link_targets`), populated
+    /// once the page loads. Empty while fetching/errored.
+    pub links: Vec<String>,
+    /// The selected link index within `links` (Page-pane navigation).
+    pub link_sel: usize,
+}
+
+/// Which Browser-tab pane has focus: the node list or the page viewport.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BrowserPane {
+    Nodes,
+    Page,
 }
 
 /// Lifecycle of a page fetch.
@@ -538,6 +556,89 @@ impl Boot {
     }
 }
 
+/// Scroll position for a text pane. The key handler nudges the offset; the
+/// renderer clamps it to the content/viewport via [`Scroll::visible`] and writes
+/// the corrected value back (the `Cell`s), so over-scroll self-corrects and
+/// PageUp/Down step by the true last-rendered page height. Bottom-anchored panes
+/// (log, thread) follow the newest line until the operator scrolls up.
+pub struct Scroll {
+    /// First visible visual row (counted from the top, after wrapping).
+    offset: Cell<u16>,
+    /// While set, the renderer pins to the bottom (follow newest content).
+    stick_bottom: Cell<bool>,
+    /// Last rendered inner height — the PageUp/PageDown step.
+    viewport: Cell<u16>,
+    /// Whether this pane defaults to (and re-engages) the bottom.
+    anchored_bottom: bool,
+}
+
+impl Scroll {
+    /// A top-anchored pane that opens at the top (Browser page, Guide).
+    fn top() -> Self {
+        Self {
+            offset: Cell::new(0),
+            stick_bottom: Cell::new(false),
+            viewport: Cell::new(0),
+            anchored_bottom: false,
+        }
+    }
+
+    /// A bottom-anchored pane that follows the newest line (Log, thread).
+    fn bottom() -> Self {
+        Self {
+            offset: Cell::new(0),
+            stick_bottom: Cell::new(true),
+            viewport: Cell::new(0),
+            anchored_bottom: true,
+        }
+    }
+
+    fn line_up(&self, n: u16) {
+        self.stick_bottom.set(false);
+        self.offset.set(self.offset.get().saturating_sub(n));
+    }
+
+    fn line_down(&self, n: u16) {
+        // The renderer clamps; reaching the bottom re-engages stick (live panes).
+        self.offset.set(self.offset.get().saturating_add(n));
+    }
+
+    /// Scroll up/down by one viewport.
+    pub fn page_up(&self) {
+        self.line_up(self.viewport.get().max(1));
+    }
+    pub fn page_down(&self) {
+        self.line_down(self.viewport.get().max(1));
+    }
+    /// Jump to the very top / bottom.
+    pub fn to_top(&self) {
+        self.stick_bottom.set(false);
+        self.offset.set(0);
+    }
+    pub fn to_bottom(&self) {
+        self.stick_bottom.set(true);
+    }
+
+    /// Clamp to `content_rows`/`viewport`, cache the viewport for paging, and
+    /// return the visual row offset to render at (writing the corrected offset
+    /// back). Pure arithmetic — no rendering types.
+    pub fn visible(&self, content_rows: u16, viewport: u16) -> u16 {
+        self.viewport.set(viewport);
+        let max = content_rows.saturating_sub(viewport);
+        let off = if self.stick_bottom.get() {
+            max
+        } else {
+            self.offset.get().min(max)
+        };
+        // A bottom-anchored pane resumes following once scrolled back to the end.
+        if self.anchored_bottom && off >= max {
+            self.stick_bottom.set(true);
+        }
+        self.offset.set(off);
+        off
+    }
+}
+
 /// Whole-program UI state.
 pub struct App {
     /// Active top-level tool (drives the tab strip + key delegation).
@@ -562,8 +663,17 @@ pub struct App {
     pub nomad_nodes: Vec<NomadNode>,
     /// Highlighted row in the Browser tab's node list.
     pub browser_selected: usize,
+    /// Which Browser-tab pane has focus (node list vs page viewport).
+    pub browser_pane: BrowserPane,
     /// The page currently being viewed/fetched in the Browser tab, if any.
     pub page: Option<Page>,
+    /// Back stack of visited `(node identity, path)` pages (Backspace pops).
+    pub history: Vec<(String, String)>,
+    /// Scroll positions for the overflowing text panes (PageUp/PageDown/Home/End).
+    pub page_scroll: Scroll,
+    pub guide_scroll: Scroll,
+    pub log_scroll: Scroll,
+    pub thread_scroll: Scroll,
     /// This node's own LXMF address (hex), once the network task reports it.
     pub local_address: Option<String>,
     /// When `Some`, a propagation sync is running and the pop-up shows this text.
@@ -624,7 +734,13 @@ impl App {
             path_probes: HashMap::new(),
             nomad_nodes: Vec::new(),
             browser_selected: 0,
+            browser_pane: BrowserPane::Nodes,
             page: None,
+            history: Vec::new(),
+            page_scroll: Scroll::top(),
+            guide_scroll: Scroll::top(),
+            log_scroll: Scroll::bottom(),
+            thread_scroll: Scroll::bottom(),
             local_address: None,
             sync_status: None,
             new_conv: None,
@@ -709,6 +825,24 @@ impl App {
             return;
         }
 
+        // Scrolling works in whichever text pane has focus; these keys are unused
+        // by the tools, so handle them globally.
+        if matches!(
+            key.code,
+            KeyCode::PageUp | KeyCode::PageDown | KeyCode::Home | KeyCode::End
+        ) {
+            if let Some(s) = self.active_scroll() {
+                match key.code {
+                    KeyCode::PageUp => s.page_up(),
+                    KeyCode::PageDown => s.page_down(),
+                    KeyCode::Home => s.to_top(),
+                    KeyCode::End => s.to_bottom(),
+                    _ => {}
+                }
+            }
+            return;
+        }
+
         match (ctrl, key.code) {
             // --- Program-global --------------------------------------------------
             (true, KeyCode::Char('q')) => self.should_quit = true,
@@ -720,6 +854,18 @@ impl App {
 
             // --- Delegated to the active tool -----------------------------------
             _ => self.handle_tool_key(ctrl, key),
+        }
+    }
+
+    /// The scrollable text pane that currently has focus, if any — what
+    /// PageUp/PageDown/Home/End act on.
+    fn active_scroll(&self) -> Option<&Scroll> {
+        match self.active {
+            Tool::Browser if self.browser_pane == BrowserPane::Page => Some(&self.page_scroll),
+            Tool::Log => Some(&self.log_scroll),
+            Tool::Guide => Some(&self.guide_scroll),
+            Tool::Conversations if self.focus == Pane::Thread => Some(&self.thread_scroll),
+            _ => None,
         }
     }
 
@@ -963,10 +1109,32 @@ impl App {
         );
     }
 
-    /// Browser: navigate the node list and fetch a node's index page. Up/Down
-    /// move the selection; Enter/`g` open the selected node's `/page/index.mu`;
-    /// `r` re-fetches the current page. (Phase 1: no link navigation.)
+    /// Browser: two panes (node list / page viewport), switched with Tab.
+    /// Nodes — Up/Down select, Enter/`g` open the node's index. Page — Up/Down
+    /// move the link cursor, Enter follow, Backspace back. `r` reloads.
     fn handle_browser_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Tab => {
+                self.browser_pane = match self.browser_pane {
+                    BrowserPane::Nodes => BrowserPane::Page,
+                    BrowserPane::Page => BrowserPane::Nodes,
+                };
+            }
+            KeyCode::Char('r') => {
+                if let Some(p) = &self.page {
+                    let (node, path) = (p.node.clone(), p.path.clone());
+                    self.fetch_page(node, path, false);
+                }
+            }
+            _ => match self.browser_pane {
+                BrowserPane::Nodes => self.handle_browser_nodes_key(key),
+                BrowserPane::Page => self.handle_browser_page_key(key),
+            },
+        }
+    }
+
+    /// Node-list pane keys.
+    fn handle_browser_nodes_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Up => self.browser_selected = self.browser_selected.saturating_sub(1),
             KeyCode::Down => {
@@ -976,22 +1144,99 @@ impl App {
             }
             KeyCode::Enter | KeyCode::Char('g') => {
                 if let Some(node) = self.nomad_nodes.get(self.browser_selected) {
-                    self.fetch_page(node.identity.clone(), "/page/index.mu".to_string());
-                }
-            }
-            KeyCode::Char('r') => {
-                if let Some(page) = &self.page {
-                    let (node, path) = (page.node.clone(), page.path.clone());
-                    self.fetch_page(node, path);
+                    let id = node.identity.clone();
+                    self.fetch_page(id, "/page/index.mu".to_string(), true);
+                    self.browser_pane = BrowserPane::Page; // focus the page to read/follow
                 }
             }
             _ => {}
         }
     }
 
-    /// Queue a page fetch and show the fetching state — unless one is already in
-    /// flight for the same page (avoid stacking duplicate requests).
-    fn fetch_page(&mut self, identity: String, path: String) {
+    /// Page-viewport pane keys (link navigation + history).
+    fn handle_browser_page_key(&mut self, key: KeyEvent) {
+        let link_count = self.page.as_ref().map(|p| p.links.len()).unwrap_or(0);
+        match key.code {
+            KeyCode::Up => {
+                if let Some(p) = &mut self.page {
+                    p.link_sel = p.link_sel.saturating_sub(1);
+                }
+            }
+            KeyCode::Down => {
+                if let Some(p) = &mut self.page
+                    && p.link_sel + 1 < link_count
+                {
+                    p.link_sel += 1;
+                }
+            }
+            KeyCode::Enter => self.follow_link(),
+            KeyCode::Backspace => self.go_back(),
+            _ => {}
+        }
+    }
+
+    /// Follow the selected link on the current page, if it resolves.
+    fn follow_link(&mut self) {
+        let Some(url) = self
+            .page
+            .as_ref()
+            .and_then(|p| p.links.get(p.link_sel).cloned())
+        else {
+            return;
+        };
+        match self.resolve_link(&url) {
+            Some((identity, path)) => self.fetch_page(identity, path, true),
+            None => {
+                // Unsupported scheme or an undiscovered node — surface it inline.
+                if let Some(p) = &mut self.page {
+                    p.status = PageStatus::Error(format!("cannot follow link: {url}"));
+                }
+            }
+        }
+    }
+
+    /// Resolve a micron link `url` to `(node identity, page path)`.
+    /// `:/path` → the current page's node; `<dest>:/path` or `<dest>` → the
+    /// discovered node with that destination hash (`/page/index.mu` default).
+    /// Returns `None` for unsupported schemes or unknown destinations.
+    fn resolve_link(&self, url: &str) -> Option<(String, String)> {
+        // Out of scope (Phase 2): LXMF and partial schemes.
+        if url.contains('@') || url.starts_with("p:") {
+            return None;
+        }
+        let (host, path) = match url.split_once(':') {
+            Some((h, p)) => (h, p.to_string()),
+            // No ':' — only a bare 32-hex destination is valid (default page).
+            None => (url, "/page/index.mu".to_string()),
+        };
+        let path = if path.is_empty() {
+            "/page/index.mu".to_string()
+        } else {
+            path
+        };
+        if host.is_empty() {
+            // Relative link — stay on the current page's node.
+            return self.page.as_ref().map(|p| (p.node.clone(), path));
+        }
+        // Absolute link — `host` is a destination hash; map it to a known node.
+        let host = host.to_lowercase();
+        self.nomad_nodes
+            .iter()
+            .find(|n| n.dest == host)
+            .map(|n| (n.identity.clone(), path))
+    }
+
+    /// Go back to the previous page in history (no-op when empty).
+    fn go_back(&mut self) {
+        if let Some((node, path)) = self.history.pop() {
+            self.fetch_page(node, path, false);
+        }
+    }
+
+    /// Queue a page fetch and show the fetching state. When `push_history`, the
+    /// current loaded page is pushed onto the back stack first. Skips a duplicate
+    /// fetch already in flight for the same page.
+    fn fetch_page(&mut self, identity: String, path: String, push_history: bool) {
         let already = matches!(
             &self.page,
             Some(p) if p.node == identity && p.path == path && matches!(p.status, PageStatus::Fetching)
@@ -999,6 +1244,10 @@ impl App {
         if already {
             return;
         }
+        if push_history && let Some(p) = &self.page {
+            self.history.push((p.node.clone(), p.path.clone()));
+        }
+        self.page_scroll.to_top(); // each navigation opens at the top
         self.commands.push_back(NetCommand::FetchPage {
             identity: identity.clone(),
             path: path.clone(),
@@ -1007,21 +1256,31 @@ impl App {
             node: identity,
             path,
             status: PageStatus::Fetching,
+            links: Vec::new(),
+            link_sel: 0,
         });
     }
 
     /// Record/refresh a discovered Nomad Network node (dedupe by identity hash;
     /// `last_seen` is the announce timestamp). Mirrors [`App::upsert_peer`].
     #[cfg_attr(not(feature = "net"), allow(dead_code))]
-    pub fn upsert_nomad(&mut self, identity: String, name: Option<String>, last_seen: u64) {
+    pub fn upsert_nomad(
+        &mut self,
+        identity: String,
+        dest: String,
+        name: Option<String>,
+        last_seen: u64,
+    ) {
         if let Some(node) = self.nomad_nodes.iter_mut().find(|n| n.identity == identity) {
             if name.is_some() {
                 node.name = name;
             }
+            node.dest = dest;
             node.last_seen = node.last_seen.max(last_seen);
         } else {
             self.nomad_nodes.push(NomadNode {
                 identity,
+                dest,
                 name,
                 last_seen,
             });
@@ -1029,22 +1288,26 @@ impl App {
     }
 
     /// Fold a page-fetch result into the Browser view, if it matches the page
-    /// the operator is currently looking at.
+    /// the operator is currently looking at. On success, extract its links.
     #[cfg_attr(not(feature = "net"), allow(dead_code))]
     pub fn set_page(&mut self, identity: String, path: String, body: Result<String, String>) {
-        // Ignore stale results for a page the operator has since navigated away
-        // from (Phase 1 has a single page, but this keeps it correct).
+        // Ignore stale results for a page the operator has navigated away from.
         if !matches!(&self.page, Some(p) if p.node == identity && p.path == path) {
             return;
         }
-        let status = match body {
-            Ok(src) => PageStatus::Loaded(src),
-            Err(e) => PageStatus::Error(e),
+        let (status, links) = match body {
+            Ok(src) => {
+                let links = crate::micron::link_targets(&src);
+                (PageStatus::Loaded(src), links)
+            }
+            Err(e) => (PageStatus::Error(e), Vec::new()),
         };
         self.page = Some(Page {
             node: identity,
             path,
             status,
+            links,
+            link_sel: 0,
         });
     }
 
@@ -1085,6 +1348,8 @@ impl App {
     /// Clear the unread counter on the selected conversation (it is now on
     /// screen).
     fn mark_selected_read(&mut self) {
+        // Switching conversations re-anchors the thread to its newest message.
+        self.thread_scroll.to_bottom();
         if let Some(conv) = self.selected_conv_mut() {
             conv.unread = 0;
             let peer = conv.peer.clone();
@@ -1643,11 +1908,13 @@ mod tests {
     fn upsert_nomad_dedupes_and_keeps_newest_last_seen() {
         let mut app = App::new();
         let id = "11".repeat(16);
-        app.upsert_nomad(id.clone(), Some("hub".to_string()), 100);
-        app.upsert_nomad(id.clone(), None, 250); // newer announce, no name update
+        let dest = "aa".repeat(16);
+        app.upsert_nomad(id.clone(), dest.clone(), Some("hub".to_string()), 100);
+        app.upsert_nomad(id.clone(), dest.clone(), None, 250); // newer, no name update
         assert_eq!(app.nomad_nodes.len(), 1);
         let n = &app.nomad_nodes[0];
         assert_eq!(n.name.as_deref(), Some("hub"));
+        assert_eq!(n.dest, dest);
         assert_eq!(n.last_seen, 250);
     }
 
@@ -1656,7 +1923,7 @@ mod tests {
         let mut app = App::new();
         app.active = Tool::Browser;
         let id = "22".repeat(16);
-        app.upsert_nomad(id.clone(), Some("node".to_string()), 1);
+        app.upsert_nomad(id.clone(), "bb".repeat(16), Some("node".to_string()), 1);
         app.browser_selected = 0;
         app.handle_key(press(KeyCode::Enter));
         assert_eq!(
@@ -1669,6 +1936,8 @@ mod tests {
         let page = app.page.as_ref().expect("page set to fetching");
         assert_eq!(page.node, id);
         assert!(matches!(page.status, PageStatus::Fetching));
+        // Opening a node focuses the page pane.
+        assert_eq!(app.browser_pane, BrowserPane::Page);
     }
 
     #[test]
@@ -1680,6 +1949,8 @@ mod tests {
             node: "33".repeat(16),
             path: "/page/index.mu".to_string(),
             status: PageStatus::Fetching,
+            links: Vec::new(),
+            link_sel: 0,
         };
 
         app.page = Some(viewing());
@@ -1707,6 +1978,201 @@ mod tests {
             app.page.as_ref().unwrap().status,
             PageStatus::Fetching
         ));
+    }
+
+    #[test]
+    fn set_page_extracts_links() {
+        let mut app = App::new();
+        let id = "44".repeat(16);
+        let path = "/page/index.mu".to_string();
+        app.page = Some(Page {
+            node: id.clone(),
+            path: path.clone(),
+            status: PageStatus::Fetching,
+            links: Vec::new(),
+            link_sel: 0,
+        });
+        app.set_page(
+            id,
+            path,
+            Ok("`[Home`:/page/a.mu] `[Files`:/page/b.mu]".to_string()),
+        );
+        let p = app.page.as_ref().unwrap();
+        assert_eq!(p.links, vec![":/page/a.mu", ":/page/b.mu"]);
+    }
+
+    /// A Browser viewing a loaded page on `node`, with the given links.
+    fn browsing(node: &str, path: &str, links: Vec<String>) -> App {
+        let mut app = App::new();
+        app.active = Tool::Browser;
+        app.browser_pane = BrowserPane::Page;
+        app.page = Some(Page {
+            node: node.to_string(),
+            path: path.to_string(),
+            status: PageStatus::Loaded(String::new()),
+            links,
+            link_sel: 0,
+        });
+        app
+    }
+
+    #[test]
+    fn tab_toggles_browser_pane() {
+        let mut app = App::new();
+        app.active = Tool::Browser;
+        assert_eq!(app.browser_pane, BrowserPane::Nodes);
+        app.handle_key(press(KeyCode::Tab));
+        assert_eq!(app.browser_pane, BrowserPane::Page);
+        app.handle_key(press(KeyCode::Tab));
+        assert_eq!(app.browser_pane, BrowserPane::Nodes);
+    }
+
+    #[test]
+    fn page_pane_link_cursor_clamps() {
+        let node = "55".repeat(16);
+        let mut app = browsing(
+            &node,
+            "/page/index.mu",
+            vec![":/a.mu".to_string(), ":/b.mu".to_string()],
+        );
+        app.handle_key(press(KeyCode::Down));
+        assert_eq!(app.page.as_ref().unwrap().link_sel, 1);
+        app.handle_key(press(KeyCode::Down)); // clamp at last
+        assert_eq!(app.page.as_ref().unwrap().link_sel, 1);
+        app.handle_key(press(KeyCode::Up));
+        assert_eq!(app.page.as_ref().unwrap().link_sel, 0);
+    }
+
+    #[test]
+    fn relative_link_follows_on_current_node() {
+        let node = "66".repeat(16);
+        let mut app = browsing(&node, "/page/index.mu", vec![":/page/about.mu".to_string()]);
+        app.handle_key(press(KeyCode::Enter)); // follow link 0
+        assert_eq!(
+            app.commands.pop_front(),
+            Some(NetCommand::FetchPage {
+                identity: node.clone(),
+                path: "/page/about.mu".to_string(),
+            })
+        );
+        // The previous page was pushed to history.
+        assert_eq!(app.history.last().unwrap().1, "/page/index.mu");
+    }
+
+    #[test]
+    fn absolute_link_resolves_known_dest_to_identity() {
+        let here = "77".repeat(16);
+        let other_id = "88".repeat(16);
+        let other_dest = "99".repeat(16);
+        let url = format!("{other_dest}:/page/index.mu");
+        let mut app = browsing(&here, "/page/index.mu", vec![url]);
+        app.upsert_nomad(other_id.clone(), other_dest.clone(), None, 1);
+        app.handle_key(press(KeyCode::Enter));
+        assert_eq!(
+            app.commands.pop_front(),
+            Some(NetCommand::FetchPage {
+                identity: other_id,
+                path: "/page/index.mu".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn link_to_unknown_dest_errors_without_fetching() {
+        let here = "aa".repeat(16);
+        let url = format!("{}:/page/x.mu", "bc".repeat(16)); // never discovered
+        let mut app = browsing(&here, "/page/index.mu", vec![url]);
+        app.handle_key(press(KeyCode::Enter));
+        assert!(app.commands.is_empty(), "no fetch for an unknown node");
+        assert!(matches!(
+            app.page.as_ref().unwrap().status,
+            PageStatus::Error(_)
+        ));
+    }
+
+    #[test]
+    fn backspace_pops_history_and_refetches() {
+        let node = "cc".repeat(16);
+        let mut app = browsing(&node, "/page/two.mu", vec![]);
+        app.history.push((node.clone(), "/page/one.mu".to_string()));
+        app.handle_key(press(KeyCode::Backspace));
+        assert_eq!(
+            app.commands.pop_front(),
+            Some(NetCommand::FetchPage {
+                identity: node,
+                path: "/page/one.mu".to_string(),
+            })
+        );
+        assert!(app.history.is_empty(), "history was popped (not re-pushed)");
+    }
+
+    #[test]
+    fn scroll_top_paging_clamps_to_content() {
+        let s = Scroll::top();
+        assert_eq!(s.visible(30, 10), 0, "opens at the top");
+        s.page_down(); // step == cached viewport (10)
+        assert_eq!(s.visible(30, 10), 10);
+        s.page_down();
+        s.page_down(); // past the end → clamps at max (30-10)
+        assert_eq!(s.visible(30, 10), 20);
+        s.to_top();
+        assert_eq!(s.visible(30, 10), 0);
+    }
+
+    #[test]
+    fn scroll_bottom_follows_then_releases_then_resticks() {
+        let s = Scroll::bottom();
+        assert_eq!(s.visible(30, 10), 20, "starts at the bottom");
+        assert_eq!(s.visible(50, 10), 40, "follows new content while stuck");
+        s.page_up(); // releases follow, up one viewport from 40
+        assert_eq!(s.visible(50, 10), 30);
+        assert_eq!(s.visible(60, 10), 30, "no longer yanked to the bottom");
+        s.to_bottom();
+        assert_eq!(s.visible(60, 10), 50, "End re-engages follow");
+    }
+
+    #[test]
+    fn pagekeys_scroll_focused_pane() {
+        let mut app = App::new();
+        app.active = Tool::Browser;
+        app.browser_pane = BrowserPane::Page;
+        app.page_scroll.visible(100, 10); // prime the viewport step
+        app.handle_key(press(KeyCode::PageDown));
+        assert_eq!(app.page_scroll.visible(100, 10), 10);
+        app.handle_key(press(KeyCode::End));
+        assert_eq!(app.page_scroll.visible(100, 10), 90);
+        app.handle_key(press(KeyCode::Home));
+        assert_eq!(app.page_scroll.visible(100, 10), 0);
+    }
+
+    #[test]
+    fn active_scroll_follows_focus() {
+        let mut app = App::new();
+        app.active = Tool::Log;
+        assert!(app.active_scroll().is_some());
+        app.active = Tool::Network;
+        assert!(
+            app.active_scroll().is_none(),
+            "node columns aren't a text pane"
+        );
+        app.active = Tool::Browser;
+        app.browser_pane = BrowserPane::Nodes;
+        assert!(app.active_scroll().is_none(), "node list isn't scrollable");
+        app.browser_pane = BrowserPane::Page;
+        assert!(app.active_scroll().is_some());
+    }
+
+    #[test]
+    fn fetch_page_resets_scroll_to_top() {
+        let node = "dd".repeat(16);
+        let mut app = browsing(&node, "/page/index.mu", vec![]);
+        app.page_scroll.visible(100, 10);
+        app.page_scroll.page_down(); // scrolled down
+        app.browser_pane = BrowserPane::Nodes;
+        app.upsert_nomad(node.clone(), "ee".repeat(16), None, 1);
+        app.browser_selected = 0;
+        app.handle_key(press(KeyCode::Enter)); // open index → resets to top
+        assert_eq!(app.page_scroll.visible(100, 10), 0);
     }
 
     #[test]
