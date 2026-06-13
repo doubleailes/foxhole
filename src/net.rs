@@ -24,11 +24,11 @@ use tokio::sync::mpsc;
 
 use lxmf_core::constants::DeliveryMethod;
 use lxmf_core::link_delivery::{DeliveryResult, LinkDeliveryManager};
-use lxmf_core::propagation_client::{PropagationClient, PropagationClientState};
 use lxmf_core::message::{LxMessage, MessageError};
+use lxmf_core::propagation_client::{PropagationClient, PropagationClientState};
 use lxmf_core::router::{
-    DirectDeliveryPlanInput, DirectReusableLinkState, DirectRouteSnapshot, LxmRouter, OutboundAction,
-    RouterConfig,
+    DirectDeliveryPlanInput, DirectReusableLinkState, DirectRouteSnapshot, LxmRouter,
+    OutboundAction, RouterConfig,
 };
 use rns_identity::destination::{DestType, Destination, Direction};
 use rns_identity::identity::Identity;
@@ -214,15 +214,28 @@ async fn run_inner(
     std::fs::create_dir_all(&rns_dir).map_err(|e| format!("rns dir: {e}"))?;
     let cfg_file = rns_dir.join("config");
     if cfg_file.exists() {
-        sys(format!("[SYS] using existing RNS config at {}", cfg_file.display())).await;
+        sys(format!(
+            "[SYS] using existing RNS config at {}",
+            cfg_file.display()
+        ))
+        .await;
     } else {
         let ini = rns_config(hub.as_ref().map(|(h, p)| (h.as_str(), *p)));
         std::fs::write(&cfg_file, ini).map_err(|e| format!("write rns config: {e}"))?;
         match &hub {
-            Some((h, p)) => sys(format!("[SYS] interfaces: AutoInterface (LAN) + TCP hub {h}:{p}")).await,
+            Some((h, p)) => {
+                sys(format!(
+                    "[SYS] interfaces: AutoInterface (LAN) + TCP hub {h}:{p}"
+                ))
+                .await
+            }
             None => {
                 sys("[SYS] interfaces: AutoInterface (LAN only)".to_string()).await;
-                sys("[SYS] set FOXHOLE_HUB=host:port for an internet hub, or edit the RNS config".to_string()).await;
+                sys(
+                    "[SYS] set FOXHOLE_HUB=host:port for an internet hub, or edit the RNS config"
+                        .to_string(),
+                )
+                .await;
             }
         }
     }
@@ -276,7 +289,11 @@ async fn run_inner(
         .await
         .map_err(|_| "transport closed".to_string())?;
 
-    sys(format!("[SYS] {LXMF_DELIVERY} {} registered", hex::encode(lxmf_hash))).await;
+    sys(format!(
+        "[SYS] {LXMF_DELIVERY} {} registered",
+        hex::encode(lxmf_hash)
+    ))
+    .await;
     let _ = events.send(NetEvent::Local(hex::encode(lxmf_hash))).await;
 
     // --- Inbound link manager ---------------------------------------------------
@@ -288,8 +305,13 @@ async fn run_inner(
     let link_signing_key = identity
         .get_signing_key()
         .ok_or_else(|| "identity has no signing key".to_string())?;
-    let mut link_mgr =
-        LinkManager::with_destination(transport.clone(), delivery_rx, &identity, LXMF_DELIVERY, link_signing_key);
+    let mut link_mgr = LinkManager::with_destination(
+        transport.clone(),
+        delivery_rx,
+        &identity,
+        LXMF_DELIVERY,
+        link_signing_key,
+    );
     let (inbound_raw_tx, mut inbound_raw_rx) = mpsc::channel::<Vec<u8>>(256);
     let (link_packet_tx, mut link_packet_rx) = mpsc::channel::<(Vec<u8>, [u8; 16])>(256);
     let (resource_tx, mut resource_rx) = mpsc::channel::<(Vec<u8>, [u8; 16])>(64);
@@ -329,8 +351,9 @@ async fn run_inner(
 
     // Seed identities/hops from the transport's own recent-announce cache too —
     // it may already know peers/nodes we haven't re-heard this session.
-    if let Some(TransportQueryResponse::Announces(entries)) =
-        handle.query_control(TransportQuery::GetRecentAnnounces).await
+    if let Some(TransportQueryResponse::Announces(entries)) = handle
+        .query_control(TransportQuery::GetRecentAnnounces)
+        .await
     {
         for e in entries {
             if let Some(pk) = e.public_key {
@@ -351,14 +374,29 @@ async fn run_inner(
     }
 
     // Apply the persisted propagation node, if any.
-    if let Some(node) = config.propagation_node.as_deref().and_then(|s| parse_hash(s).ok()) {
+    if let Some(node) = config
+        .propagation_node
+        .as_deref()
+        .and_then(|s| parse_hash(s).ok())
+    {
         router.set_outbound_propagation_node(Some(node));
         prop_client.set_propagation_node(node);
-        sys(format!("[SYS] propagation node {} (from config)", hex::encode(node))).await;
+        sys(format!(
+            "[SYS] propagation node {} (from config)",
+            hex::encode(node)
+        ))
+        .await;
     }
 
     // Announce ourselves now and on a timer so peers learn a path to us.
-    announce(&transport, &mut delivery, &identity, &config.display_name, events).await;
+    announce(
+        &transport,
+        &mut delivery,
+        &identity,
+        &config.display_name,
+        events,
+    )
+    .await;
     let mut announce_tick = tokio::time::interval(ANNOUNCE_INTERVAL);
     announce_tick.tick().await; // consume the immediate first tick
     let mut send_tick = tokio::time::interval(SEND_INTERVAL);
@@ -599,7 +637,11 @@ async fn deliver_inbound(
 /// (link) delivery — the priority the user wants and the method nomadnet uses.
 /// The router falls back to Opportunistic only as a last resort (see
 /// `handle_delivery_result`). The compose target (`out.peer`) is a hex hash.
-fn build_message(identity: &Identity, source: &[u8; 16], out: &Outbound) -> Result<LxMessage, String> {
+fn build_message(
+    identity: &Identity,
+    source: &[u8; 16],
+    out: &Outbound,
+) -> Result<LxMessage, String> {
     let dest = parse_hash(&out.peer)?;
     let mut msg = LxMessage::new(dest, *source, "", &out.body, DeliveryMethod::Direct);
     let signing_key = identity
@@ -769,8 +811,10 @@ async fn dispatch(
                 }
             }
             OutboundAction::DeliverOpportunistic { message, dest_hash } => {
-                send_opportunistic(router, known, tracker, transport, events, message, dest_hash)
-                    .await;
+                send_opportunistic(
+                    router, known, tracker, transport, events, message, dest_hash,
+                )
+                .await;
             }
             OutboundAction::DeliverPropagated {
                 mut message,
@@ -953,8 +997,10 @@ async fn handle_delivery_result(
                         hex::encode(dest_hash)
                     )))
                     .await;
-                send_opportunistic(router, known, tracker, transport, events, message, dest_hash)
-                    .await;
+                send_opportunistic(
+                    router, known, tracker, transport, events, message, dest_hash,
+                )
+                .await;
             }
         }
     }
@@ -1039,7 +1085,10 @@ async fn try_sync(
     if known.contains_key(&hex::encode(node)) {
         if prop_client.start_download() {
             let _ = events
-                .send(NetEvent::Sys(format!("[SYS] syncing from {} ...", hex::encode(node))))
+                .send(NetEvent::Sys(format!(
+                    "[SYS] syncing from {} ...",
+                    hex::encode(node)
+                )))
                 .await;
         }
     } else if request_path(transport, last_path_request, node, now_secs()) {
@@ -1067,14 +1116,16 @@ async fn send_opportunistic(
 ) {
     let msg_hash = message.hash;
     let mut missing = false;
-    let packed = message.pack_opportunistic_encrypted(|plaintext| match known.get(&hex::encode(dest_hash)) {
-        Some(pk) => Identity::from_public_key(pk)
-            .ok()
-            .and_then(|peer| peer.encrypt(plaintext, None).ok())
-            .ok_or_else(|| MessageError::PackFailed("encrypt failed".to_string())),
-        None => {
-            missing = true;
-            Err(MessageError::PackFailed("no identity key".to_string()))
+    let packed = message.pack_opportunistic_encrypted(|plaintext| {
+        match known.get(&hex::encode(dest_hash)) {
+            Some(pk) => Identity::from_public_key(pk)
+                .ok()
+                .and_then(|peer| peer.encrypt(plaintext, None).ok())
+                .ok_or_else(|| MessageError::PackFailed("encrypt failed".to_string())),
+            None => {
+                missing = true;
+                Err(MessageError::PackFailed("no identity key".to_string()))
+            }
         }
     });
 
@@ -1141,7 +1192,10 @@ async fn send_opportunistic(
         tracker.forget(&h);
     }
     let _ = events
-        .send(NetEvent::Sys(format!("[SYS] sent to {}", hex::encode(dest_hash))))
+        .send(NetEvent::Sys(format!(
+            "[SYS] sent to {}",
+            hex::encode(dest_hash)
+        )))
         .await;
 }
 
@@ -1162,7 +1216,9 @@ async fn announce(
                     destination_hash: delivery.hash,
                 }))
                 .await;
-            let _ = events.send(NetEvent::Sys("[SYS] announced".to_string())).await;
+            let _ = events
+                .send(NetEvent::Sys("[SYS] announced".to_string()))
+                .await;
         }
         Err(e) => {
             let _ = events
@@ -1198,8 +1254,8 @@ mod tests {
         assert_eq!(subs[0].1.get("type"), Some("AutoInterface"));
 
         // With a hub: AutoInterface + the TCP client.
-        let with_hub = Config::parse(&rns_config(Some(("example.net", 4965))))
-            .expect("hub config must parse");
+        let with_hub =
+            Config::parse(&rns_config(Some(("example.net", 4965)))).expect("hub config must parse");
         let subs = with_hub.subsections("interfaces");
         assert_eq!(subs.len(), 2);
         let hub = with_hub
