@@ -35,6 +35,7 @@ use rns_identity::identity::Identity;
 use rns_runtime::lifecycle::ShutdownSignal;
 use rns_runtime::link_manager::LinkManager;
 use rns_runtime::reticulum;
+use rns_transport::constants::PATHFINDER_M;
 use rns_transport::link_messages::DestinationEvent;
 use rns_transport::messages::{
     AnnounceHandlerEvent, OutboundRequest, TransportMessage, TransportQuery, TransportQueryResponse,
@@ -107,6 +108,11 @@ const SEND_INTERVAL: Duration = Duration::from_secs(1);
 /// delivery for the same destination. Bounds path-request traffic and defers the
 /// message's next attempt so the router doesn't re-emit it every tick.
 const PATH_REQUEST_WAIT: f64 = 30.0;
+
+/// After an operator path probe, wait this long before reading the path table so
+/// the path response has a chance to arrive. Probed once more after a second
+/// grace before reporting "no path".
+const PROBE_GRACE: f64 = 1.5;
 
 /// Entry point spawned from `main`. Runs until the transport shuts down or a
 /// fatal bring-up error occurs; either way it reports through `events` so the
@@ -345,6 +351,8 @@ async fn run_inner(
     let mut known_dirty = false;
     let mut hops: HopCache = HashMap::new();
     let mut last_path_request: HashMap<[u8; 16], f64> = HashMap::new();
+    // Operator path probes awaiting resolution: dest -> (due_time, already_rearmed).
+    let mut pending_paths: HashMap<[u8; 16], (f64, bool)> = HashMap::new();
     let mut tracker = StatusTracker::default();
     let mut ticks: u32 = 0;
     let mut syncing = false;
@@ -500,6 +508,19 @@ async fn run_inner(
                     NetCommand::SyncNow => {
                         try_sync(&mut router, &mut prop_client, &known, &mut last_path_request, &transport, events).await;
                     }
+                    NetCommand::RequestPath(hex) => match parse_hash(&hex) {
+                        Ok(dest) => {
+                            // Operator-initiated: fire the path request directly
+                            // (bypass the background per-window throttle), then
+                            // resolve on a later tick once the response is in.
+                            let _ = transport.try_send(TransportMessage::RequestPath {
+                                destination_hash: dest,
+                            });
+                            last_path_request.insert(dest, now_secs());
+                            pending_paths.insert(dest, (now_secs() + PROBE_GRACE, false));
+                        }
+                        Err(e) => sys(format!("[SYS] path probe: bad address: {e}")).await,
+                    },
                 }
             }
             _ = send_tick.tick() => {
@@ -543,6 +564,8 @@ async fn run_inner(
                     let _ = save_known(&known_path, &known);
                     known_dirty = false;
                 }
+
+                resolve_path_probes(&handle, &mut pending_paths, events).await;
 
                 dispatch(&mut router, &mut link_delivery, &known, &hops, &mut last_path_request, &mut tracker, &transport, events).await;
             }
@@ -677,6 +700,66 @@ fn request_path(
         destination_hash: dest,
     });
     true
+}
+
+/// Resolve any operator path probes whose grace window has elapsed: read the
+/// transport's path table (`HopsTo` + `GetNextHopIfName`) and report the result
+/// (rnpath-style). A probe still unresolved on its first pass is re-armed once
+/// before being reported as "no path".
+async fn resolve_path_probes(
+    handle: &reticulum::ReticulumHandle,
+    pending: &mut HashMap<[u8; 16], (f64, bool)>,
+    events: &mpsc::Sender<NetEvent>,
+) {
+    let now = now_secs();
+    let due: Vec<[u8; 16]> = pending
+        .iter()
+        .filter(|(_, (deadline, _))| *deadline <= now)
+        .map(|(&dest, _)| dest)
+        .collect();
+
+    for dest in due {
+        let hops = match handle.query_control(TransportQuery::HopsTo { dest }).await {
+            Some(TransportQueryResponse::IntResult(h))
+                if (0..i64::from(PATHFINDER_M)).contains(&h) =>
+            {
+                Some(h as u8)
+            }
+            _ => None,
+        };
+
+        // No path yet — give the path response one more grace window before
+        // declaring it unreachable.
+        if hops.is_none()
+            && let Some(entry) = pending.get_mut(&dest)
+            && !entry.1
+        {
+            entry.0 = now + PROBE_GRACE;
+            entry.1 = true;
+            continue;
+        }
+
+        let iface = if hops.is_some() {
+            match handle
+                .query_control(TransportQuery::GetNextHopIfName { dest })
+                .await
+            {
+                Some(TransportQueryResponse::StringResult(s)) => s,
+                _ => None,
+            }
+        } else {
+            None
+        };
+
+        pending.remove(&dest);
+        let _ = events
+            .send(NetEvent::Path {
+                hash: hex::encode(dest),
+                hops,
+                iface,
+            })
+            .await;
+    }
 }
 
 /// Re-queue a message after requesting a path: defer its next attempt by
