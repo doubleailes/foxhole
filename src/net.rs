@@ -760,8 +760,9 @@ async fn debug_dump_fields(events: &mpsc::Sender<NetEvent>, msg: &LxMessage) {
 
 /// Sideband telemetry sensor id for the location sensor (`sense.py`
 /// `Sensor.SID_LOCATION`). The telemetry field is a msgpack map keyed by sensor
-/// id; this is the entry carrying latitude/longitude.
-const SID_LOCATION: u8 = 0x0f;
+/// id; this is the entry carrying latitude/longitude. (Confirmed against a live
+/// Sideband handset's payload — the time sensor is `0x01`, location `0x02`.)
+const SID_LOCATION: u8 = 0x02;
 
 /// Extract a `(lat, lon)` fix from a message's Sideband-style telemetry field,
 /// if present and plausible.
@@ -772,10 +773,12 @@ fn telemetry_location(msg: &LxMessage) -> Option<(f64, f64)> {
 
 /// Pure decode half of [`telemetry_location`] (split out so it is unit-testable
 /// without a whole `LxMessage`). The `FIELD_TELEMETRY` value is a msgpack map
-/// `{ sensor_id: value }`; the location sensor packs an array whose first two
-/// elements are latitude and longitude — encoded either as floats (degrees) or
-/// as Sideband's ×1e6 fixed-point integers, both of which we accept. Implausible
-/// coordinates are rejected so a misparse plots nothing rather than noise.
+/// `{ sensor_id: value }`; the location sensor ([`SID_LOCATION`]) packs an array
+/// whose first two elements are latitude and longitude. Sideband encodes each as
+/// a 4-byte big-endian signed integer (degrees ×1e6) wrapped in a msgpack binary;
+/// see [`telemetry_coord`] for the bare integer/float forms we also accept.
+/// Implausible coordinates are rejected so a misparse plots nothing rather than
+/// noise.
 fn parse_location_telemetry(bytes: &[u8]) -> Option<(f64, f64)> {
     let value = rmpv::decode::read_value(&mut &bytes[..]).ok()?;
     let map = value.as_map()?;
@@ -789,12 +792,21 @@ fn parse_location_telemetry(bytes: &[u8]) -> Option<(f64, f64)> {
     ((-90.0..=90.0).contains(&lat) && (-180.0..=180.0).contains(&lon)).then_some((lat, lon))
 }
 
-/// One coordinate from a telemetry array. A msgpack *integer* is Sideband's ×1e6
-/// fixed-point encoding (so it is scaled back to degrees); a *float* is already
-/// degrees. Both signed and unsigned integers are checked first — positive
-/// values may arrive as msgpack unsigned ints — because rmpv's `as_f64` also
-/// coerces integers, which would otherwise leave the fixed-point value unscaled.
+/// One coordinate from a telemetry array, scaled to degrees. Sideband packs each
+/// coordinate as a big-endian signed integer of `degrees ×1e6` wrapped in a
+/// msgpack **binary** (4 bytes for the i32 form, 8 for an i64) — this is what a
+/// live handset sends. As a fallback we also accept a bare msgpack integer
+/// (×1e6 fixed-point) or a float (already degrees), to tolerate other encoders.
+/// Integers are handled before `as_f64`, which would otherwise coerce them and
+/// leave the fixed-point value unscaled.
 fn telemetry_coord(v: &rmpv::Value) -> Option<f64> {
+    if let rmpv::Value::Binary(bytes) = v {
+        return match bytes.len() {
+            4 => Some(i64::from(i32::from_be_bytes(bytes[..4].try_into().ok()?)) as f64 / 1e6),
+            8 => Some(i64::from_be_bytes(bytes[..8].try_into().ok()?) as f64 / 1e6),
+            _ => None,
+        };
+    }
     if let Some(i) = v.as_i64() {
         Some(i as f64 / 1e6)
     } else if let Some(u) = v.as_u64() {
@@ -1649,6 +1661,36 @@ mod tests {
         let mut buf = Vec::new();
         rmpv::encode::write_value(&mut buf, &map).expect("encode");
         buf
+    }
+
+    #[test]
+    fn parses_real_sideband_location_payload() {
+        // Captured from a live Sideband handset (the FIELD_TELEMETRY value):
+        // `{ 0x01: <time>, 0x04: nil, 0x02: [lat, lon, alt, speed, bearing,
+        // accuracy, ts] }`, with lat/lon as 4-byte big-endian signed ints ×1e6
+        // wrapped in msgpack binaries. lat 0x02e492b8 = 48.534200,
+        // lon 0x003a7ab4 = 3.832500.
+        let bytes = hex::decode(
+            "8301ce6a2f09bf04c00297c40402e492b8c404003a7ab4c40400001e14\
+             c40400000000c40400000000c4020001ce6a2f09b1",
+        )
+        .expect("valid hex");
+        let (lat, lon) = parse_location_telemetry(&bytes).expect("a fix");
+        assert!((lat - 48.534200).abs() < 1e-6, "lat was {lat}");
+        assert!((lon - 3.832500).abs() < 1e-6, "lon was {lon}");
+    }
+
+    #[test]
+    fn parses_binary_packed_negative_coordinate() {
+        // West longitudes are negative i32s in two's complement: -74.0 ×1e6.
+        let micro = (-74_000_000_i32).to_be_bytes().to_vec();
+        let blob = telemetry_blob(vec![
+            rmpv::Value::Binary(40_000_000_i32.to_be_bytes().to_vec()),
+            rmpv::Value::Binary(micro),
+        ]);
+        let (lat, lon) = parse_location_telemetry(&blob).expect("a fix");
+        assert!((lat - 40.0).abs() < 1e-6);
+        assert!((lon + 74.0).abs() < 1e-6);
     }
 
     #[test]
