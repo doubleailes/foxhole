@@ -350,6 +350,19 @@ mod tests {
     }
 
     #[test]
+    fn empty_inbound_message_is_not_recorded() {
+        let mut app = App::new();
+        app.conversations.clear();
+        // A body-less (telemetry/command-only) message creates nothing.
+        app.deliver("peer", "");
+        assert!(app.conversations.is_empty());
+        // A real message is still delivered normally.
+        app.deliver("peer", "hi");
+        assert_eq!(app.conversations.len(), 1);
+        assert_eq!(app.conversations[0].messages.len(), 1);
+    }
+
+    #[test]
     fn repeated_identical_telemetry_logs_only_once() {
         let mut app = App::new();
         app.conversations.clear();
