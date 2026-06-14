@@ -20,7 +20,7 @@ pub fn config_dir() -> PathBuf {
 }
 
 /// Persisted operator settings.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Config {
     /// Name announced on our `lxmf.delivery` destination.
     pub display_name: String,
@@ -28,6 +28,11 @@ pub struct Config {
     pub hub: Option<String>,
     /// Active propagation node, as a hex destination hash.
     pub propagation_node: Option<String>,
+    /// Operator's own latitude in decimal degrees (north positive), if set.
+    /// Paired with [`Config::lon`] to plot this node on the World Map tool.
+    pub lat: Option<f64>,
+    /// Operator's own longitude in decimal degrees (east positive), if set.
+    pub lon: Option<f64>,
 }
 
 impl Default for Config {
@@ -36,6 +41,8 @@ impl Default for Config {
             display_name: "foxhole".to_string(),
             hub: None,
             propagation_node: None,
+            lat: None,
+            lon: None,
         }
     }
 }
@@ -73,6 +80,10 @@ impl Config {
                 "display_name" if !value.is_empty() => cfg.display_name = value.to_string(),
                 "hub" => cfg.hub = non_empty(value),
                 "propagation_node" => cfg.propagation_node = non_empty(value),
+                // A blank or unparseable coordinate clears to `None` so a junk
+                // edit never plots the operator at a bogus spot.
+                "lat" => cfg.lat = parse_coord(value),
+                "lon" => cfg.lon = parse_coord(value),
                 _ => {}
             }
         }
@@ -88,7 +99,22 @@ impl Config {
         if let Some(ref node) = self.propagation_node {
             s.push_str(&format!("propagation_node = {node}\n"));
         }
+        if let Some(lat) = self.lat {
+            s.push_str(&format!("lat = {lat}\n"));
+        }
+        if let Some(lon) = self.lon {
+            s.push_str(&format!("lon = {lon}\n"));
+        }
         s
+    }
+
+    /// The operator's own position, when both coordinates are configured. Fed to
+    /// the World Map tool as the `Operator` marker.
+    pub fn operator_pos(&self) -> Option<crate::domain::GeoPos> {
+        match (self.lat, self.lon) {
+            (Some(lat), Some(lon)) => Some(crate::domain::GeoPos::new(lat, lon)),
+            _ => None,
+        }
     }
 
     /// Atomically persist the config, creating the config dir if needed.
@@ -108,6 +134,12 @@ fn non_empty(value: &str) -> Option<String> {
     }
 }
 
+/// Parse a decimal-degree coordinate, ignoring blanks and junk (which clear the
+/// field to `None`). Only finite values are accepted.
+fn parse_coord(value: &str) -> Option<f64> {
+    value.parse::<f64>().ok().filter(|v| v.is_finite())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -118,8 +150,25 @@ mod tests {
             display_name: "rat-six".to_string(),
             hub: Some("hub.example:4242".to_string()),
             propagation_node: Some("00112233445566778899aabbccddeeff".to_string()),
+            lat: Some(48.8566),
+            lon: Some(2.3522),
         };
         assert_eq!(Config::parse(&cfg.serialize()), cfg);
+    }
+
+    #[test]
+    fn parses_coordinates_and_ignores_junk() {
+        let cfg = Config::parse("lat = 51.5\nlon = -0.12\n");
+        assert_eq!(cfg.lat, Some(51.5));
+        assert_eq!(cfg.lon, Some(-0.12));
+        assert!(cfg.operator_pos().is_some());
+
+        // A blank or unparseable coordinate clears the field; one coordinate
+        // alone is not a usable fix.
+        let cfg = Config::parse("lat = north\nlon =\n");
+        assert!(cfg.lat.is_none() && cfg.lon.is_none());
+        assert!(cfg.operator_pos().is_none());
+        assert!(Config::parse("lat = 10\n").operator_pos().is_none());
     }
 
     #[test]

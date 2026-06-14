@@ -21,6 +21,7 @@
 mod boot;
 mod browser;
 mod conversations;
+mod map;
 mod network;
 #[cfg(test)]
 mod tests;
@@ -31,14 +32,15 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use crate::config::Config;
 pub use crate::domain::{
-    Conversation, Entry, Interface, MsgStatus, NetCommand, NetEvent, Node, NomadNode, Outbound,
-    Page, PageStatus, PathProbe, PeerKind, Trust, fmt_bitrate, fmt_bytes, path_summary,
+    Conversation, Entry, GeoPos, Interface, MsgStatus, NetCommand, NetEvent, Node, NomadNode,
+    Outbound, Page, PageStatus, PathProbe, PeerKind, Trust, fmt_bitrate, fmt_bytes, path_summary,
 };
 pub use crate::notes::Notes;
 
 pub use boot::{AppState, Scroll};
 #[cfg(feature = "splash")]
 pub use boot::{Boot, BootStep};
+pub use map::{MapMarker, MapView, MarkerKind};
 
 /// Which field the New Conversation popup is editing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -109,6 +111,8 @@ pub enum Tool {
     Conversations,
     /// Discovered peers and propagation nodes.
     Network,
+    /// World map: the operator and located peers plotted on a globe.
+    WorldMap,
     /// Nomad Network page browser (micron pages served by `nomadnetwork.node`).
     Browser,
     /// System/application log (banners, diagnostics).
@@ -124,9 +128,10 @@ pub enum Tool {
 impl Tool {
     /// Tab order, left to right. Drives both the menu strip and Ctrl+N/P
     /// cycling, so there is a single source of truth for ordering.
-    pub const ALL: [Tool; 7] = [
+    pub const ALL: [Tool; 8] = [
         Tool::Conversations,
         Tool::Network,
+        Tool::WorldMap,
         Tool::Browser,
         Tool::Log,
         Tool::Interfaces,
@@ -139,6 +144,7 @@ impl Tool {
         match self {
             Tool::Conversations => "Conversations",
             Tool::Network => "Network",
+            Tool::WorldMap => "Map",
             Tool::Browser => "Browser",
             Tool::Log => "Log",
             Tool::Interfaces => "Interfaces",
@@ -152,6 +158,7 @@ impl Tool {
         match self {
             Tool::Conversations => "CONV",
             Tool::Network => "NET",
+            Tool::WorldMap => "MAP",
             Tool::Browser => "WEB",
             Tool::Log => "LOG",
             Tool::Interfaces => "IFACE",
@@ -266,6 +273,10 @@ pub struct App {
     /// Which Network-tab column has focus (Peers reuses `selected`, Nodes
     /// reuses `node_selected` for the in-column cursor).
     pub net_col: NetColumn,
+    /// World Map viewport (pan/zoom state).
+    pub map: MapView,
+    /// Selected marker index within [`App::map_markers`] (World Map tab).
+    pub map_selected: usize,
     /// Latest rnpath-style path probe per hex destination hash (Network tab).
     pub path_probes: HashMap<String, PathProbe>,
     /// Live interface status (Interfaces tab); empty until the stack reports.
@@ -358,6 +369,8 @@ impl App {
             nodes: Vec::new(),
             node_selected: 0,
             net_col: NetColumn::Peers,
+            map: MapView::default(),
+            map_selected: 0,
             path_probes: HashMap::new(),
             interfaces: Vec::new(),
             link_count: 0,
@@ -610,6 +623,7 @@ impl App {
         match self.active {
             Tool::Conversations => self.handle_conversations_key(ctrl, key),
             Tool::Network => self.handle_network_key(ctrl, key),
+            Tool::WorldMap => self.handle_map_key(ctrl, key),
             Tool::Browser => self.handle_browser_key(key),
             Tool::Notes => self.handle_notes_key(ctrl, key),
             _ => {}

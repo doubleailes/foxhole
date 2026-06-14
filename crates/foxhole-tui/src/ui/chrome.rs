@@ -11,6 +11,7 @@ use crate::app::{App, Pane, Tool};
 
 use super::browser::render_browser;
 use super::conversations::render_conversations;
+use super::map::render_map;
 use super::network::render_network;
 use super::notes::render_notes;
 use super::style::{ACCENT, BG, BORDER_LIVE, INK, PANEL, base_style, tag_style, ts_style};
@@ -65,6 +66,7 @@ pub(super) fn render_tool(frame: &mut Frame, app: &App, area: Rect) {
     match app.active {
         Tool::Conversations => render_conversations(frame, app, area),
         Tool::Network => render_network(frame, app, area),
+        Tool::WorldMap => render_map(frame, app, area),
         Tool::Browser => render_browser(frame, app, area),
         Tool::Log => render_log(frame, app, area),
         Tool::Interfaces => render_interfaces(frame, app, area),
