@@ -11,7 +11,7 @@ use crate::app::App;
 use crate::notes::SLOTS;
 
 use super::style::ts_style;
-use super::widgets::pane_block;
+use super::widgets::{NOSEL, SEL, pane_block};
 
 /// Notes tool: ten free-text slots (`0`–`9`). The selected row is reversed and
 /// carries a caret; empty slots read `(empty)` in muted text. See
@@ -22,7 +22,7 @@ pub(super) fn render_notes(frame: &mut Frame, app: &App, area: Rect) {
 
     for (i, value) in app.notes.slots().iter().enumerate() {
         let selected = i == app.note_selected;
-        let marker = if selected { "> " } else { "  " };
+        let marker = if selected { SEL } else { NOSEL };
         let mut spans = vec![Span::raw(format!("{marker}{i}  "))];
         if value.is_empty() {
             spans.push(Span::styled("(empty)", ts_style()));

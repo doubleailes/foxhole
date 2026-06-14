@@ -10,7 +10,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use crate::app::{BURN_TOKEN, BurnConfirm, MnemonicView, NewConv, NewConvField};
 
 use super::style::tag_style;
-use super::widgets::{ASCII_BORDER, centered_rect};
+use super::widgets::{FRAME_BORDER, centered_rect};
 
 /// The burn-confirmation modal (Ctrl+K): a red notice listing what gets
 /// destroyed, gated behind typing the confirmation token.
@@ -20,7 +20,7 @@ pub(super) fn render_burn_popup(frame: &mut Frame, b: &BurnConfirm) {
     let err = tag_style("ERR");
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_set(ASCII_BORDER)
+        .border_set(FRAME_BORDER)
         .border_style(err)
         .title(Span::styled(
             " BURN NOTICE ",
@@ -66,7 +66,7 @@ pub(super) fn render_new_conv_popup(frame: &mut Frame, nc: &NewConv) {
     frame.render_widget(Clear, area);
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_set(ASCII_BORDER)
+        .border_set(FRAME_BORDER)
         .border_style(Style::default().add_modifier(Modifier::BOLD))
         .title(Span::styled(
             " NEW CONVERSATION ",
@@ -122,7 +122,7 @@ pub(super) fn render_mnemonic_popup(frame: &mut Frame, m: &MnemonicView) {
     let id = tag_style("ID");
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_set(ASCII_BORDER)
+        .border_set(FRAME_BORDER)
         .border_style(id)
         .title(Span::styled(" MNEMONIC ", id.add_modifier(Modifier::BOLD)));
 
@@ -145,7 +145,7 @@ pub(super) fn render_sync_popup(frame: &mut Frame, status: &str) {
     frame.render_widget(Clear, area); // blank the cells underneath
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_set(ASCII_BORDER)
+        .border_set(FRAME_BORDER)
         .border_style(Style::default().add_modifier(Modifier::BOLD))
         .title(Span::styled(
             " PROPAGATION SYNC ",

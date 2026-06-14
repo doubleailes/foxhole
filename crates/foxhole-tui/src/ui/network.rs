@@ -11,7 +11,7 @@ use ratatui::widgets::Paragraph;
 use crate::app::{App, NetColumn, Trust, path_summary};
 
 use super::style::{fmt_time, tag_style, trust_style, ts_style};
-use super::widgets::pane_block;
+use super::widgets::{NOSEL, SEL, pane_block};
 
 /// Network tool: known delivery peers and propagation nodes in two keyboard-
 /// navigable columns, each row carrying a last-seen UTC stamp. The focused
@@ -129,7 +129,7 @@ fn net_row(
     selected: bool,
     focused: bool,
 ) -> Line<'static> {
-    let marker = if selected { "> " } else { "  " };
+    let marker = if selected { SEL } else { NOSEL };
     let h8 = hash.get(..8).unwrap_or(hash);
     let ts = match last_seen {
         0 => "--:--:--".to_string(),

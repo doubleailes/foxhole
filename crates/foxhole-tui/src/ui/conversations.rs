@@ -10,7 +10,7 @@ use ratatui::widgets::{Paragraph, Wrap};
 use crate::app::{App, Pane};
 
 use super::style::{styled_entry, trust_style};
-use super::widgets::{pane_block, render_scroll};
+use super::widgets::{NOSEL, SEL, pane_block, render_scroll};
 
 /// Conversations tool: a peer list and the selected peer's thread side by side,
 /// with the compose buffer spanning the bottom — the Nomadnet layout.
@@ -65,7 +65,7 @@ fn render_peer_list(frame: &mut Frame, app: &App, area: Rect) {
         .enumerate()
         .map(|(i, conv)| {
             let selected = i == app.selected;
-            let marker = if selected { "> " } else { "  " };
+            let marker = if selected { SEL } else { NOSEL };
             let unread = if conv.unread > 0 {
                 format!(" ({})", conv.unread)
             } else {
@@ -99,7 +99,7 @@ fn render_transmit(frame: &mut Frame, app: &App, area: Rect) {
     let active = app.focus == Pane::Transmit;
     let draft = app.selected_conv().map(|c| c.draft.as_str()).unwrap_or("");
 
-    let mut spans = vec![Span::raw("> "), Span::raw(draft)];
+    let mut spans = vec![Span::raw("❯ "), Span::raw(draft)];
     if active {
         spans.push(Span::styled(
             " ",

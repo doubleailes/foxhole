@@ -53,11 +53,14 @@ tooling).
 
 ### `crates/foxhole-tui` — rendering (ratatui), pure `&App` → frame
 
-Depends on `foxhole-core` + `foxhole-micron`. **7-bit ASCII borders only**
-(`ASCII_BORDER`); structure (borders, active-pane `REVERSED`, titles) stays
-glyph-only so it degrades on a mono display, while scrollback *content* is tinted
-by a tactical palette (`style::tag_style`: RX/TX/DLV/LNK/RT/CFG/WRN/ERR/…, muted
-timestamps). `src/ui/` is split into a shared toolkit (`style.rs`, `widgets.rs`),
+Depends on `foxhole-core` + `foxhole-micron`. **Tactical Unicode box-drawing
+frames** — resting panes use the heavy `FRAME_BORDER` (`┏━┓┃┗┛`), the focused
+pane the double-ruled `FOCUS_BORDER` (`╔═╗║╚╝`), with a `▶` selection chevron and
+a segmented HUD tab strip + status readout (this trades the former strict 7-bit
+ASCII chrome for the heavier look, assuming a UTF-8 terminal). Focus stays legible
+in monochrome via border weight + `REVERSED` titles, while scrollback *content* is
+tinted by a tactical palette (`style::tag_style`: RX/TX/DLV/LNK/RT/CFG/WRN/ERR/…,
+muted timestamps). `src/ui/` is split into a shared toolkit (`style.rs`, `widgets.rs`),
 chrome (`chrome.rs`), overlays (`popups.rs`), and one body module per tool.
 `src/splash.rs` *(default-on `splash` feature)* renders the cold-boot bring-up
 monitor; state lives in core's `App` (`AppState::{Splash,Running}`,

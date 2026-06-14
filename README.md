@@ -57,8 +57,9 @@ The remainder of Section 1 is withheld under exemption (b)(█).
   without ████████████████.
 - **Zero unsolicited emissions.** Propagation sync is **operator-initiated
   only**; the terminal does not beacon on its own ████████████.
-- **7-bit ASCII chrome** — renders on ██████ serial gear and one-bit displays
-  recovered from ████████████.
+- **Tactical box-drawing HUD** — heavy command-console frames, the live pane
+  double-ruled and ████████ from the rest, a segmented status readout; stays
+  legible stripped to one bit on ██████ recovered from ████████████.
 
 Capabilities 7 through ██ are withheld. ████████████████████████████████████
 
