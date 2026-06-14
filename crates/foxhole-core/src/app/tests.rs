@@ -1006,3 +1006,124 @@ fn set_msg_status_updates_matching_entry_and_marks_dirty() {
 
     app.set_msg_status(999_999, MsgStatus::Failed); // unknown id: no-op
 }
+
+#[test]
+fn trust_next_cycles_and_wraps() {
+    assert_eq!(Trust::Unknown.next(), Trust::Trusted);
+    assert_eq!(Trust::Trusted.next(), Trust::Untrusted);
+    assert_eq!(Trust::Untrusted.next(), Trust::Compromised);
+    assert_eq!(Trust::Compromised.next(), Trust::Unknown);
+}
+
+#[test]
+fn t_key_cycles_trust_and_marks_dirty() {
+    let mut app = App::new();
+    app.focus = Pane::PeerList; // the `t` binding is peer-list-only
+    app.dirty.clear();
+    assert_eq!(app.conversations[0].trust, Trust::Unknown);
+
+    app.handle_key(press(KeyCode::Char('t')));
+    assert_eq!(app.conversations[0].trust, Trust::Trusted);
+    let peer = app.conversations[0].peer.clone();
+    assert!(
+        app.dirty.iter().any(|p| p == &peer),
+        "trust change persists"
+    );
+    assert!(
+        app.syslog.iter().any(|e| e.text.contains("[SEC] TRUST")),
+        "logs a SEC line"
+    );
+}
+
+#[test]
+fn t_key_in_transmit_pane_types_not_cycles() {
+    let mut app = App::new();
+    // Default focus is Transmit: `t` must edit the draft, not change trust.
+    app.handle_key(press(KeyCode::Char('t')));
+    assert_eq!(app.conversations[0].draft, "t");
+    assert_eq!(app.conversations[0].trust, Trust::Unknown);
+}
+
+#[test]
+fn m_key_opens_mnemonic_modal_and_any_key_closes() {
+    let mut app = App::new();
+    // Need a real 16-byte hex peer for an encodable address.
+    assert!(app.start_conversation("a1b2c3d4e5f600112233445566778899", ""));
+    app.active = Tool::Network; // net_col defaults to Peers, selection = new conv
+
+    app.handle_key(press(KeyCode::Char('m')));
+    let view = app.mnemonic_view.as_ref().expect("modal opens");
+    assert_eq!(view.phrase.split_whitespace().count(), 12);
+    assert_eq!(
+        view.phrase,
+        "payment noodle vivid slogan gas ancient match hammer fever crisp timber crazy"
+    );
+
+    app.handle_key(press(KeyCode::Char('x'))); // any key dismisses
+    assert!(app.mnemonic_view.is_none());
+}
+
+#[test]
+fn should_persist_keeps_trusted_message_less_peer() {
+    // A peer merely seen via an announce (no messages, default trust, not pinned)
+    // is discovery noise — not worth persisting.
+    let mut conv = Conversation::new("aa".repeat(16));
+    assert!(!conv.should_persist());
+    // Assigning a trust level makes it worth persisting even with no history.
+    conv.trust = Trust::Trusted;
+    assert!(conv.should_persist());
+}
+
+#[test]
+fn load_conversation_adopts_persisted_trust_into_existing() {
+    let mut app = App::new();
+    let peer = "bb".repeat(16);
+    // Simulate an announce creating the conversation first (default Unknown).
+    app.upsert_peer(PeerKind::Delivery, peer.clone(), None);
+    assert_eq!(
+        app.conversations
+            .iter()
+            .find(|c| c.peer == peer)
+            .unwrap()
+            .trust,
+        Trust::Unknown
+    );
+
+    // Now the store load arrives carrying a saved trust level.
+    let mut loaded = Conversation::new(peer.clone());
+    loaded.trust = Trust::Compromised;
+    app.load_conversation(loaded);
+
+    assert_eq!(
+        app.conversations
+            .iter()
+            .find(|c| c.peer == peer)
+            .unwrap()
+            .trust,
+        Trust::Compromised,
+        "persisted trust is adopted onto the existing announce-created thread"
+    );
+}
+
+#[test]
+fn start_conversation_accepts_mnemonic_phrase() {
+    let mut app = App::new();
+    let phrase = "payment noodle vivid slogan gas ancient match hammer fever crisp timber crazy";
+    assert!(app.start_conversation(phrase, "Phrase-6"));
+    let conv = app
+        .conversations
+        .iter()
+        .find(|c| c.peer == "a1b2c3d4e5f600112233445566778899")
+        .expect("decoded to the right hash");
+    assert_eq!(conv.display_name.as_deref(), Some("Phrase-6"));
+}
+
+#[test]
+fn start_conversation_rejects_bad_mnemonic_phrase() {
+    let mut app = App::new();
+    let before = app.conversations.len();
+    // 12 valid words but a swapped pair → checksum fails.
+    let bad = "noodle payment vivid slogan gas ancient match hammer fever crisp timber crazy";
+    assert!(!app.start_conversation(bad, ""));
+    assert_eq!(app.conversations.len(), before);
+}

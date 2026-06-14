@@ -9,7 +9,7 @@ use ratatui::widgets::{Paragraph, Wrap};
 
 use crate::app::{App, Pane};
 
-use super::style::styled_entry;
+use super::style::{styled_entry, trust_style};
 use super::widgets::{pane_block, render_scroll};
 
 /// Conversations tool: a peer list and the selected peer's thread side by side,
@@ -56,7 +56,8 @@ pub(super) fn render_conversations(frame: &mut Frame, app: &App, area: Rect) {
 
 /// Peer list: one row per conversation. The selected row is prefixed with `>`
 /// and reversed (so the active thread is identifiable even when the pane is not
-/// focused); unread inbound counts show as a trailing `(N)`.
+/// focused); a colour-coded trust glyph leads each row and unread inbound counts
+/// show as a trailing `(N)`.
 fn render_peer_list(frame: &mut Frame, app: &App, area: Rect) {
     let lines: Vec<Line> = app
         .conversations
@@ -76,10 +77,14 @@ fn render_peer_list(frame: &mut Frame, app: &App, area: Rect) {
             } else if conv.unread > 0 {
                 style = style.add_modifier(Modifier::BOLD);
             }
-            Line::from(Span::styled(
-                format!("{marker}{}{unread}", conv.label()),
-                style,
-            ))
+            let mut gstyle = trust_style(conv.trust);
+            if selected {
+                gstyle = gstyle.add_modifier(Modifier::REVERSED);
+            }
+            Line::from(vec![
+                Span::styled(format!("{marker}{} ", conv.trust.glyph()), gstyle),
+                Span::styled(format!("{}{unread}", conv.label()), style),
+            ])
         })
         .collect();
 

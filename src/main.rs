@@ -198,7 +198,7 @@ async fn run(
                     .conversations
                     .iter()
                     .find(|c| c.peer == peer)
-                    .filter(|c| c.pinned || !c.messages.is_empty())
+                    .filter(|c| c.should_persist())
                     .map(|conv| store::save(key, conv));
                 if let Some(Err(e)) = result {
                     app.push_log(format!("[SYS] store save failed: {e}"));

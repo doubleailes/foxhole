@@ -39,6 +39,7 @@ The UI has two focus tiers, mirroring Nomad Network:
 
   `!Tab`!               Cycle panes: Peers -> Thread -> Transmit
   `!Up / Down`!         Select a peer (Peers pane)
+  `!t`!                 Cycle the selected peer's trust level (Peers pane)
   `!(type)`!            Edit the draft (Transmit pane)
   `!Backspace`!         Delete a character from the draft
   `!Ctrl+S`!            Send the draft to the selected peer
@@ -52,6 +53,8 @@ The UI has two focus tiers, mirroring Nomad Network:
   `!Enter`!             Peers: open the chat.  Nodes: set propagation node
   `!p`!                 rnpath-style path probe of the focused selection
   `!s`!                 Sync now from the propagation node
+  `!m`!                 Show the selection's address as a mnemonic phrase
+  `!t`!                 Cycle the selected peer's trust level (Peers column)
 
 >>Browser
 
@@ -82,6 +85,28 @@ then Ctrl+R / s to sync. The active node persists across sessions.
 
 If the menu shows networking offline, the binary was built without the `!net`!
 feature — rebuild with: cargo run --features net
+
+>>Trust levels
+
+Each peer carries an operator-assigned trust level, shown as a colour-coded
+glyph at the start of its roster row (Conversations and Network tools). Press
+`!t`! on the selected peer to cycle it; the choice persists across sessions.
+
+  `!+`!  TRUSTED       vetted by you
+  `!?`!  UNKNOWN       not yet assessed (default)
+  `!-`!  UNTRUSTED     known, but not vouched for
+  `!!`!  COMPROMISED   treat all traffic as hostile
+
+Trust is advisory — a reminder of who you've checked. It is not used for any
+cryptographic decision.
+
+>>Mnemonic addresses
+
+A destination hash is 32 hex characters — awkward to read over a radio. Press
+`!m`! in the Network tool to render the selected address as a 12-word phrase
+(with a checksum word) you can read aloud to verify or share. Conversely, the
+New Conversation prompt (Ctrl+O) accepts either 32 hex characters or a 12-word
+mnemonic phrase in the address field.
 
 >>Security  /  BURN
 

@@ -5,7 +5,7 @@
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use crate::app::{Entry, MsgStatus};
+use crate::app::{Entry, MsgStatus, Trust};
 
 /// Plain (untinted) scrollback lines for static panes (Network/Interfaces/Guide).
 pub(super) fn plain_lines<I, S>(lines: I) -> Vec<Line<'static>>
@@ -40,6 +40,27 @@ pub(super) fn status_token(status: MsgStatus) -> Option<(&'static str, &'static 
         MsgStatus::Delivered => Some(("[delivered]", "DLV")),
         MsgStatus::Propagated => Some(("[propagated]", "CFG")),
         MsgStatus::Failed => Some(("[failed]", "ERR")),
+    }
+}
+
+/// Colour for a peer's trust glyph in the rosters: green trusted, red
+/// compromised, faded-brass untrusted, dim grey unknown. Mirrors the tactical
+/// palette (content is tinted; the glyph itself stays ASCII).
+pub(super) fn trust_style(trust: Trust) -> Style {
+    let base = Style::default();
+    match trust {
+        Trust::Trusted => base
+            .fg(Color::Rgb(143, 166, 122))
+            .add_modifier(Modifier::BOLD), // Success Olive
+        Trust::Compromised => base
+            .fg(Color::Rgb(122, 62, 62))
+            .add_modifier(Modifier::BOLD), // Dark Dried Red
+        Trust::Untrusted => base
+            .fg(Color::Rgb(159, 139, 60))
+            .add_modifier(Modifier::BOLD), // Faded Brass
+        Trust::Unknown => base
+            .fg(Color::Rgb(102, 112, 102))
+            .add_modifier(Modifier::DIM),
     }
 }
 

@@ -52,6 +52,15 @@ impl App {
                 }
             }
             KeyCode::Char('s') => self.commands.push_back(NetCommand::SyncNow),
+            // Show the focused selection's address as a mnemonic phrase.
+            KeyCode::Char('m') => {
+                if let Some(hash) = self.focused_net_hash() {
+                    self.open_mnemonic(&hash);
+                }
+            }
+            // Cycle the selected peer's trust level (peers column only — nodes
+            // are relays, not correspondents).
+            KeyCode::Char('t') if self.net_col == NetColumn::Peers => self.cycle_selected_trust(),
             _ => {}
         }
     }
