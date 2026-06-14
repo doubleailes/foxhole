@@ -20,13 +20,14 @@ use std::path::{Path, PathBuf};
 use rns_crypto::{hkdf, sha, token};
 use rns_identity::identity::Identity;
 
-use crate::app::{Conversation, Entry, MsgStatus};
+use crate::app::{Conversation, Entry, MsgStatus, Trust};
 use crate::config::config_dir;
 
-/// File-format magic + version. v2 adds a per-message status byte; v1 files
-/// (no byte) still load (status defaults to `None`).
+/// File-format magic + version. v2 adds a per-message status byte; v3 adds a
+/// per-conversation trust byte. Older files still load: a missing status
+/// defaults to `None`, a missing trust to `Unknown`.
 const MAGIC: &[u8; 4] = b"FXC1";
-const VERSION: u8 = 2;
+const VERSION: u8 = 3;
 
 /// Domain-separation salt for the store-key derivation.
 const KEY_SALT: &[u8] = b"foxhole.conversations.v1";
@@ -101,6 +102,7 @@ fn serialize(conv: &Conversation) -> Vec<u8> {
     b.push(VERSION);
     put_str(&mut b, &conv.peer);
     put_str(&mut b, conv.display_name.as_deref().unwrap_or(""));
+    b.push(trust_to_u8(conv.trust));
     b.extend_from_slice(&(conv.unread as u32).to_be_bytes());
     b.extend_from_slice(&(conv.messages.len() as u32).to_be_bytes());
     for m in &conv.messages {
@@ -133,17 +135,43 @@ fn status_from_u8(b: u8) -> MsgStatus {
     }
 }
 
+/// Persisted trust code (v3+). Unknown is 0 so it's also the natural default for
+/// older blobs that carry no trust byte.
+fn trust_to_u8(t: Trust) -> u8 {
+    match t {
+        Trust::Unknown => 0,
+        Trust::Trusted => 1,
+        Trust::Untrusted => 2,
+        Trust::Compromised => 3,
+    }
+}
+
+fn trust_from_u8(b: u8) -> Trust {
+    match b {
+        1 => Trust::Trusted,
+        2 => Trust::Untrusted,
+        3 => Trust::Compromised,
+        _ => Trust::Unknown,
+    }
+}
+
 fn deserialize(data: &[u8]) -> Option<Conversation> {
     let mut r = Reader::new(data);
     if r.take(4)? != MAGIC {
         return None;
     }
     let version = r.u8()?;
-    if version != 1 && version != 2 {
+    if !(1..=3).contains(&version) {
         return None;
     }
     let peer = r.str()?;
     let name = r.str()?;
+    // v3 carries a per-conversation trust byte; older blobs don't (→ Unknown).
+    let trust = if version >= 3 {
+        trust_from_u8(r.u8()?)
+    } else {
+        Trust::Unknown
+    };
     let unread = r.u32()? as usize;
     let count = r.u32()? as usize;
 
@@ -167,6 +195,7 @@ fn deserialize(data: &[u8]) -> Option<Conversation> {
 
     let mut conv = Conversation::new(peer);
     conv.display_name = if name.is_empty() { None } else { Some(name) };
+    conv.trust = trust;
     conv.unread = unread;
     conv.messages = messages;
     Some(conv)
@@ -238,6 +267,7 @@ mod tests {
     fn sample() -> Conversation {
         let mut c = Conversation::new("a1b2c3d4e5f600112233445566778899");
         c.display_name = Some("rat-six".to_string());
+        c.trust = Trust::Compromised;
         c.unread = 3;
         c.draft = "unsaved".to_string(); // must NOT survive a round-trip
         c.messages = vec![
@@ -260,6 +290,7 @@ mod tests {
     fn same(a: &Conversation, b: &Conversation) {
         assert_eq!(a.peer, b.peer);
         assert_eq!(a.display_name, b.display_name);
+        assert_eq!(a.trust, b.trust);
         assert_eq!(a.unread, b.unread);
         assert_eq!(a.messages.len(), b.messages.len());
         // Compare persisted fields only — `id` is session-local (always 0 back).
@@ -304,6 +335,62 @@ mod tests {
         assert_eq!(conv.messages.len(), 1);
         assert_eq!(conv.messages[0].text, "[RX] legacy");
         assert_eq!(conv.messages[0].status, MsgStatus::None);
+        assert_eq!(conv.trust, Trust::Unknown, "v1 has no trust byte");
+    }
+
+    #[test]
+    fn loads_legacy_v2_blob() {
+        // v2: per-message status byte, but no per-conversation trust byte.
+        let mut b = Vec::new();
+        b.extend_from_slice(b"FXC1");
+        b.push(2u8);
+        put_str(&mut b, "deadbeefdeadbeefdeadbeefdeadbeef");
+        put_str(&mut b, "");
+        b.extend_from_slice(&0u32.to_be_bytes()); // unread
+        b.extend_from_slice(&1u32.to_be_bytes()); // 1 message
+        b.extend_from_slice(&1_700_000_000u64.to_be_bytes());
+        b.push(status_to_u8(MsgStatus::Delivered));
+        put_text(&mut b, "[RX] legacy v2");
+
+        let conv = deserialize(&b).expect("v2 blob still loads");
+        assert_eq!(conv.messages.len(), 1);
+        assert_eq!(conv.messages[0].status, MsgStatus::Delivered);
+        assert_eq!(conv.trust, Trust::Unknown, "v2 has no trust byte");
+    }
+
+    #[test]
+    fn trust_byte_round_trips() {
+        let mut c = sample();
+        c.trust = Trust::Trusted;
+        let back = deserialize(&serialize(&c)).expect("decode");
+        assert_eq!(back.trust, Trust::Trusted);
+    }
+
+    #[test]
+    fn trusted_message_less_peer_survives_disk_round_trip() {
+        // The exact across-sessions case: a discovered peer with no history that
+        // the operator marked TRUSTED. It must be persisted (should_persist) and
+        // reload with the trust intact.
+        let dir = std::env::temp_dir().join("foxhole_store_trust_only");
+        let _ = std::fs::remove_dir_all(&dir);
+        let key = [3u8; 64];
+
+        let mut c = Conversation::new("cc".repeat(16));
+        c.trust = Trust::Trusted; // no messages, not pinned
+        assert!(c.should_persist(), "a trust assignment is worth persisting");
+        save_to(&dir, &key, &c).unwrap();
+
+        let (loaded, skipped) = load_all_from(&dir, &key);
+        assert_eq!(skipped, 0);
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].peer, c.peer);
+        assert_eq!(
+            loaded[0].trust,
+            Trust::Trusted,
+            "trust restored next session"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -229,6 +229,57 @@ pub enum MsgStatus {
     Failed,
 }
 
+/// Operator-assigned trust for a peer (port of ghostlink's four-tier model).
+/// Advisory only — it colours the rosters and reminds the operator who they've
+/// vetted; it is not used for any cryptographic decision. `Unknown` is the
+/// default for a freshly discovered or hand-entered peer.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Trust {
+    /// Explicitly distrusted (known, but not vouched for).
+    Untrusted,
+    /// Not yet assessed (default).
+    #[default]
+    Unknown,
+    /// Vetted and trusted by the operator.
+    Trusted,
+    /// Believed to be in adversary hands — treat all traffic as hostile.
+    Compromised,
+}
+
+impl Trust {
+    /// Cycle order for the `t` key: Unknown → Trusted → Untrusted → Compromised
+    /// → Unknown. Starts at the common case and ends at the alarming one.
+    pub fn next(self) -> Self {
+        match self {
+            Trust::Unknown => Trust::Trusted,
+            Trust::Trusted => Trust::Untrusted,
+            Trust::Untrusted => Trust::Compromised,
+            Trust::Compromised => Trust::Unknown,
+        }
+    }
+
+    /// Full label for logs / the status line.
+    pub fn label(self) -> &'static str {
+        match self {
+            Trust::Untrusted => "UNTRUSTED",
+            Trust::Unknown => "UNKNOWN",
+            Trust::Trusted => "TRUSTED",
+            Trust::Compromised => "COMPROMISED",
+        }
+    }
+
+    /// One-char roster marker: `+` trusted, `?` unknown, `-` untrusted, `!`
+    /// compromised. ASCII so it degrades on a mono display (colour adds meaning).
+    pub fn glyph(self) -> char {
+        match self {
+            Trust::Untrusted => '-',
+            Trust::Unknown => '?',
+            Trust::Trusted => '+',
+            Trust::Compromised => '!',
+        }
+    }
+}
+
 /// One scrollback line: when it occurred (Unix epoch **seconds, UTC**) and its
 /// text. `at == 0` marks an unknown time (rendered `--:--:--`). The timestamp is
 /// captured at creation so the UI can show it without re-reading the clock.
@@ -278,6 +329,9 @@ pub struct Conversation {
     /// When this peer was last heard via an announce (Unix epoch **seconds,
     /// UTC**); `0` if never (seeded/offline). Shown in the Network tab.
     pub last_seen: u64,
+    /// Operator-assigned trust level, cycled with `t` and persisted; colours the
+    /// peer rosters. Defaults to [`Trust::Unknown`].
+    pub trust: Trust,
 }
 
 impl Conversation {
@@ -291,7 +345,19 @@ impl Conversation {
             unread: 0,
             pinned: false,
             last_seen: 0,
+            trust: Trust::default(),
         }
+    }
+
+    /// Whether this conversation is worth writing to the encrypted store. Skips
+    /// pure discovery noise (a peer merely seen via an announce, with no history
+    /// and default trust) but keeps anything the operator acted on: a
+    /// hand-added/`pinned` peer, a thread with messages, or an assigned trust
+    /// level. Used by the persistence loop so a trust change survives a restart
+    /// even before the first message.
+    #[cfg_attr(not(feature = "net"), allow(dead_code))]
+    pub fn should_persist(&self) -> bool {
+        self.pinned || !self.messages.is_empty() || self.trust != Trust::Unknown
     }
 
     /// What to show in the peer list: the display name, else a shortened key.

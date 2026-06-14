@@ -2,7 +2,7 @@
 //! inbound delivery. All operate on `App`'s `conversations`/`selected` state.
 
 use super::*;
-use crate::domain::{normalize_address, now_secs};
+use crate::domain::{normalize_address, now_secs, short_hash};
 
 impl App {
     /// Record/refresh a discovered peer. Delivery peers become conversations
@@ -42,12 +42,13 @@ impl App {
     }
 
     /// Create (or focus) a conversation for a manually-entered LXMF address.
-    /// Returns false if the address isn't a 32-char hex destination hash.
+    /// Accepts either a 32-char hex destination hash or a 12-word mnemonic
+    /// phrase (decoded + checksum-verified). Returns false if it's neither.
     pub fn start_conversation(&mut self, address: &str, alias: &str) -> bool {
-        let key = normalize_address(address);
-        if key.len() != 32 || !key.bytes().all(|b| b.is_ascii_hexdigit()) {
-            return false;
-        }
+        let key = match resolve_address(address) {
+            Some(k) => k,
+            None => return false,
+        };
         let alias = alias.trim();
         let idx = match self.conversations.iter().position(|c| c.peer == key) {
             Some(i) => i,
@@ -81,6 +82,10 @@ impl App {
             // Peer-list navigation — only when that pane is focused.
             (false, KeyCode::Up) if self.focus == Pane::PeerList => self.select_prev(),
             (false, KeyCode::Down) if self.focus == Pane::PeerList => self.select_next(),
+            // Cycle the selected peer's trust level.
+            (false, KeyCode::Char('t')) if self.focus == Pane::PeerList => {
+                self.cycle_selected_trust()
+            }
 
             // Transmit-pane editing — only when that pane is focused.
             (false, KeyCode::Char(c)) if self.focus == Pane::Transmit => {
@@ -145,6 +150,22 @@ impl App {
         }
     }
 
+    /// Cycle the selected peer's trust level (the `t` key in the peer rosters),
+    /// persist it, and log a `[SEC]` line. No-op without a selected conversation.
+    pub(super) fn cycle_selected_trust(&mut self) {
+        let Some(conv) = self.conversations.get_mut(self.selected) else {
+            return;
+        };
+        conv.trust = conv.trust.next();
+        let peer = conv.peer.clone();
+        let level = conv.trust.label();
+        self.syslog.push(Entry::now(format!(
+            "[SEC] TRUST {}.. -> {level}",
+            short_hash(&peer)
+        )));
+        self.mark_dirty(&peer);
+    }
+
     /// Flag a conversation as needing a re-save (deduplicated). `main` drains
     /// `dirty` and persists; `App` itself never touches the disk.
     fn mark_dirty(&mut self, peer: &str) {
@@ -167,6 +188,11 @@ impl App {
             existing.messages = loaded.messages;
             if existing.display_name.is_none() {
                 existing.display_name = loaded.display_name;
+            }
+            // Adopt the persisted trust unless this live session already set one
+            // (an announce-created conversation starts at the default `Unknown`).
+            if existing.trust == Trust::Unknown {
+                existing.trust = loaded.trust;
             }
         } else {
             self.conversations.push(loaded);
@@ -264,4 +290,23 @@ impl App {
             self.deliver("(direct)", &line);
         }
     }
+}
+
+/// Resolve a typed address to a canonical 32-char hex destination hash, accepting
+/// either hex (colons/spaces tolerated) or a 12-word mnemonic phrase (decoded and
+/// checksum-verified). `None` if it is neither.
+fn resolve_address(input: &str) -> Option<String> {
+    // A hex address (even with colon/space/angle-bracket separators) contains no
+    // letters outside the hex alphabet; a mnemonic phrase always does (its words
+    // carry g–z). Use that to disambiguate without a fragile token count, so a
+    // spaced-out hex string like `a1 b2 …` still takes the hex path.
+    let is_mnemonic = input
+        .chars()
+        .any(|c| c.is_ascii_alphabetic() && !c.is_ascii_hexdigit());
+    if is_mnemonic {
+        let hash = crate::mnemonic::decode(input).ok()?;
+        return Some(hash.iter().map(|b| format!("{b:02x}")).collect());
+    }
+    let key = normalize_address(input);
+    (key.len() == 32 && key.bytes().all(|b| b.is_ascii_hexdigit())).then_some(key)
 }

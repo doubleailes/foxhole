@@ -7,7 +7,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
-use crate::app::{BURN_TOKEN, BurnConfirm, NewConv, NewConvField};
+use crate::app::{BURN_TOKEN, BurnConfirm, MnemonicView, NewConv, NewConvField};
 
 use super::style::tag_style;
 use super::widgets::{ASCII_BORDER, centered_rect};
@@ -100,16 +100,39 @@ pub(super) fn render_new_conv_popup(frame: &mut Frame, nc: &NewConv) {
     ];
     if nc.error {
         lines.push(Line::styled(
-            "  invalid address — need 32 hex characters",
+            "  invalid — need 32 hex chars or a valid 12-word phrase",
             tag_style("ERR"),
         ));
     } else {
-        lines.push(Line::raw(
-            "  destination hash, e.g. a1b2…  (colons/spaces ok)",
-        ));
+        lines.push(Line::raw("  32 hex chars or a 12-word mnemonic phrase"));
     }
     lines.push(Line::raw("  [Tab] field   [Enter] open   [Esc] cancel"));
 
+    let para = Paragraph::new(lines)
+        .block(block)
+        .wrap(Wrap { trim: false });
+    frame.render_widget(para, area);
+}
+
+/// Read-only modal showing a peer's address as a 12-word mnemonic phrase (the
+/// `m` key in the Network tab) — for reading/verifying an address over voice.
+pub(super) fn render_mnemonic_popup(frame: &mut Frame, m: &MnemonicView) {
+    let area = centered_rect(60, 9, frame.area());
+    frame.render_widget(Clear, area);
+    let id = tag_style("ID");
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_set(ASCII_BORDER)
+        .border_style(id)
+        .title(Span::styled(" MNEMONIC ", id.add_modifier(Modifier::BOLD)));
+
+    let lines = vec![
+        Line::raw(format!("  addr: {}", m.hash)),
+        Line::raw(""),
+        Line::styled(format!("  {}", m.phrase), id.add_modifier(Modifier::BOLD)),
+        Line::raw(""),
+        Line::raw("  read aloud to share/verify    [any key] close"),
+    ];
     let para = Paragraph::new(lines)
         .block(block)
         .wrap(Wrap { trim: false });

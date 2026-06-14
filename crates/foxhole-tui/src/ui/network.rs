@@ -8,9 +8,9 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::app::{App, NetColumn, path_summary};
+use crate::app::{App, NetColumn, Trust, path_summary};
 
-use super::style::{fmt_time, tag_style, ts_style};
+use super::style::{fmt_time, tag_style, trust_style, ts_style};
 use super::widgets::pane_block;
 
 /// Network tool: known delivery peers and propagation nodes in two keyboard-
@@ -51,7 +51,7 @@ pub(super) fn render_network(frame: &mut Frame, app: &App, area: Rect) {
 
     // Footer: legend, then the most recent path probe result (if any).
     let legend = Line::styled(
-        "[Tab/<>] column  [Up/Dn] select  [Enter] open/set  [p] path  [s] sync",
+        "[Tab/<>] col [Up/Dn] sel [Enter] open/set [p] path [s] sync [m] mnemonic [t] trust",
         ts_style(),
     );
     frame.render_widget(Paragraph::new(vec![legend, last_probe_line(app)]), rows[2]);
@@ -72,6 +72,7 @@ fn render_peer_column(frame: &mut Frame, app: &App, area: Rect) {
                     &c.peer,
                     c.last_seen,
                     hop_hint(app, &c.peer),
+                    Some(c.trust),
                     i == app.selected,
                     focused,
                 )
@@ -104,6 +105,7 @@ fn render_node_column(frame: &mut Frame, app: &App, area: Rect) {
                     &n.hash,
                     n.last_seen,
                     tail,
+                    None,
                     i == app.node_selected,
                     focused,
                 )
@@ -114,13 +116,16 @@ fn render_node_column(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(para, area);
 }
 
-/// One roster row: `> name   hash8.. HH:MM:SSZ <tail>`. The selected row is
-/// reversed only while its column holds focus, so the active column is obvious.
+/// One roster row: `> <trust> name   hash8.. HH:MM:SSZ <tail>`. Peers carry a
+/// colour-coded trust glyph (`trust = Some`); nodes don't (`None`). The selected
+/// row is reversed only while its column holds focus, so the active column is
+/// obvious.
 fn net_row(
     name: &str,
     hash: &str,
     last_seen: u64,
     tail: String,
+    trust: Option<Trust>,
     selected: bool,
     focused: bool,
 ) -> Line<'static> {
@@ -130,12 +135,29 @@ fn net_row(
         0 => "--:--:--".to_string(),
         t => format!("{}Z", fmt_time(t)),
     };
-    let text = format!("{marker}{name:<10.10} {h8}.. {ts}{tail}");
-    let mut style = Style::default();
-    if selected && focused {
-        style = style.add_modifier(Modifier::REVERSED);
+    let reversed = selected && focused;
+    let row_style = if reversed {
+        Style::default().add_modifier(Modifier::REVERSED)
+    } else {
+        Style::default()
+    };
+
+    let mut spans = Vec::with_capacity(2);
+    match trust {
+        Some(t) => {
+            let mut gstyle = trust_style(t);
+            if reversed {
+                gstyle = gstyle.add_modifier(Modifier::REVERSED);
+            }
+            spans.push(Span::styled(format!("{marker}{} ", t.glyph()), gstyle));
+        }
+        None => spans.push(Span::styled(marker.to_string(), row_style)),
     }
-    Line::from(Span::styled(text, style))
+    spans.push(Span::styled(
+        format!("{name:<10.10} {h8}.. {ts}{tail}"),
+        row_style,
+    ));
+    Line::from(spans)
 }
 
 /// Compact per-row path indicator from the last probe: ` 3h`, ` x` (no path),

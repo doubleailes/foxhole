@@ -32,7 +32,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crate::config::Config;
 pub use crate::domain::{
     Conversation, Entry, Interface, MsgStatus, NetCommand, NetEvent, Node, NomadNode, Outbound,
-    Page, PageStatus, PathProbe, PeerKind, fmt_bitrate, fmt_bytes, path_summary,
+    Page, PageStatus, PathProbe, PeerKind, Trust, fmt_bitrate, fmt_bytes, path_summary,
 };
 
 pub use boot::{AppState, Scroll};
@@ -88,6 +88,16 @@ pub struct BurnConfirm {
     pub input: String,
     /// Set when the last Enter had the wrong token; cleared on edit.
     pub error: bool,
+}
+
+/// Read-only modal showing a peer's address as a 12-word mnemonic phrase (the
+/// `m` key in the Network tab). Dismissed by any key — it only needs to be read
+/// aloud, so it captures no input.
+pub struct MnemonicView {
+    /// The hex destination hash this phrase encodes (shown for reference).
+    pub hash: String,
+    /// The 12-word mnemonic phrase.
+    pub phrase: String,
 }
 
 /// A top-level tool, rendered as a tab in the menu strip. Each tool owns its
@@ -256,6 +266,8 @@ pub struct App {
     pub new_conv: Option<NewConv>,
     /// When `Some`, the burn-confirmation modal is open (captures all input).
     pub burn_confirm: Option<BurnConfirm>,
+    /// When `Some`, the read-only mnemonic-phrase modal is open (any key closes).
+    pub mnemonic_view: Option<MnemonicView>,
     /// Set once the operator confirms a burn; `main` shreds the config dir and
     /// exits. (The wipe itself is I/O — done outside `App`.)
     pub burn: bool,
@@ -326,6 +338,7 @@ impl App {
             sync_status: None,
             new_conv: None,
             burn_confirm: None,
+            mnemonic_view: None,
             burn: false,
             config: Config::default(),
             commands: VecDeque::new(),
@@ -365,6 +378,12 @@ impl App {
         }
 
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
+        // The read-only mnemonic modal is dismissed by any key.
+        if self.mnemonic_view.is_some() {
+            self.mnemonic_view = None;
+            return;
+        }
 
         // The burn-confirmation modal, when open, captures all input.
         if self.burn_confirm.is_some() {
@@ -430,6 +449,31 @@ impl App {
             alias: String::new(),
             field: NewConvField::Address,
             error: false,
+        });
+    }
+
+    /// Open the read-only mnemonic-phrase modal for a hex destination hash,
+    /// encoding it to a 12-word phrase. No-op if the hash isn't 16 bytes.
+    pub(super) fn open_mnemonic(&mut self, hash: &str) {
+        let bytes = crate::domain::normalize_address(hash);
+        let mut buf = [0u8; 16];
+        if bytes.len() != 32 {
+            return;
+        }
+        for (i, b) in buf.iter_mut().enumerate() {
+            match u8::from_str_radix(&bytes[i * 2..i * 2 + 2], 16) {
+                Ok(v) => *b = v,
+                Err(_) => return,
+            }
+        }
+        let phrase = crate::mnemonic::encode(&buf);
+        self.syslog.push(Entry::now(format!(
+            "[ID] MNEMONIC {}.. -> {phrase}",
+            crate::domain::short_hash(&bytes)
+        )));
+        self.mnemonic_view = Some(MnemonicView {
+            hash: bytes,
+            phrase,
         });
     }
 

@@ -13,4 +13,5 @@ pub mod app;
 pub mod burn;
 pub mod config;
 pub mod domain;
+pub mod mnemonic;
 pub mod storage;

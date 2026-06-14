@@ -35,7 +35,7 @@ use ratatui::layout::{Constraint, Direction, Layout};
 use crate::app::App;
 
 use chrome::{render_status, render_tab_strip, render_tool};
-use popups::{render_burn_popup, render_new_conv_popup, render_sync_popup};
+use popups::{render_burn_popup, render_mnemonic_popup, render_new_conv_popup, render_sync_popup};
 
 /// Draw the whole interface: the tab strip, the active tool's body (fills all
 /// slack), and a fixed status bar.
@@ -67,6 +67,10 @@ pub fn render(frame: &mut Frame, app: &App) {
     // The New Conversation modal is on top of everything when open.
     if let Some(ref nc) = app.new_conv {
         render_new_conv_popup(frame, nc);
+    }
+    // The read-only mnemonic phrase modal.
+    if let Some(ref m) = app.mnemonic_view {
+        render_mnemonic_popup(frame, m);
     }
     // The burn notice sits above all else — it's the most consequential action.
     if let Some(ref b) = app.burn_confirm {
