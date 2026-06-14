@@ -31,20 +31,19 @@ tokio-stream = "0.1"
 # --- Protocol layer (live, behind the `net` feature) ---------------------------
 # LXMF messaging over Reticulum. Both upstreams are Cargo *workspaces* of path
 # crates (no `rslxmf`/`rsreticulum` package exists), so we depend on the member
-# crates directly as sibling checkouts. `rsLXMF` itself path-depends `rsReticulum`
-# via its workspace, so the two repos must sit next to this one; no `[patch]` is
-# needed. All are edition 2024, tokio-based, and AGPL-3.0-or-later — linking them
-# makes a distributed FoxHole binary a combined AGPL work (see docs/lxmf-integration.md).
+# crates directly from their git repos, pinned by commit for reproducibility
+# (an AGPL combined work — see docs/lxmf-integration.md). `rsLXMF` itself depends
+# on the `rsReticulum` crates, so cargo unifies both on the same pinned revisions.
 #
 # Optional so the default build stays dependency-light and offline; `--features net`
 # pulls the whole stack and arms `src/net.rs`.
-rns-crypto    = { path = "../rsReticulum/crates/rns-crypto",    optional = true }
-rns-wire      = { path = "../rsReticulum/crates/rns-wire",      optional = true }
-rns-identity  = { path = "../rsReticulum/crates/rns-identity",  optional = true }
-rns-transport = { path = "../rsReticulum/crates/rns-transport", optional = true }
-rns-interface = { path = "../rsReticulum/crates/rns-interface", optional = true }
-rns-runtime   = { path = "../rsReticulum/crates/rns-runtime",   optional = true }
-lxmf-core     = { path = "../rsLXMF/crates/lxmf-core",          optional = true }
+rns-crypto    = { git = "https://github.com/doubleailes/rsReticulum", rev = "3b91b36f3ec7b3769327e0dd06003875953e81ee", optional = true }
+rns-wire      = { git = "https://github.com/doubleailes/rsReticulum", rev = "3b91b36f3ec7b3769327e0dd06003875953e81ee", optional = true }
+rns-identity  = { git = "https://github.com/doubleailes/rsReticulum", rev = "3b91b36f3ec7b3769327e0dd06003875953e81ee", optional = true }
+rns-transport = { git = "https://github.com/doubleailes/rsReticulum", rev = "3b91b36f3ec7b3769327e0dd06003875953e81ee", optional = true }
+rns-interface = { git = "https://github.com/doubleailes/rsReticulum", rev = "3b91b36f3ec7b3769327e0dd06003875953e81ee", optional = true }
+rns-runtime   = { git = "https://github.com/doubleailes/rsReticulum", rev = "3b91b36f3ec7b3769327e0dd06003875953e81ee", optional = true }
+lxmf-core     = { git = "https://github.com/doubleailes/rsLXMF",      rev = "90e44916a403cfea2446aa945275f42233fd0169", optional = true }
 
 # `bytes::Bytes` is the wire-buffer type the transport's `OutboundRequest` takes.
 bytes = { version = "1", optional = true }
@@ -80,3 +79,17 @@ net = [
     "foxhole-core/net",
     "foxhole-tui/net",
 ]
+
+# `rsLXMF`'s crates depend on the `rns-*` libraries via sibling-checkout paths
+# (`../rsReticulum/...`), which don't exist when `rsLXMF` is fetched from git.
+# Redirect those to the same pinned `rsReticulum` revision so cargo can unify the
+# whole stack on one Reticulum source. (Only consulted under `--features net`.)
+[patch."https://github.com/doubleailes/rsLXMF"]
+rns-crypto    = { git = "https://github.com/doubleailes/rsReticulum", rev = "3b91b36f3ec7b3769327e0dd06003875953e81ee" }
+rns-wire      = { git = "https://github.com/doubleailes/rsReticulum", rev = "3b91b36f3ec7b3769327e0dd06003875953e81ee" }
+rns-identity  = { git = "https://github.com/doubleailes/rsReticulum", rev = "3b91b36f3ec7b3769327e0dd06003875953e81ee" }
+rns-link      = { git = "https://github.com/doubleailes/rsReticulum", rev = "3b91b36f3ec7b3769327e0dd06003875953e81ee" }
+rns-protocol  = { git = "https://github.com/doubleailes/rsReticulum", rev = "3b91b36f3ec7b3769327e0dd06003875953e81ee" }
+rns-transport = { git = "https://github.com/doubleailes/rsReticulum", rev = "3b91b36f3ec7b3769327e0dd06003875953e81ee" }
+rns-runtime   = { git = "https://github.com/doubleailes/rsReticulum", rev = "3b91b36f3ec7b3769327e0dd06003875953e81ee" }
+rns-interface = { git = "https://github.com/doubleailes/rsReticulum", rev = "3b91b36f3ec7b3769327e0dd06003875953e81ee" }
