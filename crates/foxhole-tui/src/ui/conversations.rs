@@ -10,7 +10,7 @@ use ratatui::widgets::{Paragraph, Wrap};
 use crate::app::{App, Pane};
 
 use super::style::{styled_entry, trust_style};
-use super::widgets::{NOSEL, SEL, pane_block, render_scroll};
+use super::widgets::{NOSEL, SEL, count_tag, pane_block, render_scroll, tactical_block};
 
 /// Conversations tool: a peer list and the selected peer's thread side by side,
 /// with the compose buffer spanning the bottom — the Nomadnet layout.
@@ -88,7 +88,11 @@ fn render_peer_list(frame: &mut Frame, app: &App, area: Rect) {
         })
         .collect();
 
-    let para = Paragraph::new(lines).block(pane_block("PEERS", app.focus == Pane::PeerList));
+    let para = Paragraph::new(lines).block(tactical_block(
+        "PEERS",
+        Some(count_tag(app.conversations.len())),
+        app.focus == Pane::PeerList,
+    ));
     frame.render_widget(para, area);
 }
 

@@ -15,27 +15,29 @@ use super::network::render_network;
 use super::notes::render_notes;
 use super::style::{tag_style, ts_style};
 use super::views::{render_guide, render_interfaces, render_log};
-use super::widgets::pane_block;
+use super::widgets::tactical_block;
 
-/// Top menu strip, styled as a HUD mode-selector: a leading accent pip, then each
-/// tool's title left to right with the active one boxed (reversed + bold) and the
-/// rest dimmed, divided by thin tactical rules. Unicode box-drawing throughout.
+/// Top menu strip, styled as a HUD mode-selector: a reversed `FOXHOLE` callsign
+/// block, then each tool's title left to right. The active tool is boxed
+/// (reversed + bold) and flanked by inward `▶ ◀` chevrons; the rest are dimmed,
+/// divided by thin tactical rules. Unicode box-drawing throughout.
 pub(super) fn render_tab_strip(frame: &mut Frame, app: &App, area: Rect) {
-    let mut spans: Vec<Span> = vec![Span::styled(
-        "▌ ",
-        Style::default().add_modifier(Modifier::BOLD),
-    )];
+    let bold = Style::default().add_modifier(Modifier::BOLD);
+    let mut spans: Vec<Span> = vec![
+        Span::styled("▌ FOXHOLE ▐", bold.add_modifier(Modifier::REVERSED)),
+        Span::raw(" "),
+    ];
     for (i, tool) in Tool::ALL.iter().enumerate() {
         if i > 0 {
             spans.push(Span::styled(" │ ", ts_style()));
         }
         if *tool == app.active {
+            spans.push(Span::styled("▶", bold));
             spans.push(Span::styled(
                 format!(" {} ", tool.title()),
-                Style::default()
-                    .add_modifier(Modifier::BOLD)
-                    .add_modifier(Modifier::REVERSED),
+                bold.add_modifier(Modifier::REVERSED),
             ));
+            spans.push(Span::styled("◀", bold));
         } else {
             spans.push(Span::styled(
                 tool.title().to_string(),
@@ -60,9 +62,11 @@ pub(super) fn render_tool(frame: &mut Frame, app: &App, area: Rect) {
     }
 }
 
-/// Bottom status readout: a segmented tactical strip (tool / pane / net LED /
-/// queue / peers / own address) divided by thin rules, followed by the muted
-/// keybinding legend. Never focusable.
+/// Bottom status readout, styled as an instrument cluster: each datum is a
+/// reversed label "chip" (`PANE`, `NET`, `Q`, `PEERS`, `ME`) followed by its
+/// value, with a lit/hollow NET pip, then the muted keybinding legend. The
+/// keybinding legend rides the block's right-corner so the gauges read first.
+/// Never focusable.
 pub(super) fn render_status(frame: &mut Frame, app: &App, area: Rect) {
     let pane = match app.focus {
         Pane::PeerList => "PEERS",
@@ -70,18 +74,29 @@ pub(super) fn render_status(frame: &mut Frame, app: &App, area: Rect) {
         Pane::Transmit => "TRANSMIT",
     };
 
-    // A thin divider between readout segments.
-    let div = || Span::styled(" │ ", ts_style());
+    // A reversed "chip" gauge label.
+    let chip = |label: &str| {
+        Span::styled(
+            format!(" {label} "),
+            Style::default()
+                .add_modifier(Modifier::REVERSED)
+                .add_modifier(Modifier::BOLD),
+        )
+    };
+    let gap = || Span::raw("  ");
 
     let mut spans: Vec<Span> = vec![
+        // The active tool as a bright leading chip.
         Span::styled(
-            format!("{} ", app.active.tag()),
-            tag_style("CFG").add_modifier(Modifier::BOLD),
+            format!(" {} ", app.active.tag()),
+            tag_style("CFG").add_modifier(Modifier::REVERSED),
         ),
-        div(),
-        Span::raw(format!("PANE {pane}")),
-        div(),
-        Span::raw("NET "),
+        gap(),
+        chip("PANE"),
+        Span::raw(format!(" {pane}")),
+        gap(),
+        chip("NET"),
+        Span::raw(" "),
         // `net` reflects whether the protocol stack was compiled in: a lit pip
         // when armed, a hollow dim one when the build is offline.
         if cfg!(feature = "net") {
@@ -89,35 +104,38 @@ pub(super) fn render_status(frame: &mut Frame, app: &App, area: Rect) {
         } else {
             Span::styled("○", ts_style())
         },
-        div(),
-        Span::raw(format!("Q:{}", app.outbound.len())),
-        div(),
-        Span::raw(format!("PEERS:{}", app.conversations.len())),
+        gap(),
+        chip("Q"),
+        Span::raw(format!(" {}", app.outbound.len())),
+        gap(),
+        chip("PEERS"),
+        Span::raw(format!(" {}", app.conversations.len())),
     ];
 
     // Short form of our own address (full one lives in the Network tab).
     match &app.local_address {
         Some(a) if a.len() >= 8 => {
-            spans.push(div());
+            spans.push(gap());
+            spans.push(chip("ME"));
             spans.push(Span::styled(
-                format!("ME:{}\u{2026}", &a[..8]),
+                format!(" {}\u{2026}", &a[..8]),
                 tag_style("ID"),
             ));
         }
         Some(a) => {
-            spans.push(div());
-            spans.push(Span::styled(format!("ME:{a}"), tag_style("ID")));
+            spans.push(gap());
+            spans.push(chip("ME"));
+            spans.push(Span::styled(format!(" {a}"), tag_style("ID")));
         }
         None => {}
     }
 
-    // The keybinding legend, set off and muted so the readout reads first.
-    spans.push(Span::styled("   ▐ ", ts_style()));
-    spans.push(Span::styled(
-        "Ctrl+N/P:Tab  Ctrl+O:New  Tab:Pane  Up/Dn:Peer  Ctrl+S:Send  Ctrl+R:Sync  Ctrl+X:Purge  Ctrl+Q:Quit",
+    // The keybinding legend rides the right corner of the status frame, muted.
+    let legend = Span::styled(
+        " Ctrl+N/P Tab · Ctrl+O New · Tab Pane · Ctrl+S Send · Ctrl+R Sync · Ctrl+Q Quit ",
         ts_style(),
-    ));
-
-    let para = Paragraph::new(Line::from(spans)).block(pane_block("STATUS", false));
+    );
+    let para =
+        Paragraph::new(Line::from(spans)).block(tactical_block("STATUS", Some(legend), false));
     frame.render_widget(para, area);
 }

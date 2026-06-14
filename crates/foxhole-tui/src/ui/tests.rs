@@ -1,5 +1,6 @@
 //! Unit tests for the pure rendering helpers (styling, wrapping, layout math).
 
+use super::network::signal_meter;
 use super::style::{fmt_time, leading_tag, line_style, status_token, sys_category, tag_style};
 use super::widgets::{centered_rect, wrapped_height};
 use crate::app::MsgStatus;
@@ -77,6 +78,22 @@ fn formats_utc_hms() {
         "time-of-day wraps daily"
     );
     assert_eq!(fmt_time(1_700_000_000), "22:13:20", "known UTC instant");
+}
+
+#[test]
+fn signal_meter_strength_falls_off_with_hops() {
+    // Nearer peers read stronger; each cell is one of `▰` (lit) / `▱` (dim).
+    assert_eq!(signal_meter(Some(0)), "▰▰▰▰");
+    assert_eq!(signal_meter(Some(1)), "▰▰▰▰");
+    assert_eq!(signal_meter(Some(2)), "▰▰▰▱");
+    assert_eq!(signal_meter(Some(4)), "▰▱▱▱");
+    // Distant (>=5 hops) and known-but-pathless (`None`) both read empty.
+    assert_eq!(signal_meter(Some(9)), "▱▱▱▱");
+    assert_eq!(signal_meter(None), "▱▱▱▱");
+    // Every meter is exactly four cells wide so rows stay aligned.
+    for h in [None, Some(0), Some(3), Some(50)] {
+        assert_eq!(signal_meter(h).chars().count(), 4);
+    }
 }
 
 #[test]
