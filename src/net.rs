@@ -710,15 +710,64 @@ fn decode_link_payload(my_hash: &[u8; 16], data: &[u8]) -> Option<LxMessage> {
     LxMessage::unpack(&unpack_data).ok()
 }
 
-/// Forward a decoded inbound message to the UI.
+/// Forward a decoded inbound message to the UI, plus any location telemetry it
+/// carries (so the World Map can plot the sender).
 async fn emit_message(events: &mpsc::Sender<NetEvent>, msg: LxMessage) {
+    let source = hex::encode(msg.source_hash);
+    let location = telemetry_location(&msg);
     let _ = events
         .send(NetEvent::Message {
-            source: hex::encode(msg.source_hash),
+            source: source.clone(),
             title: msg.title,
             content: msg.content,
         })
         .await;
+    if let Some((lat, lon)) = location {
+        let _ = events.send(NetEvent::Telemetry { source, lat, lon }).await;
+    }
+}
+
+/// Sideband telemetry sensor id for the location sensor (`sense.py`
+/// `Sensor.SID_LOCATION`). The telemetry field is a msgpack map keyed by sensor
+/// id; this is the entry carrying latitude/longitude.
+const SID_LOCATION: u8 = 0x0f;
+
+/// Extract a `(lat, lon)` fix from a message's Sideband-style telemetry field,
+/// if present and plausible.
+fn telemetry_location(msg: &LxMessage) -> Option<(f64, f64)> {
+    let bytes = msg.get_field(lxmf_core::constants::FIELD_TELEMETRY)?;
+    parse_location_telemetry(bytes)
+}
+
+/// Pure decode half of [`telemetry_location`] (split out so it is unit-testable
+/// without a whole `LxMessage`). The `FIELD_TELEMETRY` value is a msgpack map
+/// `{ sensor_id: value }`; the location sensor packs an array whose first two
+/// elements are latitude and longitude — encoded either as floats (degrees) or
+/// as Sideband's ×1e6 fixed-point integers, both of which we accept. Implausible
+/// coordinates are rejected so a misparse plots nothing rather than noise.
+fn parse_location_telemetry(bytes: &[u8]) -> Option<(f64, f64)> {
+    let value = rmpv::decode::read_value(&mut &bytes[..]).ok()?;
+    let map = value.as_map()?;
+    let location = map.iter().find_map(|(k, v)| {
+        let id = k.as_u64().or_else(|| k.as_i64().map(|i| i as u64));
+        (id == Some(u64::from(SID_LOCATION))).then_some(v)
+    })?;
+    let arr = location.as_array()?;
+    let lat = telemetry_coord(arr.first()?)?;
+    let lon = telemetry_coord(arr.get(1)?)?;
+    ((-90.0..=90.0).contains(&lat) && (-180.0..=180.0).contains(&lon)).then_some((lat, lon))
+}
+
+/// One coordinate from a telemetry array. A msgpack *integer* is Sideband's ×1e6
+/// fixed-point encoding (so it is scaled back to degrees); a *float* is already
+/// degrees. Integers are checked first because rmpv's `as_f64` also coerces
+/// integers, which would otherwise leave the fixed-point value unscaled.
+fn telemetry_coord(v: &rmpv::Value) -> Option<f64> {
+    if let Some(i) = v.as_i64() {
+        Some(i as f64 / 1e6)
+    } else {
+        v.as_f64()
+    }
 }
 
 /// Decode an inbound payload via `decode`, deliver it to the right thread, and
@@ -1554,6 +1603,65 @@ mod tests {
         assert_eq!(map[0].1.as_str(), Some("hi"));
         assert_eq!(map[1].0.as_str(), Some("var_p"));
         assert_eq!(map[1].1.as_str(), Some("2"));
+    }
+
+    /// Build a `FIELD_TELEMETRY` payload: a msgpack `{ sensor_id: value }` map
+    /// with a single location sensor carrying `coords`.
+    fn telemetry_blob(coords: Vec<rmpv::Value>) -> Vec<u8> {
+        let map = rmpv::Value::Map(vec![(
+            rmpv::Value::from(SID_LOCATION),
+            rmpv::Value::Array(coords),
+        )]);
+        let mut buf = Vec::new();
+        rmpv::encode::write_value(&mut buf, &map).expect("encode");
+        buf
+    }
+
+    #[test]
+    fn parses_float_encoded_location_telemetry() {
+        let blob = telemetry_blob(vec![
+            rmpv::Value::from(48.85_f64),
+            rmpv::Value::from(2.35_f64),
+            rmpv::Value::from(0.0_f64), // altitude, ignored
+        ]);
+        let (lat, lon) = parse_location_telemetry(&blob).expect("a fix");
+        assert!((lat - 48.85).abs() < 1e-9);
+        assert!((lon - 2.35).abs() < 1e-9);
+    }
+
+    #[test]
+    fn parses_scaled_integer_location_telemetry() {
+        // Sideband's ×1e6 fixed-point encoding.
+        let blob = telemetry_blob(vec![
+            rmpv::Value::from(48_850_000_i64),
+            rmpv::Value::from(-2_350_000_i64),
+        ]);
+        let (lat, lon) = parse_location_telemetry(&blob).expect("a fix");
+        assert!((lat - 48.85).abs() < 1e-6);
+        assert!((lon + 2.35).abs() < 1e-6);
+    }
+
+    #[test]
+    fn rejects_non_location_and_implausible_telemetry() {
+        // A non-location sensor only (battery 0x04) → no fix.
+        let only_battery = {
+            let map =
+                rmpv::Value::Map(vec![(rmpv::Value::from(0x04_u8), rmpv::Value::from(95_u8))]);
+            let mut buf = Vec::new();
+            rmpv::encode::write_value(&mut buf, &map).expect("encode");
+            buf
+        };
+        assert!(parse_location_telemetry(&only_battery).is_none());
+
+        // Out-of-range coordinates are rejected rather than clamped to noise.
+        let bogus = telemetry_blob(vec![
+            rmpv::Value::from(999.0_f64),
+            rmpv::Value::from(0.0_f64),
+        ]);
+        assert!(parse_location_telemetry(&bogus).is_none());
+
+        // Not even msgpack → no panic, no fix.
+        assert!(parse_location_telemetry(&[0xff, 0x00, 0x13]).is_none());
     }
 
     #[test]

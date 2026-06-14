@@ -84,6 +84,10 @@ pub enum NetEvent {
         title: String,
         content: String,
     },
+    /// A peer shared its position via LXMF telemetry (Sideband-style). `source`
+    /// is the hex destination hash; `lat`/`lon` are WGS-84 decimal degrees. Fed
+    /// to the World Map tool by setting the conversation's location.
+    Telemetry { source: String, lat: f64, lon: f64 },
     /// Propagation-sync progress: `Some(status)` shows the pop-up, `None` hides it.
     Sync(Option<String>),
     /// The derived 64-byte conversation-store key, handed up once at startup so
