@@ -33,7 +33,8 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crate::config::Config;
 pub use crate::domain::{
     Conversation, Entry, GeoPos, Interface, MsgStatus, NetCommand, NetEvent, Node, NomadNode,
-    Outbound, Page, PageStatus, PathProbe, PeerKind, Trust, fmt_bitrate, fmt_bytes, path_summary,
+    Outbound, Page, PageStatus, PathProbe, PeerKind, Trust, Zone, fmt_bitrate, fmt_bytes,
+    path_summary,
 };
 pub use crate::notes::Notes;
 
@@ -277,6 +278,9 @@ pub struct App {
     pub map: MapView,
     /// Selected marker index within [`App::map_markers`] (World Map tab).
     pub map_selected: usize,
+    /// Hazard areas overlaid on the World Map (war zones / areas of operations).
+    /// Seeded with a demo set; overridden from `zones.conf` when present.
+    pub zones: Vec<Zone>,
     /// Latest rnpath-style path probe per hex destination hash (Network tab).
     pub path_probes: HashMap<String, PathProbe>,
     /// Live interface status (Interfaces tab); empty until the stack reports.
@@ -371,6 +375,7 @@ impl App {
             net_col: NetColumn::Peers,
             map: MapView::default(),
             map_selected: 0,
+            zones: crate::zones::demo(),
             path_probes: HashMap::new(),
             interfaces: Vec::new(),
             link_count: 0,

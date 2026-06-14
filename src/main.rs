@@ -15,7 +15,7 @@
 // referring to `crate::app`, `crate::config`, etc. unchanged.
 #[cfg(feature = "net")]
 pub use foxhole_core::storage;
-pub use foxhole_core::{app, burn, config, notes};
+pub use foxhole_core::{app, burn, config, notes, zones};
 use foxhole_tui::ui;
 
 #[cfg(feature = "net")]
@@ -62,6 +62,11 @@ async fn main() -> io::Result<()> {
     let mut app = App::new();
     app.config = config::Config::load();
     app.notes = notes::Notes::load();
+    // Operator-defined hazard zones override the seeded demo set when present.
+    let zones = zones::load();
+    if !zones.is_empty() {
+        app.zones = zones;
+    }
 
     // Under `net` the network task gets a clone of the config plus channels for
     // outbound messages and UI commands; offline it is a quiet stub.

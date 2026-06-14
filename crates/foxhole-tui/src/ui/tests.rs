@@ -121,8 +121,11 @@ fn centered_rect_centers_and_clamps() {
 /// An `App` parked on the World Map tab with the operator fixed at Paris and one
 /// peer (London) carrying telemetry — the shape the map renders.
 fn map_app() -> crate::app::App {
-    use crate::app::{GeoPos, Tool};
+    use crate::app::{AppState, GeoPos, Tool};
     let mut app = crate::app::App::new();
+    // Force the console (the splash owns the frame otherwise; under workspace
+    // feature unification core's `cfg!(test)` is false here, so it boots Splash).
+    app.state = AppState::Running;
     app.active = Tool::WorldMap;
     app.config.display_name = "base".to_string();
     app.config.lat = Some(48.85);
@@ -149,6 +152,9 @@ fn world_map_renders_world_markers_and_roster() {
     assert!(text.contains("POSITIONS"), "roster panel title");
     assert!(text.contains("base"), "operator marker label");
     assert!(text.contains("london"), "peer marker label");
+    // The seeded demo hazard zones overlay: panel title + an AO callsign.
+    assert!(text.contains("HAZARD AOs"), "hazard-zone panel title");
+    assert!(text.contains("AO ALPHA"), "demo hazard zone listed");
     // The braille world outline drew at least some land cells.
     assert!(
         text.chars().any(|c| ('\u{2801}'..='\u{28ff}').contains(&c)),
@@ -158,11 +164,12 @@ fn world_map_renders_world_markers_and_roster() {
 
 #[test]
 fn world_map_empty_without_a_fix() {
+    use crate::app::{App, AppState, Tool};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
-    use crate::app::{App, Tool};
 
     let mut app = App::new();
+    app.state = AppState::Running;
     app.active = Tool::WorldMap;
     let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
     term.draw(|f| crate::ui::render(f, &app)).unwrap();
