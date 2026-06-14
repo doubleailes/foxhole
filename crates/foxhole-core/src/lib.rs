@@ -16,3 +16,4 @@ pub mod domain;
 pub mod mnemonic;
 pub mod notes;
 pub mod storage;
+pub mod zones;

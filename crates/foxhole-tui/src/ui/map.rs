@@ -11,9 +11,9 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::symbols::Marker;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
-use ratatui::widgets::canvas::{Canvas, Map, MapResolution, Points};
+use ratatui::widgets::canvas::{Canvas, Circle, Map, MapResolution, Points};
 
-use crate::app::{App, MapMarker, MarkerKind};
+use crate::app::{App, MapMarker, MarkerKind, Zone};
 
 use super::style::{ACCENT, BG, BORDER_LIVE, BORDER_REST, INK, base_style, tag_style, ts_style};
 use super::widgets::{NOSEL, SEL, count_tag, tactical_block};
@@ -22,6 +22,8 @@ use super::widgets::{NOSEL, SEL, count_tag, tactical_block};
 const LAND: Color = BORDER_REST;
 /// Peer marker tint — a bright phosphor green.
 const PEER: Color = Color::Rgb(120, 220, 160);
+/// Hazard-zone tint — dried tactical red, matching the `ERR` palette.
+const ZONE: Color = Color::Rgb(214, 96, 88);
 
 /// World Map tool: the canvas on the left (most of the width) and a selectable
 /// roster of plotted positions on the right.
@@ -36,8 +38,16 @@ pub(super) fn render_map(frame: &mut Frame, app: &App, area: Rect) {
         .constraints([Constraint::Min(20), Constraint::Length(34)])
         .split(rows[0]);
 
+    // Right column stacks the positions roster over the hazard-zone roster.
+    let zone_h = (app.zones.len() as u16 + 2).clamp(3, 10);
+    let right = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(4), Constraint::Length(zone_h)])
+        .split(cols[1]);
+
     render_canvas(frame, app, cols[0]);
-    render_marker_list(frame, app, cols[1]);
+    render_marker_list(frame, app, right[0]);
+    render_zone_list(frame, app, right[1]);
 
     // Footer: the key legend.
     let legend = Line::styled(
@@ -53,6 +63,7 @@ fn render_canvas(frame: &mut Frame, app: &App, area: Rect) {
     let view = app.map;
     let markers = app.map_markers();
     let selected = app.map_selected;
+    let zones = app.zones.clone();
 
     // Pre-split coordinates by kind so each layer is one cheap `Points` draw.
     let peer_pts: Vec<(f64, f64)> = markers
@@ -86,6 +97,28 @@ fn render_canvas(frame: &mut Frame, app: &App, area: Rect) {
                 resolution: MapResolution::High,
                 color: LAND,
             });
+            // Hazard zones sit just above the land: a red danger ring per area,
+            // then its label, beneath the operator/peer markers so those stay
+            // legible on top.
+            ctx.layer();
+            for z in &zones {
+                ctx.draw(&Circle {
+                    x: z.center.lon,
+                    y: z.center.lat,
+                    radius: z.radius_deg(),
+                    color: ZONE,
+                });
+            }
+            for z in &zones {
+                ctx.print(
+                    z.center.lon,
+                    z.center.lat,
+                    Line::styled(
+                        format!("\u{26a0} {}", z.label),
+                        Style::default().fg(ZONE).add_modifier(Modifier::BOLD),
+                    ),
+                );
+            }
             ctx.layer();
             ctx.draw(&Points {
                 coords: &peer_pts,
@@ -180,5 +213,33 @@ fn marker_row(m: &MapMarker, selected: bool) -> Line<'static> {
             format!("{:<12.12} {:>6.2},{:>7.2}", m.label, m.pos.lat, m.pos.lon),
             row,
         ),
+    ])
+}
+
+/// Bottom-right roster of overlaid hazard zones, one per row with its danger
+/// radius. Read-only — zones come from `zones.conf` (or the demo set), not from
+/// keyboard interaction.
+fn render_zone_list(frame: &mut Frame, app: &App, area: Rect) {
+    let lines: Vec<Line<'static>> = if app.zones.is_empty() {
+        vec![Line::styled("  (no hazard zones)", ts_style())]
+    } else {
+        app.zones.iter().map(zone_row).collect()
+    };
+    let para = Paragraph::new(lines).block(tactical_block(
+        "HAZARD AOs",
+        Some(count_tag(app.zones.len())),
+        false,
+    ));
+    frame.render_widget(para, area);
+}
+
+/// One hazard row: `⚠ AO ALPHA          r450km`, in the danger-red palette.
+fn zone_row(z: &Zone) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            format!("\u{26a0} {:<14.14}", z.label),
+            Style::default().fg(ZONE).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(format!(" r{:.0}km", z.radius_km), ts_style()),
     ])
 }

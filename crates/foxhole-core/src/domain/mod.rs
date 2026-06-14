@@ -339,6 +339,41 @@ impl GeoPos {
     }
 }
 
+/// A hazard area overlaid on the World Map — a named region with a danger
+/// radius, drawn as a red circle. Sourced from the operator's hand-editable
+/// `zones.conf` (situational intel) or the offline demo set; e.g. an active
+/// conflict "area of operations" the operator wants kept in view.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Zone {
+    /// Short label (e.g. `AO ALPHA`), shown on the map and in the roster.
+    pub label: String,
+    /// Centre of the hazard area.
+    pub center: GeoPos,
+    /// Danger radius in kilometres.
+    pub radius_km: f64,
+}
+
+impl Zone {
+    /// A zone with its centre normalised and a non-negative radius.
+    pub fn new(label: impl Into<String>, lat: f64, lon: f64, radius_km: f64) -> Self {
+        Self {
+            label: label.into(),
+            center: GeoPos::new(lat, lon),
+            radius_km: if radius_km.is_finite() {
+                radius_km.max(0.0)
+            } else {
+                0.0
+            },
+        }
+    }
+
+    /// Radius in latitude degrees (~111 km per degree) for the canvas circle,
+    /// floored so a small zone still renders as a visible ring.
+    pub fn radius_deg(&self) -> f64 {
+        (self.radius_km / 111.0).max(0.3)
+    }
+}
+
 /// Wrap a longitude into the −180..=180 range so panning across the antimeridian
 /// (or out-of-range telemetry) stays on the map.
 pub(crate) fn wrap_lon(lon: f64) -> f64 {
