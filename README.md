@@ -57,8 +57,10 @@ The remainder of Section 1 is withheld under exemption (b)(█).
   without ████████████████.
 - **Zero unsolicited emissions.** Propagation sync is **operator-initiated
   only**; the terminal does not beacon on its own ████████████.
-- **Tactical box-drawing HUD** — heavy command-console frames, the live pane
-  double-ruled and ████████ from the rest, a segmented status readout; stays
+- **Truecolor tactical HUD** — a dark field-night console with phosphor-green
+  panels, lit nameplates on the live pane, brass callsign keys, instrument-cluster
+  status gauges and colour-graded signal meters. Tuned for a modern terminal
+  (Raspberry Pi OS Bookworm and friends); colour only reinforces — it stays
   legible stripped to one bit on ██████ recovered from ████████████.
 
 Capabilities 7 through ██ are withheld. ████████████████████████████████████
@@ -102,6 +104,11 @@ reports each subsystem's status as it actually comes up, then drops into the
 console the moment the operator address is live. Pure text, no emblem image.
 `FOXHOLE_NO_SPLASH=1` boots straight to console; any key skips. The leanest
 build (`--no-default-features`) omits the sequence entirely.
+
+**Operating surface.** The console is tuned for a modern UTF-8 + 24-bit
+("truecolor") terminal — the default on Raspberry Pi OS Bookworm and comparable
+field hardware. Colour only reinforces hierarchy; on a monochrome or colour-blind
+surface the heavy/double box-drawing and bold nameplates still carry focus.
 
 ---
 

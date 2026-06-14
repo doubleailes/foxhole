@@ -53,20 +53,23 @@ tooling).
 
 ### `crates/foxhole-tui` — rendering (ratatui), pure `&App` → frame
 
-Depends on `foxhole-core` + `foxhole-micron`. **Tactical Unicode box-drawing
-frames** — resting panes use the heavy `FRAME_BORDER` (`┏━┓┃┗┛`), the focused
-pane the double-ruled `FOCUS_BORDER` (`╔═╗║╚╝`), with a `▶` selection chevron and
-a segmented HUD tab strip + status readout (this trades the former strict 7-bit
-ASCII chrome for the heavier look, assuming a UTF-8 terminal). Focus stays legible
-in monochrome via border weight + `REVERSED` titles, while scrollback *content* is
-tinted by a tactical palette (`style::tag_style`: RX/TX/DLV/LNK/RT/CFG/WRN/ERR/…,
-muted timestamps). The frame helper (`tactical_block`) carries an optional
-right-corner HUD readout — scroll position (`12–34/80`), roster counts, a `◆LIVE◆`
-focus stamp — overflowing scroll panes get a `▲█┊▼` scrollbar on the right border,
-the tab strip a `FOXHOLE` callsign block + chevron-capped active tab, the status
-bar reversed instrument "chips" + a NET `●`/`○` pip, and the Network roster a
-`▰▰▱▱` hop-count signal meter. `src/ui/` is split into a shared toolkit (`style.rs`,
-`widgets.rs`), chrome (`chrome.rs`), overlays (`popups.rs`), and one body module per tool.
+Depends on `foxhole-core` + `foxhole-micron`. **Truecolor tactical theme over
+Unicode box-drawing** — a dark field-night surface (`style::BG`, painted under the
+whole frame and shared by the boot splash) with phosphor-green panels: resting
+panes use the heavy `FRAME_BORDER` (`┏━┓┃┗┛`) with a dim border, the focused pane
+the double-ruled `FOCUS_BORDER` (`╔═╗║╚╝`) with a lit border + ink-on-green
+nameplate, a `▶` selection chevron, brass callsign/active-tab keys, and
+instrument-cluster status chips. This targets a modern UTF-8 + 24-bit terminal
+(Raspberry Pi OS Bookworm's default), trading the former strict 7-bit ASCII
+chrome; colour only reinforces hierarchy, so focus still reads stripped to mono
+via border weight + bold/`REVERSED` nameplates. Scrollback *content* is tinted by
+`style::tag_style` (RX/TX/DLV/LNK/RT/CFG/WRN/ERR/…, muted timestamps). The frame
+helper (`tactical_block`) carries an optional right-corner HUD readout — scroll
+position (`12–34/80`), roster counts, a `◆LIVE◆` focus stamp; overflowing scroll
+panes get a colour-graded `▲█┊▼` scrollbar on the right border, the Network roster
+a colour-graded `▰▰▱▱` hop-count signal meter (green→amber→red). `src/ui/` is split
+into a shared toolkit (`style.rs`, `widgets.rs`), chrome (`chrome.rs`), overlays
+(`popups.rs`), and one body module per tool.
 `src/splash.rs` *(default-on `splash` feature)* renders the cold-boot bring-up
 monitor; state lives in core's `App` (`AppState::{Splash,Running}`,
 `BootStep`/`Boot`), advanced by `main`'s 120 ms tick and folded from real

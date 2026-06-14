@@ -13,18 +13,22 @@ use super::browser::render_browser;
 use super::conversations::render_conversations;
 use super::network::render_network;
 use super::notes::render_notes;
-use super::style::{tag_style, ts_style};
+use super::style::{ACCENT, BG, BORDER_LIVE, INK, PANEL, base_style, tag_style, ts_style};
 use super::views::{render_guide, render_interfaces, render_log};
 use super::widgets::tactical_block;
 
-/// Top menu strip, styled as a HUD mode-selector: a reversed `FOXHOLE` callsign
-/// block, then each tool's title left to right. The active tool is boxed
-/// (reversed + bold) and flanked by inward `▶ ◀` chevrons; the rest are dimmed,
-/// divided by thin tactical rules. Unicode box-drawing throughout.
+/// Top menu strip, styled as a HUD mode-selector: a brass `FOXHOLE` callsign
+/// nameplate, then each tool's title left to right. The active tool is a lit
+/// phosphor key (ink-on-green) flanked by inward `▶ ◀` chevrons; the rest are
+/// dimmed, divided by thin tactical rules. Unicode box-drawing throughout.
 pub(super) fn render_tab_strip(frame: &mut Frame, app: &App, area: Rect) {
-    let bold = Style::default().add_modifier(Modifier::BOLD);
+    let bold = Modifier::BOLD;
     let mut spans: Vec<Span> = vec![
-        Span::styled("▌ FOXHOLE ▐", bold.add_modifier(Modifier::REVERSED)),
+        // Brass callsign nameplate.
+        Span::styled(
+            "▌ FOXHOLE ▐",
+            Style::default().fg(BG).bg(ACCENT).add_modifier(bold),
+        ),
         Span::raw(" "),
     ];
     for (i, tool) in Tool::ALL.iter().enumerate() {
@@ -32,20 +36,27 @@ pub(super) fn render_tab_strip(frame: &mut Frame, app: &App, area: Rect) {
             spans.push(Span::styled(" │ ", ts_style()));
         }
         if *tool == app.active {
-            spans.push(Span::styled("▶", bold));
+            // Active tool: a lit phosphor key flanked by inward chevrons.
+            spans.push(Span::styled(
+                "▶",
+                Style::default().fg(BORDER_LIVE).add_modifier(bold),
+            ));
             spans.push(Span::styled(
                 format!(" {} ", tool.title()),
-                bold.add_modifier(Modifier::REVERSED),
+                Style::default().fg(BG).bg(BORDER_LIVE).add_modifier(bold),
             ));
-            spans.push(Span::styled("◀", bold));
+            spans.push(Span::styled(
+                "◀",
+                Style::default().fg(BORDER_LIVE).add_modifier(bold),
+            ));
         } else {
             spans.push(Span::styled(
                 tool.title().to_string(),
-                Style::default().add_modifier(Modifier::DIM),
+                Style::default().fg(INK).add_modifier(Modifier::DIM),
             ));
         }
     }
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+    frame.render_widget(Paragraph::new(Line::from(spans)).style(base_style()), area);
 }
 
 /// Dispatch to the active tool's body renderer. Each tool owns its internal
@@ -63,10 +74,9 @@ pub(super) fn render_tool(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 /// Bottom status readout, styled as an instrument cluster: each datum is a
-/// reversed label "chip" (`PANE`, `NET`, `Q`, `PEERS`, `ME`) followed by its
-/// value, with a lit/hollow NET pip, then the muted keybinding legend. The
-/// keybinding legend rides the block's right-corner so the gauges read first.
-/// Never focusable.
+/// raised-panel label "chip" (`PANE`, `NET`, `Q`, `PEERS`, `ME`) followed by its
+/// value, led by a brass tool chip and a lit/hollow NET pip. The keybinding
+/// legend rides the block's right-corner so the gauges read first. Never focusable.
 pub(super) fn render_status(frame: &mut Frame, app: &App, area: Rect) {
     let pane = match app.focus {
         Pane::PeerList => "PEERS",
@@ -74,22 +84,26 @@ pub(super) fn render_status(frame: &mut Frame, app: &App, area: Rect) {
         Pane::Transmit => "TRANSMIT",
     };
 
-    // A reversed "chip" gauge label.
+    // A raised-panel "chip" gauge label.
     let chip = |label: &str| {
         Span::styled(
             format!(" {label} "),
             Style::default()
-                .add_modifier(Modifier::REVERSED)
+                .fg(INK)
+                .bg(PANEL)
                 .add_modifier(Modifier::BOLD),
         )
     };
     let gap = || Span::raw("  ");
 
     let mut spans: Vec<Span> = vec![
-        // The active tool as a bright leading chip.
+        // The active tool as a bright brass leading chip.
         Span::styled(
             format!(" {} ", app.active.tag()),
-            tag_style("CFG").add_modifier(Modifier::REVERSED),
+            Style::default()
+                .fg(BG)
+                .bg(ACCENT)
+                .add_modifier(Modifier::BOLD),
         ),
         gap(),
         chip("PANE"),

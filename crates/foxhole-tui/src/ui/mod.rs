@@ -7,11 +7,16 @@
 //!     structurally and not by colour alone. This trades the old strict 7-bit
 //!     ASCII chrome (which targeted line-printer gear) for the heavier
 //!     command-console look — it assumes a UTF-8 terminal.
-//!   * **Tactical palette** — scrollback content is tinted by category (see
-//!     [`style::tag_style`]): RX/TX traffic, delivery, link/routing, config,
-//!     warnings, errors, with muted timestamps. The frame + active-pane cues
-//!     still degrade to monochrome cleanly (border weight, `REVERSED` titles,
-//!     the `▶` selection chevron).
+//!   * **Truecolor tactical theme** — a dark field-night surface ([`style::BG`])
+//!     with phosphor-green panels: resting borders dim, the focused border lit,
+//!     filled title nameplates, brass callsign/active-tab keys, instrument-cluster
+//!     status chips, and a colour-graded `▰▰▱▱` signal meter. Assumes a modern
+//!     UTF-8 + 24-bit terminal (Raspberry Pi OS Bookworm's default and friends).
+//!   * **Degrades cleanly** — colour only ever *reinforces* hierarchy; focus and
+//!     structure still read with colour stripped, carried by border weight (heavy
+//!     vs. double), `REVERSED`/bold nameplates, and the `▶` selection chevron.
+//!     Scrollback content is also tinted by category (see [`style::tag_style`]):
+//!     RX/TX traffic, delivery, link/routing, config, warnings, errors.
 //!
 //! Layout has two tiers, mirroring Nomadnet: a tab strip selects the active
 //! [`Tool`](crate::app::Tool), whose body fills the middle; a shared status bar
@@ -36,11 +41,13 @@ mod widgets;
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::widgets::Block;
 
 use crate::app::App;
 
 use chrome::{render_status, render_tab_strip, render_tool};
 use popups::{render_burn_popup, render_mnemonic_popup, render_new_conv_popup, render_sync_popup};
+use style::base_style;
 
 /// Draw the whole interface: the tab strip, the active tool's body (fills all
 /// slack), and a fixed status bar.
@@ -51,6 +58,10 @@ pub fn render(frame: &mut Frame, app: &App) {
         crate::splash::render(frame, app);
         return;
     }
+
+    // Paint the field-night background under everything so the whole console
+    // reads as one dark tactical surface, including the gaps between panels.
+    frame.render_widget(Block::default().style(base_style()), frame.area());
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)

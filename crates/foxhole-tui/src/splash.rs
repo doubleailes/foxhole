@@ -30,6 +30,9 @@ const BLOCK_W: u16 = (STATUS_W as u16 + 2) + 1 + 30;
 const GREEN: Color = Color::Rgb(143, 166, 122);
 /// Faded brass / amber — armed but holding (matches `ui::tag_style` "WRN").
 const AMBER: Color = Color::Rgb(159, 139, 60);
+/// Field-night background — matches the console's `ui::style::BG` so cold boot
+/// and the running console share one continuous dark tactical surface.
+const BG: Color = Color::Rgb(13, 17, 13);
 
 /// Label and reported status for a boot line.
 fn step_text(step: BootStep) -> (&'static str, &'static str) {
@@ -58,6 +61,11 @@ fn header_lines() -> [&'static str; 2] {
 pub fn render(frame: &mut Frame, app: &App) {
     let area = frame.area();
     frame.render_widget(Clear, area);
+    // Lay the field-night surface so the boot screen matches the console.
+    frame.render_widget(
+        ratatui::widgets::Block::default().style(Style::default().bg(BG)),
+        area,
+    );
 
     let mut lines: Vec<Line> = header_lines()
         .iter()

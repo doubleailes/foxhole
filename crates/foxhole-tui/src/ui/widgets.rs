@@ -17,7 +17,7 @@ use ratatui::widgets::{
     Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
 };
 
-use super::style::ts_style;
+use super::style::{BG, BORDER_LIVE, BORDER_REST, INK, PANEL, base_style, ts_style};
 use crate::app::Scroll;
 
 /// Heavy box-drawing frame — the default tactical panel border (`┏━┓┃┗┛`). Reads
@@ -63,35 +63,60 @@ pub(super) fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
 
 /// A bordered tactical panel with an optional right-aligned HUD readout in the
 /// top border (scroll position, item count, …). Resting panes wear the heavy
-/// [`FRAME_BORDER`]; the active pane is flagged by the double-ruled
-/// [`FOCUS_BORDER`], a brightened border, a reversed title, a leading status pip
-/// (`◆` live / `·` resting) and a `LIVE` corner stamp — so focus is legible
-/// whether or not the terminal honours colour.
+/// [`FRAME_BORDER`] with a dim border and a panel nameplate; the active pane is
+/// flagged by the double-ruled [`FOCUS_BORDER`], a lit phosphor border, an
+/// ink-on-green nameplate, a leading status pip (`◆` live / `·` resting) and a
+/// `LIVE` corner stamp — so focus is legible whether or not the terminal honours
+/// colour (border weight + bold carry it in monochrome).
 pub(super) fn tactical_block<'a>(
     title: &'a str,
     right: Option<Span<'a>>,
     active: bool,
 ) -> Block<'a> {
-    let mut title_style = Style::default().add_modifier(Modifier::BOLD);
-    let mut border_style = Style::default();
-    let (set, pip) = if active {
-        title_style = title_style.add_modifier(Modifier::REVERSED);
-        border_style = border_style.add_modifier(Modifier::BOLD);
-        (FOCUS_BORDER, "◆")
+    // The active pane: double rule, lit phosphor border, a lit nameplate (ink-on-
+    // green) and a `◆` pip. Resting: heavy rule, dim border, a panel nameplate.
+    let (set, pip, border_style, title_style) = if active {
+        (
+            FOCUS_BORDER,
+            "◆",
+            Style::default()
+                .fg(BORDER_LIVE)
+                .add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(BG)
+                .bg(BORDER_LIVE)
+                .add_modifier(Modifier::BOLD),
+        )
     } else {
-        (FRAME_BORDER, "·")
+        (
+            FRAME_BORDER,
+            "·",
+            Style::default().fg(BORDER_REST),
+            Style::default()
+                .fg(INK)
+                .bg(PANEL)
+                .add_modifier(Modifier::BOLD),
+        )
     };
     let mut block = Block::default()
         .borders(Borders::ALL)
         .border_set(set)
         .border_style(border_style)
+        .style(base_style())
         .title_top(Line::from(Span::styled(
             format!(" {pip} {title} "),
             title_style,
         )));
     // Right-corner readout: the caller's tag, or a `LIVE` stamp on the focused pane.
     let corner = right.or_else(|| {
-        active.then(|| Span::styled(" ◆LIVE◆ ", Style::default().add_modifier(Modifier::BOLD)))
+        active.then(|| {
+            Span::styled(
+                " ◆LIVE◆ ",
+                Style::default()
+                    .fg(BORDER_LIVE)
+                    .add_modifier(Modifier::BOLD),
+            )
+        })
     });
     if let Some(tag) = corner {
         block = block.title_top(Line::from(tag).right_aligned());
@@ -136,7 +161,11 @@ fn render_scrollbar(frame: &mut Frame, area: Rect, content: u16, viewport: u16, 
         .begin_symbol(Some("▲"))
         .end_symbol(Some("▼"))
         .track_symbol(Some("┊"))
-        .thumb_symbol("█");
+        .thumb_symbol("█")
+        .track_style(Style::default().fg(BORDER_REST).bg(BG))
+        .thumb_style(Style::default().fg(BORDER_LIVE).bg(BG))
+        .begin_style(Style::default().fg(BORDER_LIVE).bg(BG))
+        .end_style(Style::default().fg(BORDER_LIVE).bg(BG));
     frame.render_stateful_widget(
         bar,
         area.inner(Margin {
