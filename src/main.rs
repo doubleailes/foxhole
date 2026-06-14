@@ -62,14 +62,14 @@ async fn main() -> io::Result<()> {
     let mut app = App::new();
     app.config = config::Config::load();
     app.notes = notes::Notes::load();
-    // Operator-defined hazard zones override the seeded demo set when present.
-    // The filesystem read lives here (core stays I/O-free); core only parses.
-    let zones = match std::fs::read_to_string(config::config_dir().join("zones.conf")) {
-        Ok(text) => zones::parse(&text),
-        Err(_) => Vec::new(),
-    };
-    if !zones.is_empty() {
-        app.zones = zones;
+    // Operator-defined hazard zones override the seeded demo set whenever a
+    // `zones.conf` exists — even an empty/all-junk one, so the operator can blank
+    // the overlay by creating the file. Only an absent (or unreadable) file keeps
+    // the demo set. The filesystem read lives here; core stays I/O-free and only
+    // parses.
+    match std::fs::read_to_string(config::config_dir().join("zones.conf")) {
+        Ok(text) => app.zones = zones::parse(&text),
+        Err(_) => { /* no file (or unreadable): keep the seeded demo zones */ }
     }
 
     // Under `net` the network task gets a clone of the config plus channels for
