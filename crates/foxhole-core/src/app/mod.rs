@@ -34,6 +34,7 @@ pub use crate::domain::{
     Conversation, Entry, Interface, MsgStatus, NetCommand, NetEvent, Node, NomadNode, Outbound,
     Page, PageStatus, PathProbe, PeerKind, Trust, fmt_bitrate, fmt_bytes, path_summary,
 };
+pub use crate::notes::Notes;
 
 pub use boot::{AppState, Scroll};
 #[cfg(feature = "splash")]
@@ -114,6 +115,8 @@ pub enum Tool {
     Log,
     /// Reticulum interface status.
     Interfaces,
+    /// Ten-slot scratch note buffer.
+    Notes,
     /// Static help text.
     Guide,
 }
@@ -121,12 +124,13 @@ pub enum Tool {
 impl Tool {
     /// Tab order, left to right. Drives both the menu strip and Ctrl+N/P
     /// cycling, so there is a single source of truth for ordering.
-    pub const ALL: [Tool; 6] = [
+    pub const ALL: [Tool; 7] = [
         Tool::Conversations,
         Tool::Network,
         Tool::Browser,
         Tool::Log,
         Tool::Interfaces,
+        Tool::Notes,
         Tool::Guide,
     ];
 
@@ -138,6 +142,7 @@ impl Tool {
             Tool::Browser => "Browser",
             Tool::Log => "Log",
             Tool::Interfaces => "Interfaces",
+            Tool::Notes => "Notes",
             Tool::Guide => "Guide",
         }
     }
@@ -150,6 +155,7 @@ impl Tool {
             Tool::Browser => "WEB",
             Tool::Log => "LOG",
             Tool::Interfaces => "IFACE",
+            Tool::Notes => "NOTE",
             Tool::Guide => "GUIDE",
         }
     }
@@ -273,6 +279,12 @@ pub struct App {
     pub burn: bool,
     /// Persisted operator settings (display name, hub, active propagation node).
     pub config: Config,
+    /// Ten-slot scratch note buffer (Notes tool).
+    pub notes: Notes,
+    /// Highlighted slot in the Notes tool.
+    pub note_selected: usize,
+    /// Set when a note slot changed; `main` drains it and persists the buffer.
+    pub notes_dirty: bool,
     /// Commands queued for the network task; drained by `main` after key input.
     pub commands: VecDeque<NetCommand>,
     /// Monotonic id source for correlating outbound messages with their status.
@@ -341,6 +353,9 @@ impl App {
             mnemonic_view: None,
             burn: false,
             config: Config::default(),
+            notes: Notes::default(),
+            note_selected: 0,
+            notes_dirty: false,
             commands: VecDeque::new(),
             next_msg_id: 1,
             dirty: Vec::new(),
@@ -562,6 +577,34 @@ impl App {
             Tool::Conversations => self.handle_conversations_key(ctrl, key),
             Tool::Network => self.handle_network_key(ctrl, key),
             Tool::Browser => self.handle_browser_key(key),
+            Tool::Notes => self.handle_notes_key(ctrl, key),
+            _ => {}
+        }
+    }
+
+    /// Notes tool: Up/Down pick a slot, typing edits the selected slot,
+    /// Backspace deletes a char, Ctrl+X clears the slot. Any change flags the
+    /// buffer dirty so `main` persists it.
+    fn handle_notes_key(&mut self, ctrl: bool, key: KeyEvent) {
+        match (ctrl, key.code) {
+            (false, KeyCode::Up) => self.note_selected = self.note_selected.saturating_sub(1),
+            (false, KeyCode::Down) => {
+                if self.note_selected + 1 < crate::notes::SLOTS {
+                    self.note_selected += 1;
+                }
+            }
+            (true, KeyCode::Char('x')) => {
+                self.notes.clear(self.note_selected);
+                self.notes_dirty = true;
+            }
+            (false, KeyCode::Backspace) => {
+                self.notes.pop_char(self.note_selected);
+                self.notes_dirty = true;
+            }
+            (false, KeyCode::Char(c)) => {
+                self.notes.push_char(self.note_selected, c);
+                self.notes_dirty = true;
+            }
             _ => {}
         }
     }

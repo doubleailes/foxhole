@@ -1064,6 +1064,57 @@ fn m_key_opens_mnemonic_modal_and_any_key_closes() {
 }
 
 #[test]
+fn notes_tool_edits_selected_slot_and_marks_dirty() {
+    let mut app = App::new();
+    app.active = Tool::Notes;
+    assert_eq!(app.note_selected, 0);
+
+    type_str(&mut app, "h45"); // edits slot 0
+    assert_eq!(app.notes.get(0), "h45");
+    assert!(app.notes_dirty, "an edit flags the buffer for persistence");
+
+    app.handle_key(press(KeyCode::Backspace));
+    assert_eq!(app.notes.get(0), "h4");
+
+    // Move to slot 1 and write something independent.
+    app.handle_key(press(KeyCode::Down));
+    assert_eq!(app.note_selected, 1);
+    type_str(&mut app, "grid");
+    assert_eq!(app.notes.get(1), "grid");
+    assert_eq!(app.notes.get(0), "h4", "other slots untouched");
+
+    // Ctrl+X clears the selected slot only.
+    app.handle_key(ctrl('x'));
+    assert_eq!(app.notes.get(1), "");
+    assert_eq!(app.notes.get(0), "h4");
+}
+
+#[test]
+fn notes_selection_clamps_at_both_ends() {
+    let mut app = App::new();
+    app.active = Tool::Notes;
+    app.handle_key(press(KeyCode::Up)); // already at 0 → stays
+    assert_eq!(app.note_selected, 0);
+    for _ in 0..crate::notes::SLOTS + 3 {
+        app.handle_key(press(KeyCode::Down));
+    }
+    assert_eq!(
+        app.note_selected,
+        crate::notes::SLOTS - 1,
+        "clamps at last slot"
+    );
+}
+
+#[test]
+fn typing_outside_notes_does_not_touch_the_buffer() {
+    let mut app = App::new();
+    app.active = Tool::Network; // read-only w.r.t. notes
+    type_str(&mut app, "x");
+    assert_eq!(app.notes.count(), 0);
+    assert!(!app.notes_dirty);
+}
+
+#[test]
 fn should_persist_keeps_trusted_message_less_peer() {
     // A peer merely seen via an announce (no messages, default trust, not pinned)
     // is discovery noise — not worth persisting.

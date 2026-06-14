@@ -24,6 +24,7 @@ The UI has two focus tiers, mirroring Nomad Network:
                    links and submit form fields.
   `!Log`!             Timestamped (UTC) system and diagnostic scrollback.
   `!Interfaces`!      Live Reticulum interface status, rnstatus-style.
+  `!Notes`!           Ten-slot scratch buffer for hashes, grid refs, anything.
   `!Guide`!           This manual.
 
 >>Global keys  (work in any tool)
@@ -85,6 +86,18 @@ then Ctrl+R / s to sync. The active node persists across sessions.
 
 If the menu shows networking offline, the binary was built without the `!net`!
 feature — rebuild with: cargo run --features net
+
+>>Notes
+
+A ten-slot scratch buffer (`!0`!–`!9`!) for stashing a hash, a grid reference, a
+frequency, or any short string without copy/paste. Slots persist across
+restarts (plaintext under the config dir; a BURN destroys them with everything
+else).
+
+  `!Up / Down`!         Select a slot
+  `!(type)`!            Append to the selected slot
+  `!Backspace`!         Delete a character
+  `!Ctrl+X`!            Clear the selected slot
 
 >>Trust levels
 
