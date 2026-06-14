@@ -13,6 +13,7 @@
 mod app;
 mod burn;
 mod config;
+mod domain;
 mod micron;
 #[cfg(feature = "net")]
 mod net;
