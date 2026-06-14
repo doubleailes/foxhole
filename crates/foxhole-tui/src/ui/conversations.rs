@@ -7,7 +7,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 
-use crate::app::{App, Pane};
+use crate::app::{App, Pane, TransmitField};
 
 use super::style::{styled_entry, trust_style};
 use super::widgets::{NOSEL, SEL, count_tag, pane_block, render_scroll, tactical_block};
@@ -96,22 +96,34 @@ fn render_peer_list(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(para, area);
 }
 
-/// Compose pane. Shows the *selected conversation's* draft. The real terminal
-/// cursor stays hidden (field constraint), so when focused we paint a synthetic
-/// reversed block as the caret.
+/// Compose pane. Shows the *selected conversation's* draft title (Ctrl+T) and
+/// body. The real terminal cursor stays hidden (field constraint), so when
+/// focused we paint a synthetic reversed block as the caret on the active field.
 fn render_transmit(frame: &mut Frame, app: &App, area: Rect) {
     let active = app.focus == Pane::Transmit;
-    let draft = app.selected_conv().map(|c| c.draft.as_str()).unwrap_or("");
+    let conv = app.selected_conv();
+    let title = conv.map(|c| c.draft_title.as_str()).unwrap_or("");
+    let body = conv.map(|c| c.draft.as_str()).unwrap_or("");
 
-    let mut spans = vec![Span::raw("❯ "), Span::raw(draft)];
-    if active {
-        spans.push(Span::styled(
-            " ",
-            Style::default().add_modifier(Modifier::REVERSED),
-        ));
+    // Caret sits on whichever field Ctrl+T selected, but only while focused.
+    let caret = |on: bool| -> Option<Span> {
+        (active && on).then(|| Span::styled(" ", Style::default().add_modifier(Modifier::REVERSED)))
+    };
+    let label_style = Style::default().add_modifier(Modifier::DIM);
+
+    // Title row: dimmed when empty so it reads as an optional prompt.
+    let editing_title = app.transmit_field == TransmitField::Title;
+    let mut title_spans = vec![Span::styled("TITLE ", label_style), Span::raw(title)];
+    if let Some(c) = caret(editing_title) {
+        title_spans.push(c);
     }
 
-    let para = Paragraph::new(Line::from(spans))
+    let mut body_spans = vec![Span::raw("❯ "), Span::raw(body)];
+    if let Some(c) = caret(!editing_title) {
+        body_spans.push(c);
+    }
+
+    let para = Paragraph::new(vec![Line::from(title_spans), Line::from(body_spans)])
         .block(pane_block("TRANSMIT BUFFER", active))
         .wrap(Wrap { trim: false });
     frame.render_widget(para, area);

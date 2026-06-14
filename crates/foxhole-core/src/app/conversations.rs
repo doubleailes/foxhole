@@ -77,6 +77,12 @@ impl App {
             (true, KeyCode::Char('x')) => self.purge(),
             // On-demand propagation sync (off-grid: no automatic polling).
             (true, KeyCode::Char('r')) => self.commands.push_back(NetCommand::SyncNow),
+            // Set/edit the outbound message title (Nomadnet's Ctrl+T): focus the
+            // Transmit pane and toggle between the title and the body field.
+            (true, KeyCode::Char('t')) => {
+                self.focus = Pane::Transmit;
+                self.transmit_field = self.transmit_field.toggle();
+            }
             (_, KeyCode::Tab) => self.toggle_focus(),
 
             // Peer-list navigation — only when that pane is focused.
@@ -87,15 +93,24 @@ impl App {
                 self.cycle_selected_trust()
             }
 
-            // Transmit-pane editing — only when that pane is focused.
+            // Transmit-pane editing — only when that pane is focused. Keystrokes
+            // land in whichever field (title or body) Ctrl+T last selected.
             (false, KeyCode::Char(c)) if self.focus == Pane::Transmit => {
+                let field = self.transmit_field;
                 if let Some(conv) = self.selected_conv_mut() {
-                    conv.draft.push(c);
+                    match field {
+                        TransmitField::Title => conv.draft_title.push(c),
+                        TransmitField::Body => conv.draft.push(c),
+                    }
                 }
             }
             (false, KeyCode::Backspace) if self.focus == Pane::Transmit => {
+                let field = self.transmit_field;
                 if let Some(conv) = self.selected_conv_mut() {
-                    conv.draft.pop();
+                    match field {
+                        TransmitField::Title => conv.draft_title.pop(),
+                        TransmitField::Body => conv.draft.pop(),
+                    };
                 }
             }
 
@@ -204,8 +219,11 @@ impl App {
     /// No-op on an empty/whitespace draft so a stray Ctrl+S doesn't emit a
     /// blank frame.
     pub fn transmit(&mut self) {
-        let body = match self.conversations.get(self.selected) {
-            Some(conv) => conv.draft.trim().to_string(),
+        let (body, title) = match self.conversations.get(self.selected) {
+            Some(conv) => (
+                conv.draft.trim().to_string(),
+                conv.draft_title.trim().to_string(),
+            ),
             None => return,
         };
         if body.is_empty() {
@@ -213,18 +231,29 @@ impl App {
         }
         let id = self.next_id();
         let conv = &mut self.conversations[self.selected];
-        let mut entry = Entry::now(format!("[TX] {body}"));
+        // Echo the title (when set) ahead of the body so the thread shows what
+        // was sent, mirroring how the recipient sees a titled message.
+        let echo = if title.is_empty() {
+            format!("[TX] {body}")
+        } else {
+            format!("[TX] {title}: {body}")
+        };
+        let mut entry = Entry::now(echo);
         entry.id = id;
         entry.status = MsgStatus::Sending;
         conv.messages.push(entry);
         conv.draft.clear();
+        conv.draft_title.clear();
         let peer = conv.peer.clone();
         // `conv`'s borrow ends above; safe to touch `self.outbound`/`dirty` now.
         self.outbound.push_back(Outbound {
             id,
             peer: peer.clone(),
+            title,
             body,
         });
+        // Sending resets the compose form back to the body field.
+        self.transmit_field = TransmitField::Body;
         self.mark_dirty(&peer);
     }
 
@@ -251,11 +280,14 @@ impl App {
         }
     }
 
-    /// Discard the selected conversation's draft without transmitting (Ctrl+X).
+    /// Discard the selected conversation's draft (title and body) without
+    /// transmitting (Ctrl+X).
     pub fn purge(&mut self) {
         if let Some(conv) = self.selected_conv_mut() {
             conv.draft.clear();
+            conv.draft_title.clear();
         }
+        self.transmit_field = TransmitField::Body;
     }
 
     /// Deliver an inbound message from `peer` into its conversation, creating

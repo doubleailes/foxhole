@@ -213,6 +213,7 @@ fn transmit_targets_selected_peer() {
     let out = app.outbound.front().unwrap();
     assert_eq!(out.peer, "bob");
     assert_eq!(out.body, "hello bob");
+    assert_eq!(out.title, "", "no title set");
     assert_eq!(
         app.conversations[1].messages.last().unwrap().text,
         "[TX] hello bob"
@@ -241,6 +242,73 @@ fn purge_clears_selected_draft_only() {
     assert!(app.conversations[0].draft.is_empty());
     assert_eq!(app.conversations[1].draft, "keep");
     assert!(app.outbound.is_empty());
+}
+
+#[test]
+fn ctrl_t_toggles_title_field_and_routes_typing() {
+    let mut app = App::new();
+    // Default focus is Transmit, default field is the body.
+    assert_eq!(app.transmit_field, TransmitField::Body);
+
+    // Ctrl+T switches to the title field; typing now lands there.
+    app.handle_key(ctrl('t'));
+    assert_eq!(app.transmit_field, TransmitField::Title);
+    type_str(&mut app, "urgent");
+    assert_eq!(app.selected_conv().unwrap().draft_title, "urgent");
+    assert!(app.selected_conv().unwrap().draft.is_empty());
+
+    // Ctrl+T toggles back to the body, leaving the title intact.
+    app.handle_key(ctrl('t'));
+    assert_eq!(app.transmit_field, TransmitField::Body);
+    type_str(&mut app, "hi");
+    assert_eq!(app.selected_conv().unwrap().draft, "hi");
+    assert_eq!(app.selected_conv().unwrap().draft_title, "urgent");
+}
+
+#[test]
+fn ctrl_t_focuses_transmit_from_another_pane() {
+    let mut app = App::new();
+    app.focus = Pane::PeerList;
+    app.handle_key(ctrl('t'));
+    assert_eq!(app.focus, Pane::Transmit);
+    assert_eq!(app.transmit_field, TransmitField::Title);
+}
+
+#[test]
+fn transmit_sends_title_and_resets_field() {
+    let mut app = App::new();
+    app.conversations[0].draft_title = "  report  ".to_string();
+    app.conversations[0].draft = "all clear".to_string();
+    app.transmit_field = TransmitField::Title;
+
+    app.handle_key(ctrl('s'));
+
+    let out = app.outbound.front().unwrap();
+    assert_eq!(out.title, "report", "title trimmed and carried");
+    assert_eq!(out.body, "all clear");
+    assert_eq!(
+        app.conversations[0].messages.last().unwrap().text,
+        "[TX] report: all clear",
+        "title echoed ahead of the body"
+    );
+    assert!(app.conversations[0].draft_title.is_empty(), "title cleared");
+    assert_eq!(
+        app.transmit_field,
+        TransmitField::Body,
+        "compose form reset to body"
+    );
+}
+
+#[test]
+fn purge_clears_title_too() {
+    let mut app = App::new();
+    app.conversations[0].draft = "body".to_string();
+    app.conversations[0].draft_title = "title".to_string();
+    app.transmit_field = TransmitField::Title;
+    app.handle_key(ctrl('x'));
+    assert!(app.conversations[0].draft.is_empty());
+    assert!(app.conversations[0].draft_title.is_empty());
+    assert_eq!(app.transmit_field, TransmitField::Body);
 }
 
 #[test]

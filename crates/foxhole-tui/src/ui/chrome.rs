@@ -146,7 +146,7 @@ pub(super) fn render_status(frame: &mut Frame, app: &App, area: Rect) {
 
     // The keybinding legend rides the right corner of the status frame, muted.
     let legend = Span::styled(
-        " Ctrl+N/P Tab · Ctrl+O New · Tab Pane · Ctrl+S Send · Ctrl+R Sync · Ctrl+Q Quit ",
+        " Ctrl+N/P Tab · Ctrl+O New · Tab Pane · Ctrl+T Title · Ctrl+S Send · Ctrl+R Sync · Ctrl+Q Quit ",
         ts_style(),
     );
     let para =
