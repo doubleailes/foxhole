@@ -63,7 +63,11 @@ async fn main() -> io::Result<()> {
     app.config = config::Config::load();
     app.notes = notes::Notes::load();
     // Operator-defined hazard zones override the seeded demo set when present.
-    let zones = zones::load();
+    // The filesystem read lives here (core stays I/O-free); core only parses.
+    let zones = match std::fs::read_to_string(config::config_dir().join("zones.conf")) {
+        Ok(text) => zones::parse(&text),
+        Err(_) => Vec::new(),
+    };
     if !zones.is_empty() {
         app.zones = zones;
     }

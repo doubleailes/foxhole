@@ -14,26 +14,11 @@
 //! operator intel — the built-in [`demo`] set uses generic `AO …` callsigns and
 //! makes no claim about any real-world conflict; it just makes the overlay
 //! visible offline, exactly as the seeded demo peers do.
+//!
+//! This module stays free of I/O: [`parse`] and [`demo`] are pure functions, and
+//! the actual `zones.conf` read lives in the root binary (see `src/main.rs`).
 
-use std::path::PathBuf;
-
-use crate::config::config_dir;
 use crate::domain::Zone;
-
-/// Path to the zones file within the config dir.
-fn path() -> PathBuf {
-    config_dir().join("zones.conf")
-}
-
-/// Load operator-defined hazard zones from `zones.conf`. Returns an empty list
-/// when the file is absent or unreadable, so the caller can fall back to the
-/// [`demo`] set.
-pub fn load() -> Vec<Zone> {
-    match std::fs::read_to_string(path()) {
-        Ok(text) => parse(&text),
-        Err(_) => Vec::new(),
-    }
-}
 
 /// Parse the `label = lat, lon, radius_km` body. Rows missing the `=`, lacking
 /// three numeric fields, or carrying non-finite numbers are skipped.
