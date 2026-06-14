@@ -85,6 +85,12 @@ impl NewConv {
 /// The exact token the operator must type to confirm a burn.
 pub const BURN_TOKEN: &str = "BURN";
 
+/// Cap on retained system-log entries ([`App::syslog`]). The Log tool only ever
+/// shows the tail (it is bottom-pinned), so once the buffer grows past this the
+/// oldest lines are dropped — keeping memory bounded against a chatty source such
+/// as frequent location telemetry.
+pub(crate) const SYSLOG_MAX: usize = 4000;
+
 /// Modal state for the burn confirmation (Ctrl+K). Destroying all session data
 /// is gated behind typing [`BURN_TOKEN`] so it can't fire by accident.
 pub struct BurnConfirm {
@@ -334,7 +340,9 @@ pub struct App {
     /// task. FIFO so ordering on the wire matches operator intent.
     pub outbound: VecDeque<Outbound>,
     /// System log scrollback shown by the Log tool (`[SYS]` lines, diagnostics),
-    /// each timestamped (UTC).
+    /// each timestamped (UTC). Bounded to the most recent [`SYSLOG_MAX`] entries
+    /// (see [`App::push_log`]) so a chatty source — e.g. frequent location
+    /// telemetry — can't grow it without bound.
     pub syslog: Vec<Entry>,
     /// Set when the operator requests shutdown (Ctrl+Q); the main loop checks
     /// this each iteration.
