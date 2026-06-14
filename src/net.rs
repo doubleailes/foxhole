@@ -713,6 +713,7 @@ fn decode_link_payload(my_hash: &[u8; 16], data: &[u8]) -> Option<LxMessage> {
 /// Forward a decoded inbound message to the UI, plus any location telemetry it
 /// carries (so the World Map can plot the sender).
 async fn emit_message(events: &mpsc::Sender<NetEvent>, msg: LxMessage) {
+    debug_dump_fields(events, &msg).await;
     let source = hex::encode(msg.source_hash);
     let location = telemetry_location(&msg);
     let _ = events
@@ -724,6 +725,36 @@ async fn emit_message(events: &mpsc::Sender<NetEvent>, msg: LxMessage) {
         .await;
     if let Some((lat, lon)) = location {
         let _ = events.send(NetEvent::Telemetry { source, lat, lon }).await;
+    }
+}
+
+/// Opt-in diagnostic (set `FOXHOLE_DEBUG_TELEMETRY`): log the inbound message's
+/// LXMF field ids and the raw hex of any telemetry field(s), so the exact
+/// Sideband payload layout can be inspected when a fix fails to decode. Off by
+/// default — it would otherwise dump field bytes into the Log for every message.
+async fn debug_dump_fields(events: &mpsc::Sender<NetEvent>, msg: &LxMessage) {
+    if std::env::var_os("FOXHOLE_DEBUG_TELEMETRY").is_none() {
+        return;
+    }
+    let ids: Vec<String> = msg.fields.keys().map(|k| format!("{k:#04x}")).collect();
+    let _ = events
+        .send(NetEvent::Sys(format!(
+            "[SYS] msg fields: [{}]",
+            ids.join(", ")
+        )))
+        .await;
+    for fid in [
+        lxmf_core::constants::FIELD_TELEMETRY,
+        lxmf_core::constants::FIELD_TELEMETRY_STREAM,
+    ] {
+        if let Some(bytes) = msg.get_field(fid) {
+            let _ = events
+                .send(NetEvent::Sys(format!(
+                    "[SYS] field {fid:#04x} raw: {}",
+                    hex::encode(bytes)
+                )))
+                .await;
+        }
     }
 }
 
