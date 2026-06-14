@@ -49,6 +49,9 @@ const MAX_SPAN: f64 = 360.0;
 /// Pan distance per keypress, as a fraction of the current span (so panning
 /// feels constant on screen at every zoom level).
 const PAN_STEP: f64 = 0.2;
+/// Span a `center` snaps to when the view is wider than this — so framing a
+/// marker from the whole-globe view actually zooms in to a regional scale.
+const CENTER_ZOOM_SPAN: f64 = 60.0;
 
 impl Default for MapView {
     /// The whole globe, centred on the origin.
@@ -144,8 +147,8 @@ impl App {
         out
     }
 
-    /// World Map keys: arrows pan, `+`/`-` zoom, `[`/`]` cycle markers, `Enter`/`c`
-    /// centre on the selected marker, `r` resets the view.
+    /// World Map keys: arrows pan, `+`/`-` zoom, `Tab`/`[`/`]` cycle markers,
+    /// `Enter`/`c` centre on the selected marker, `r` resets the view.
     pub(super) fn handle_map_key(&mut self, _ctrl: bool, key: KeyEvent) {
         match key.code {
             KeyCode::Left => self.map.pan(-PAN_STEP, 0.0),
@@ -154,8 +157,8 @@ impl App {
             KeyCode::Down => self.map.pan(0.0, -PAN_STEP),
             KeyCode::Char('+') | KeyCode::Char('=') => self.map.zoom(0.5),
             KeyCode::Char('-') | KeyCode::Char('_') => self.map.zoom(2.0),
-            KeyCode::Char('[') => self.select_map_marker(-1),
-            KeyCode::Char(']') => self.select_map_marker(1),
+            KeyCode::Tab | KeyCode::Char(']') => self.select_map_marker(1),
+            KeyCode::BackTab | KeyCode::Char('[') => self.select_map_marker(-1),
             KeyCode::Enter | KeyCode::Char('c') => self.center_selected_marker(),
             KeyCode::Char('r') => {
                 self.map = MapView::default();
@@ -179,11 +182,18 @@ impl App {
         self.center_selected_marker();
     }
 
-    /// Centre the viewport on the currently selected marker, if any.
+    /// Centre the viewport on the currently selected marker, if any. Framing a
+    /// marker from the whole-globe view is meaningless (it already fills the
+    /// screen), so a centre from far out also zooms in to a regional scale — the
+    /// view visibly jumps to the position.
     fn center_selected_marker(&mut self) {
         let markers = self.map_markers();
         if let Some(m) = markers.get(self.map_selected) {
-            self.map.center_on(m.pos);
+            let pos = m.pos;
+            if self.map.span > CENTER_ZOOM_SPAN {
+                self.map.span = CENTER_ZOOM_SPAN;
+            }
+            self.map.center_on(pos);
         }
     }
 }
@@ -271,5 +281,23 @@ mod tests {
         // Wrap back to the operator.
         app.select_map_marker(1);
         assert_eq!(app.map_selected, 0);
+    }
+
+    #[test]
+    fn centering_from_the_globe_zooms_in_to_frame() {
+        let mut app = App::new();
+        app.config = Config::default();
+        app.conversations[0].location = Some(GeoPos::new(40.0, 30.0));
+        // Whole-globe default view: centring would otherwise be a no-op, so it
+        // zooms to a regional scale and the view jumps to the marker.
+        assert_eq!(app.map.span, 360.0);
+        app.center_selected_marker();
+        assert_eq!(app.map.span, CENTER_ZOOM_SPAN);
+        assert_eq!(app.map.center, GeoPos::new(40.0, 30.0));
+
+        // Once already zoomed in past the threshold, centring leaves zoom alone.
+        app.map.span = 20.0;
+        app.center_selected_marker();
+        assert_eq!(app.map.span, 20.0);
     }
 }
