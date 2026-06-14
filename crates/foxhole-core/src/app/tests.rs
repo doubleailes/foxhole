@@ -366,6 +366,22 @@ fn network_tab_selects_and_sets_propagation_node() {
 }
 
 #[test]
+fn esc_cancels_a_running_sync_popup() {
+    let mut app = App::new();
+    // A sync is in progress (the network task set the progress text).
+    app.sync_status = Some("/ contacting node…".to_string());
+
+    // Esc dismisses the pop-up and tells the network task to abandon the sync.
+    app.handle_key(press(KeyCode::Esc));
+    assert!(app.sync_status.is_none(), "pop-up dismissed");
+    assert_eq!(app.commands.pop_front(), Some(NetCommand::CancelSync));
+
+    // With no sync running, Esc is not swallowed as a cancel.
+    app.handle_key(press(KeyCode::Esc));
+    assert!(app.commands.is_empty(), "no spurious CancelSync");
+}
+
+#[test]
 fn network_node_column_inert_with_no_nodes() {
     let mut app = App::new();
     app.active = Tool::Network;

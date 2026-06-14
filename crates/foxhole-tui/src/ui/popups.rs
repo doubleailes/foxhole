@@ -157,7 +157,7 @@ pub(super) fn render_sync_popup(frame: &mut Frame, status: &str) {
         ));
     let lines = vec![
         Line::raw(format!("  {status}")),
-        Line::raw("  pulling messages — please wait"),
+        Line::raw("  pulling messages    [Esc] cancel"),
     ];
     let para = Paragraph::new(lines)
         .block(block)

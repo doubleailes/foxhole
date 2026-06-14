@@ -375,6 +375,10 @@ async fn run_inner(
     let mut tracker = StatusTracker::default();
     let mut ticks: u32 = 0;
     let mut syncing = false;
+    // Set when the operator dismisses an in-progress sync (`CancelSync`): keeps
+    // the progress pop-up hidden while the client winds down on its own watchdog,
+    // clearing once it returns to Idle so a later sync shows normally.
+    let mut sync_suppressed = false;
 
     // Seed identities/hops from the transport's own recent-announce cache too —
     // it may already know peers/nodes we haven't re-heard this session.
@@ -527,6 +531,16 @@ async fn run_inner(
                     NetCommand::SyncNow => {
                         try_sync(&mut router, &mut prop_client, &known, &mut last_path_request, &transport, events).await;
                     }
+                    NetCommand::CancelSync => {
+                        // Drop the pop-up at once and stop re-asserting it; the
+                        // client finishes/aborts in the background (its own timeout).
+                        if syncing || sync_phase(prop_client.state).is_some() {
+                            sync_suppressed = true;
+                            syncing = false;
+                            let _ = events.send(NetEvent::Sync(None)).await;
+                            sys("[SYS] propagation sync canceled by operator".to_string()).await;
+                        }
+                    }
                     NetCommand::RequestPath(hex) => match parse_hash(&hex) {
                         Ok(dest) => {
                             // Operator-initiated: fire the path request directly
@@ -602,6 +616,8 @@ async fn run_inner(
                 // Drive the sync-progress pop-up from the client's live state.
                 let phase = sync_phase(prop_client.state);
                 match phase {
+                    // Operator dismissed this run: stay quiet until it winds down.
+                    Some(_) if sync_suppressed => {}
                     Some(p) => {
                         let spin = ['|', '/', '-', '\\'][(ticks % 4) as usize];
                         let _ = events
@@ -614,7 +630,8 @@ async fn run_inner(
                         let _ = events.send(NetEvent::Sync(None)).await;
                         sys("[SYS] propagation sync finished".to_string()).await;
                     }
-                    None => {}
+                    // Client back to Idle — re-arm so the next sync shows again.
+                    None => sync_suppressed = false,
                 }
 
                 // Persist newly learned identities periodically (debounced).

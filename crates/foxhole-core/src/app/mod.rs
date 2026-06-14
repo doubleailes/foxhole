@@ -412,6 +412,16 @@ impl App {
             return;
         }
 
+        // A running propagation sync shows a (non-capturing) progress pop-up.
+        // Esc abandons it so the operator can dismiss a slow/stuck sync at once
+        // instead of waiting out the node's timeout; the network task stops
+        // re-asserting the pop-up on the matching `CancelSync`.
+        if self.sync_status.is_some() && key.code == KeyCode::Esc {
+            self.sync_status = None;
+            self.commands.push_back(NetCommand::CancelSync);
+            return;
+        }
+
         // Scrolling works in whichever text pane has focus; these keys are unused
         // by the tools, so handle them globally.
         if matches!(
