@@ -10,19 +10,18 @@
 //!      processing never blocks frame rendering.
 //!   3. Multiplex keyboard input and inbound messages in one `select!` loop.
 
-mod app;
-mod burn;
-mod config;
-mod domain;
-mod micron;
+// The logic and rendering layers now live in workspace crates; re-export them
+// under the same module paths so the networking modules below (and `main`) keep
+// referring to `crate::app`, `crate::config`, etc. unchanged.
+#[cfg(feature = "net")]
+pub use foxhole_core::storage;
+pub use foxhole_core::{app, burn, config};
+use foxhole_tui::ui;
+
 #[cfg(feature = "net")]
 mod net;
-#[cfg(feature = "splash")]
-mod splash;
-mod storage;
 #[cfg(feature = "net")]
 mod store;
-mod ui;
 
 use std::io::{self, Stdout, Write};
 

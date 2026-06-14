@@ -1,0 +1,19 @@
+[package]
+name = "foxhole-core"
+version = "0.1.0"
+edition = "2024"
+description = "FoxHole core: domain model, state machine, config, durable storage"
+
+[dependencies]
+# Keyboard event types routed through the state machine. (No event-stream here —
+# that's the binary's concern; core only needs the key enums.)
+crossterm = "0.29"
+# The micron page model/parser the Browser state and page elements depend on.
+foxhole-micron = { path = "../foxhole-micron" }
+
+[features]
+# Cold-boot splash state (App::boot, BootStep). Pure flag — no extra deps.
+splash = []
+# Mirrors the binary's `net` feature so net-only fields/paths compile out cleanly
+# offline (cfg gating only — the live stack lives in the binary crate).
+net = []
