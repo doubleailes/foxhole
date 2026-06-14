@@ -43,8 +43,9 @@ The UI has two focus tiers, mirroring Nomad Network:
   `!t`!                 Cycle the selected peer's trust level (Peers pane)
   `!(type)`!            Edit the draft (Transmit pane)
   `!Backspace`!         Delete a character from the draft
+  `!Ctrl+T`!            Edit the message title (toggle title / body)
   `!Ctrl+S`!            Send the draft to the selected peer
-  `!Ctrl+X`!            Purge the compose buffer (discard draft)
+  `!Ctrl+X`!            Purge the compose buffer (discard title + draft)
   `!Ctrl+R`!            Sync now from the propagation node (on demand)
 
 >>Network

@@ -199,6 +199,26 @@ impl Pane {
     }
 }
 
+/// Which field the Transmit pane is editing. Mirrors Nomadnet's compose form,
+/// where Ctrl+T toggles between an optional message title and the body.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TransmitField {
+    /// The optional LXMF message title (the `Title` field).
+    Title,
+    /// The message body.
+    Body,
+}
+
+impl TransmitField {
+    /// Toggle between the title and the body (Ctrl+T).
+    fn toggle(self) -> Self {
+        match self {
+            TransmitField::Title => TransmitField::Body,
+            TransmitField::Body => TransmitField::Title,
+        }
+    }
+}
+
 /// The two columns of the Network tab; `net_col` tracks which has focus.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NetColumn {
@@ -232,6 +252,9 @@ pub struct App {
     /// Focused pane within the Conversations tool (drives the reversed
     /// highlight + key routing there). Ignored by the read-only tools.
     pub focus: Pane,
+    /// Which Transmit-pane field keystrokes edit (title vs body), toggled with
+    /// Ctrl+T. Only meaningful while the Transmit pane is focused.
+    pub transmit_field: TransmitField,
     /// All conversations, in display order.
     pub conversations: Vec<Conversation>,
     /// Index of the selected conversation within `conversations`.
@@ -329,6 +352,7 @@ impl App {
         Self {
             active: Tool::Conversations,
             focus: Pane::Transmit,
+            transmit_field: TransmitField::Body,
             conversations,
             selected: 0,
             nodes: Vec::new(),

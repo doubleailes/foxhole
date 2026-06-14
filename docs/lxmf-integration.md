@@ -224,8 +224,10 @@ the announce/delivery tasks, and exposes a tiny surface so `main.rs` stays a thi
 event loop:
 
 - **net → UI**: `enum NetEvent { Sys(String), Peer { hash:[u8;16], name:Option<String> }, Message { source:[u8;16], title:String, content:String } }`.
-- **UI → net**: the existing `app::Outbound { peer, body }`, where `peer` is the
-  hex destination hash; `main.rs` drains `app.outbound` after each key event.
+- **UI → net**: the existing `app::Outbound { peer, title, body }`, where `peer`
+  is the hex destination hash and `title` is the optional LXMF message title
+  (set with Ctrl+T, empty for none); `main.rs` drains `app.outbound` after each
+  key event.
 
 Conversations re-key on the hex destination hash with a display name shown when
 known. The **Network** tab renders discovered delivery peers + propagation nodes

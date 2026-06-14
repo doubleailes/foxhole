@@ -45,6 +45,8 @@ pub struct Outbound {
     pub id: u64,
     /// Destination peer (display name offline; hex destination hash under `net`).
     pub peer: String,
+    /// Optional LXMF message title (the `Title` field; empty for none).
+    pub title: String,
     /// The message text.
     pub body: String,
 }
@@ -322,6 +324,9 @@ pub struct Conversation {
     pub messages: Vec<Entry>,
     /// Per-conversation compose buffer, preserved across peer switches.
     pub draft: String,
+    /// Optional per-conversation message title (the LXMF `Title` field), set
+    /// with Ctrl+T before sending. Transient like `draft` — not persisted.
+    pub draft_title: String,
     /// Inbound messages received since this conversation was last viewed.
     pub unread: usize,
     /// Manually added (Ctrl+O) — persist it even with no messages yet so a peer
@@ -345,6 +350,7 @@ impl Conversation {
             display_name: None,
             messages: Vec::new(),
             draft: String::new(),
+            draft_title: String::new(),
             unread: 0,
             pinned: false,
             last_seen: 0,

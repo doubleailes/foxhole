@@ -760,7 +760,7 @@ fn build_message(
     out: &Outbound,
 ) -> Result<LxMessage, String> {
     let dest = parse_hash(&out.peer)?;
-    let mut msg = LxMessage::new(dest, *source, "", &out.body, DeliveryMethod::Direct);
+    let mut msg = LxMessage::new(dest, *source, &out.title, &out.body, DeliveryMethod::Direct);
     let signing_key = identity
         .get_signing_key()
         .ok_or_else(|| "identity has no signing key".to_string())?;
