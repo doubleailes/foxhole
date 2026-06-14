@@ -295,6 +295,12 @@ impl App {
     /// unless the conversation is currently selected. This is the hook the
     /// `net` feature calls with the real LXMF source identity.
     pub fn deliver(&mut self, peer: &str, body: &str) {
+        // A telemetry-only / command-only LXMF message carries no text; recording
+        // an empty `[RX]` line (or conjuring a conversation for it) just clutters
+        // the thread. Its location, if any, is handled by `set_location`.
+        if body.is_empty() {
+            return;
+        }
         let idx = match self.conversations.iter().position(|c| c.peer == peer) {
             Some(i) => i,
             None => {

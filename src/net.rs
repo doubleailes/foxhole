@@ -711,21 +711,33 @@ fn decode_link_payload(my_hash: &[u8; 16], data: &[u8]) -> Option<LxMessage> {
 }
 
 /// Forward a decoded inbound message to the UI, plus any location telemetry it
-/// carries (so the World Map can plot the sender).
+/// carries (so the World Map can plot the sender). A telemetry-only / command-only
+/// message has no text, so no conversation entry is emitted for it — only its
+/// telemetry (if any) is surfaced.
 async fn emit_message(events: &mpsc::Sender<NetEvent>, msg: LxMessage) {
     debug_dump_fields(events, &msg).await;
     let source = hex::encode(msg.source_hash);
     let location = telemetry_location(&msg);
-    let _ = events
-        .send(NetEvent::Message {
-            source: source.clone(),
-            title: msg.title,
-            content: msg.content,
-        })
-        .await;
+    if has_text_body(&msg) {
+        let _ = events
+            .send(NetEvent::Message {
+                source: source.clone(),
+                title: msg.title,
+                content: msg.content,
+            })
+            .await;
+    }
     if let Some((lat, lon)) = location {
         let _ = events.send(NetEvent::Telemetry { source, lat, lon }).await;
     }
+}
+
+/// Whether a decoded message carries any text the operator should see in the
+/// thread. Telemetry-only / command-only messages have neither a title nor a
+/// body, so they are not delivered as conversation entries (an empty `[RX]` line
+/// conveys nothing).
+fn has_text_body(msg: &LxMessage) -> bool {
+    !msg.title.is_empty() || !msg.content.is_empty()
 }
 
 /// Opt-in diagnostic (set `FOXHOLE_DEBUG_TELEMETRY`): log the inbound message's
@@ -827,9 +839,16 @@ async fn deliver_inbound(
 ) {
     match decoded {
         Some(msg) => {
+            // A message with no text is telemetry/command only — note that in the
+            // log rather than claiming it went to a thread it never reaches.
+            let dest = if has_text_body(&msg) {
+                "-> thread"
+            } else {
+                "(no text)"
+            };
             let _ = events
                 .send(NetEvent::Sys(format!(
-                    "[SYS] {label} message from {} -> thread ({raw_len} B)",
+                    "[SYS] {label} message from {} {dest} ({raw_len} B)",
                     hex::encode(msg.source_hash)
                 )))
                 .await;
