@@ -10,7 +10,7 @@ use ratatui::widgets::Paragraph;
 use crate::app::{App, BrowserPane, PageStatus};
 
 use super::style::{fmt_time, tag_style, ts_style};
-use super::widgets::{pane_block, render_scroll};
+use super::widgets::{NOSEL, SEL, pane_block, render_scroll};
 
 /// Browser tool: discovered Nomad Network nodes (left) and the current micron
 /// page (right). Phase 1 is read-only — `Enter` fetches a node's index page.
@@ -67,7 +67,7 @@ fn render_nomad_list(frame: &mut Frame, app: &App, area: Rect) {
             .enumerate()
             .map(|(i, n)| {
                 let selected = i == app.browser_selected;
-                let marker = if selected { "> " } else { "  " };
+                let marker = if selected { SEL } else { NOSEL };
                 let ts = match n.last_seen {
                     0 => "--:--:--".to_string(),
                     t => format!("{}Z", fmt_time(t)),

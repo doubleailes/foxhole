@@ -1,13 +1,17 @@
 //! Rendering layer.
 //!
 //! Pure functions of `&App` → frame. Field constraints:
-//!   * **7-bit ASCII only** — ratatui's default borders are Unicode line-draw
-//!     glyphs that corrupt on legacy serial terminals, so every pane uses the
-//!     `ASCII_BORDER` set (see [`widgets`]) (`+ - |`).
+//!   * **Tactical frame** — panels are drawn with Unicode box-drawing: resting
+//!     panes wear the heavy [`widgets::FRAME_BORDER`] (`┏━┓┃┗┛`) and the focused
+//!     pane the double-ruled [`widgets::FOCUS_BORDER`] (`╔═╗║╚╝`), so focus reads
+//!     structurally and not by colour alone. This trades the old strict 7-bit
+//!     ASCII chrome (which targeted line-printer gear) for the heavier
+//!     command-console look — it assumes a UTF-8 terminal.
 //!   * **Tactical palette** — scrollback content is tinted by category (see
 //!     [`style::tag_style`]): RX/TX traffic, delivery, link/routing, config,
-//!     warnings, errors, with muted timestamps. Structure (borders, active-pane
-//!     `REVERSED`, titles) stays glyph-only so it still reads on a mono display.
+//!     warnings, errors, with muted timestamps. The frame + active-pane cues
+//!     still degrade to monochrome cleanly (border weight, `REVERSED` titles,
+//!     the `▶` selection chevron).
 //!
 //! Layout has two tiers, mirroring Nomadnet: a tab strip selects the active
 //! [`Tool`](crate::app::Tool), whose body fills the middle; a shared status bar
