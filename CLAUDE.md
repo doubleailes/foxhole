@@ -9,44 +9,69 @@ Rust edition 2024. The UI shell is built; live networking is being wired in.
 
 ## Architecture
 
-A clean three-way split keeps the render path trivial and the logic testable:
+A Cargo **workspace** splits the program into layers by dependency weight: the
+logic and rendering are dependency-light member crates under `crates/`, while the
+async runtime and the live protocol stack stay in the root binary. The boundary
+is compiler-enforced — `foxhole-core` *cannot* reach for tokio/ratatui/reticulum
+because they aren't in its manifest.
 
-- `src/main.rs` — terminal lifecycle (raw mode, alt screen, panic-safe restore)
-  and the single async `select!` event loop multiplexing keyboard input and
-  inbound network events. Holds no UI or state rules.
-- `src/app.rs` — all state and key routing (`App`). Two focus tiers mirror
-  Nomadnet: top-level **tools** (tabs: Conversations / Network / Log /
+### `crates/foxhole-core` — domain model + state machine (logic only)
+
+Depends only on `crossterm` (key enums) and `foxhole-micron`. No async runtime,
+terminal, or networking. Fast to build, fully unit-tested.
+
+- `src/domain/` — the shared model every layer agrees on: `Conversation`,
+  `Entry`, `MsgStatus`; the UI↔network events/commands (`NetEvent`,
+  `NetCommand`, `Outbound`, `PeerKind`); the Network/Browser registries (`Node`,
+  `PathProbe`, `NomadNode`, `Page`). Carries no UI focus/navigation semantics.
+- `src/app/` — all state and key routing (`App`). Two focus tiers mirror
+  Nomadnet: top-level **tools** (tabs: Conversations / Network / Browser / Log /
   Interfaces / Guide, switched with Ctrl+N/Ctrl+P) and **panes** within a tool
-  (PeerList / Thread / Transmit, cycled with Tab). Conversations are per-peer
-  (`Conversation` with its own message scrollback + draft + unread count).
-  Free of I/O and rendering; unit-tested.
-- `src/ui.rs` — pure `&App` → frame rendering. **7-bit ASCII borders only**
-  (`ASCII_BORDER`); structure (borders, active-pane `REVERSED`, titles) stays
-  glyph-only so it degrades on a mono display, while scrollback *content* is
-  tinted by a tactical palette (`tag_style`: RX/TX/DLV/LNK/RT/CFG/WRN/ERR/…,
-  muted timestamps).
-- `src/splash.rs` — *(default-on `splash` feature)* pure renderer for the
-  cold-boot bring-up monitor (text only, no image). State lives in `App`
-  (`AppState::{Splash,Running}`, `BootStep`/`Boot`); `main` advances it on a
-  120 ms `select!` tick gated on `state == Splash`, and folds real readiness
-  events (`StoreKey`, `Local`, transport/identity banners) into `mark_boot` so
-  lines flip live and the console opens when the address is up. `cfg(test)` and
-  `FOXHOLE_NO_SPLASH` start in `Running`.
-- `src/micron.rs` — pure renderer for Nomad Network **micron** page markup,
-  mirroring NomadNet's `MicronParser.py` (NomadNet-dark-theme heading bars,
-  section indent, dividers, bold/italic/underline, `` `F``/`` `B`` colours,
-  alignment, escapes, literal blocks). `render(&str, width, focus, &values)`
-  draws the page (highlighting the focused element, filling text fields from
-  `values`); `elements(&str)` lists the focusable `Element`s (links + text
-  fields) the Browser navigates/submits. Unknown tags stripped, never fatal;
-  unit-tested.
+  (PeerList / Thread / Transmit, cycled with Tab). The struct + program-global
+  key routing + modals live in `mod.rs`; per-tool behaviour is split into
+  sibling `impl App` blocks (`conversations.rs`, `network.rs`, `browser.rs`) and
+  the cold-boot/scroll machinery into `boot.rs`. Free of I/O and rendering.
+- `src/config.rs` — persistent `key = value` settings (no serde/TOML);
+  `config_dir()` (overridable via `FOXHOLE_CONFIG_DIR`).
+- `src/storage.rs` — `atomic_write` (write-temp → fsync → rename) for durable state.
 - `src/burn.rs` — emergency data destruction (Ctrl+K → type `BURN`). `execute(dir)`
   zero-overwrites + `fsync`es + unlinks every file under `config_dir()`, then
   removes the tree; `main` runs it after the loop and `process::exit`s. Pure
   `std::fs`, always compiled, unit-tested. (Best-effort vs FS forensics; the real
   guarantee is the destroyed identity key making the stores undecryptable.)
-- `src/storage.rs` — `atomic_write` (write-temp → fsync → rename) for durable
-  state.
+
+### `crates/foxhole-micron` — micron renderer (ratatui only)
+
+Pure renderer for Nomad Network **micron** page markup, mirroring NomadNet's
+`MicronParser.py` (NomadNet-dark-theme heading bars, section indent, dividers,
+bold/italic/underline, `` `F``/`` `B`` colours, alignment, escapes, literal
+blocks). `render(&str, width, focus, &values)` draws the page (highlighting the
+focused element, filling text fields from `values`); `elements(&str)` lists the
+focusable `Element`s (links + text fields) the Browser navigates/submits. Unknown
+tags stripped, never fatal; unit-tested. Standalone (reusable by other NomadNet
+tooling).
+
+### `crates/foxhole-tui` — rendering (ratatui), pure `&App` → frame
+
+Depends on `foxhole-core` + `foxhole-micron`. **7-bit ASCII borders only**
+(`ASCII_BORDER`); structure (borders, active-pane `REVERSED`, titles) stays
+glyph-only so it degrades on a mono display, while scrollback *content* is tinted
+by a tactical palette (`style::tag_style`: RX/TX/DLV/LNK/RT/CFG/WRN/ERR/…, muted
+timestamps). `src/ui/` is split into a shared toolkit (`style.rs`, `widgets.rs`),
+chrome (`chrome.rs`), overlays (`popups.rs`), and one body module per tool.
+`src/splash.rs` *(default-on `splash` feature)* renders the cold-boot bring-up
+monitor; state lives in core's `App` (`AppState::{Splash,Running}`,
+`BootStep`/`Boot`), advanced by `main`'s 120 ms tick and folded from real
+readiness events via `mark_boot`. `cfg(test)` and `FOXHOLE_NO_SPLASH` start in
+`Running`.
+
+### `foxhole` (root binary) — runtime + protocol wiring
+
+- `src/main.rs` — terminal lifecycle (raw mode, alt screen, panic-safe restore)
+  and the single async `select!` event loop multiplexing keyboard input and
+  inbound network events. Holds no UI or state rules. Re-exports the member
+  crates under `crate::app`/`crate::config`/`crate::storage`/`crate::burn` so the
+  networking modules below read unchanged.
 - `src/store.rs` — *(`net` feature)* encrypted, atomic, per-conversation history
   store: `FXC1` blob → `rns_crypto::token` (AES-256-CBC + HMAC) → `atomic_write`,
   key HKDF-derived from the identity. Corruption/foreign files are skipped on load.
@@ -66,9 +91,12 @@ Ratspeak reference client — see `docs/lxmf-integration.md` for the full bindin
 
 ## Commands
 
+The `splash`/`net` features are declared on the root binary and forwarded to the
+member crates, so drive everything from the workspace root.
+
 - Build: `cargo build` (release: `cargo build --release`)
 - Build with networking: `cargo build --features net` (needs `../rsReticulum` + `../rsLXMF`)
 - Run: `cargo run` (or `cargo run --features net`)
-- Test: `cargo test` (single test: `cargo test <name>`)
-- Lint: `cargo clippy --all-targets -- -D warnings`
-- Format: `cargo fmt`
+- Test: `cargo test --workspace` (single test: `cargo test <name>`)
+- Lint: `cargo clippy --workspace --all-targets -- -D warnings`
+- Format: `cargo fmt --all`
