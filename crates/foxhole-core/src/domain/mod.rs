@@ -110,6 +110,30 @@ pub enum NetEvent {
         path: String,
         body: Result<String, String>,
     },
+    /// Live interface-status snapshot for the Interfaces tab, plus the current
+    /// active link count. Replaces the previous snapshot wholesale each poll
+    /// (a status refresh, not an upsert).
+    Interfaces {
+        interfaces: Vec<Interface>,
+        links: u32,
+    },
+}
+
+/// One network interface's live status (Interfaces tab), distilled from the
+/// transport's interface-stats RPC (rnstatus-style). Bytes/bitrate are raw; the
+/// UI formats them via [`fmt_bytes`]/[`fmt_bitrate`].
+#[cfg_attr(not(feature = "net"), allow(dead_code))]
+pub struct Interface {
+    /// Interface name as the stack reports it (e.g. `AutoInterface`).
+    pub name: String,
+    /// Whether the interface is currently up.
+    pub online: bool,
+    /// Configured/negotiated bitrate in bits per second.
+    pub bitrate: u64,
+    /// Total bytes received since start.
+    pub rx_bytes: u64,
+    /// Total bytes transmitted since start.
+    pub tx_bytes: u64,
 }
 
 /// A discovered propagation node, shown in the Network tab.
@@ -302,6 +326,52 @@ pub fn path_summary(hops: Option<u8>, iface: Option<&str>) -> String {
             format!("{n} {unit} via {}", iface.unwrap_or("?"))
         }
         None => "no path".to_string(),
+    }
+}
+
+/// Format a byte count for the Interfaces table, rnstatus-style: decimal
+/// (SI) units with up to two significant fraction digits — `"512 B"`,
+/// `"1.6 KB"`, `"852 MB"`, `"1.31 GB"`. Decimal (1000-based) to match
+/// Reticulum's `rnstatus` output.
+#[cfg_attr(not(feature = "net"), allow(dead_code))]
+pub fn fmt_bytes(n: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut value = n as f64;
+    let mut unit = 0;
+    while value >= 1000.0 && unit < UNITS.len() - 1 {
+        value /= 1000.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{n} B")
+    } else if value >= 100.0 {
+        format!("{value:.0} {}", UNITS[unit])
+    } else if value >= 10.0 {
+        format!("{value:.1} {}", UNITS[unit])
+    } else {
+        format!("{value:.2} {}", UNITS[unit])
+    }
+}
+
+/// Format a bitrate (bits per second) for the Interfaces table, rnstatus-style:
+/// `"0 bps"`, `"9.6 kbps"`, `"10 Mbps"`, `"1 Gbps"`.
+#[cfg_attr(not(feature = "net"), allow(dead_code))]
+pub fn fmt_bitrate(bps: u64) -> String {
+    const UNITS: [&str; 5] = ["bps", "kbps", "Mbps", "Gbps", "Tbps"];
+    let mut value = bps as f64;
+    let mut unit = 0;
+    while value >= 1000.0 && unit < UNITS.len() - 1 {
+        value /= 1000.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bps} bps")
+    } else if value >= 100.0 {
+        format!("{value:.0} {}", UNITS[unit])
+    } else if value >= 10.0 {
+        format!("{value:.1} {}", UNITS[unit])
+    } else {
+        format!("{value:.2} {}", UNITS[unit])
     }
 }
 

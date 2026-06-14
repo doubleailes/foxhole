@@ -470,6 +470,47 @@ fn record_path_stores_probe_and_logs() {
 }
 
 #[test]
+fn set_interfaces_replaces_snapshot_and_link_count() {
+    let mut app = App::new();
+    assert!(app.interfaces.is_empty());
+    assert_eq!(app.link_count, 0);
+
+    let mk = |name: &str, online| Interface {
+        name: name.to_string(),
+        online,
+        bitrate: 10_000_000,
+        rx_bytes: 1_600_000,
+        tx_bytes: 2_650_000,
+    };
+    app.set_interfaces(vec![mk("AutoInterface", true), mk("TCP hub", true)], 4);
+    assert_eq!(app.interfaces.len(), 2);
+    assert_eq!(app.link_count, 4);
+
+    // A later snapshot replaces wholesale (not an upsert).
+    app.set_interfaces(vec![mk("AutoInterface", false)], 0);
+    assert_eq!(app.interfaces.len(), 1);
+    assert!(!app.interfaces[0].online);
+    assert_eq!(app.link_count, 0);
+}
+
+#[test]
+fn fmt_bytes_scales_with_decimal_units() {
+    assert_eq!(fmt_bytes(512), "512 B");
+    assert_eq!(fmt_bytes(1_600), "1.60 KB");
+    assert_eq!(fmt_bytes(1_600_000), "1.60 MB");
+    assert_eq!(fmt_bytes(852_000_000), "852 MB");
+    assert_eq!(fmt_bytes(1_310_000_000), "1.31 GB");
+}
+
+#[test]
+fn fmt_bitrate_scales_with_decimal_units() {
+    assert_eq!(fmt_bitrate(0), "0 bps");
+    assert_eq!(fmt_bitrate(9_600), "9.60 kbps");
+    assert_eq!(fmt_bitrate(10_000_000), "10.0 Mbps");
+    assert_eq!(fmt_bitrate(1_000_000_000), "1.00 Gbps");
+}
+
+#[test]
 fn upsert_nomad_dedupes_and_keeps_newest_last_seen() {
     let mut app = App::new();
     let id = "11".repeat(16);

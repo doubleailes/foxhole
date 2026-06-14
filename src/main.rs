@@ -252,6 +252,7 @@ fn apply_net_event(app: &mut App, ev: NetEvent) {
             path,
             body,
         } => app.set_page(identity, path, body),
+        NetEvent::Interfaces { interfaces, links } => app.set_interfaces(interfaces, links),
         // Handled in `run` (loads history); nothing to fold into UI state here.
         NetEvent::StoreKey(_) => {}
     }
