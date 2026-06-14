@@ -82,4 +82,12 @@ impl App {
             },
         );
     }
+
+    /// Replace the interface-status snapshot shown by the Interfaces tab and
+    /// record the active link count (a status refresh, not an upsert).
+    #[cfg_attr(not(feature = "net"), allow(dead_code))]
+    pub fn set_interfaces(&mut self, interfaces: Vec<Interface>, links: u32) {
+        self.interfaces = interfaces;
+        self.link_count = links;
+    }
 }

@@ -31,8 +31,8 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use crate::config::Config;
 pub use crate::domain::{
-    Conversation, Entry, MsgStatus, NetCommand, NetEvent, Node, NomadNode, Outbound, Page,
-    PageStatus, PathProbe, PeerKind, path_summary,
+    Conversation, Entry, Interface, MsgStatus, NetCommand, NetEvent, Node, NomadNode, Outbound,
+    Page, PageStatus, PathProbe, PeerKind, fmt_bitrate, fmt_bytes, path_summary,
 };
 
 pub use boot::{AppState, Scroll};
@@ -229,6 +229,10 @@ pub struct App {
     pub net_col: NetColumn,
     /// Latest rnpath-style path probe per hex destination hash (Network tab).
     pub path_probes: HashMap<String, PathProbe>,
+    /// Live interface status (Interfaces tab); empty until the stack reports.
+    pub interfaces: Vec<Interface>,
+    /// Active link count reported alongside the interface snapshot.
+    pub link_count: u32,
     /// Discovered Nomad Network nodes (Browser tab).
     pub nomad_nodes: Vec<NomadNode>,
     /// Highlighted row in the Browser tab's node list.
@@ -307,6 +311,8 @@ impl App {
             node_selected: 0,
             net_col: NetColumn::Peers,
             path_probes: HashMap::new(),
+            interfaces: Vec::new(),
+            link_count: 0,
             nomad_nodes: Vec::new(),
             browser_selected: 0,
             browser_pane: BrowserPane::Nodes,

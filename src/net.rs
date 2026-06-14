@@ -42,7 +42,7 @@ use rns_transport::messages::{
     AnnounceHandlerEvent, OutboundRequest, TransportMessage, TransportQuery, TransportQueryResponse,
 };
 
-use crate::app::{MsgStatus, NetCommand, NetEvent, Outbound, PeerKind};
+use crate::app::{Interface, MsgStatus, NetCommand, NetEvent, Outbound, PeerKind};
 use crate::config::{Config, config_dir};
 
 /// Tracks outbound messages in flight so delivery outcomes can be reported back
@@ -638,6 +638,12 @@ async fn run_inner(
                     .await;
                 }
 
+                // Refresh the Interfaces tab from the transport's interface
+                // stats (rnstatus-style) every ~2 s — a cheap in-process query.
+                if ticks.is_multiple_of(2) {
+                    poll_interfaces(&handle, events).await;
+                }
+
                 dispatch(&mut router, &mut link_delivery, &known, &hops, &mut last_path_request, &mut tracker, &transport, events).await;
             }
             _ = announce_tick.tick() => {
@@ -889,6 +895,35 @@ async fn discover_nomad_nodes(
             })
             .await;
     }
+}
+
+/// Snapshot the transport's per-interface stats (and the active link count) and
+/// forward them to the Interfaces tab. Modeled on the path/announce queries:
+/// a fire-and-poll RPC whose result replaces the UI snapshot wholesale.
+async fn poll_interfaces(handle: &reticulum::ReticulumHandle, events: &mpsc::Sender<NetEvent>) {
+    let Some(TransportQueryResponse::InterfaceStats(stats)) = handle
+        .query_control(TransportQuery::GetInterfaceStats)
+        .await
+    else {
+        return;
+    };
+    let links = match handle.query_control(TransportQuery::GetLinkCount).await {
+        Some(TransportQueryResponse::IntResult(n)) => n.max(0) as u32,
+        _ => 0,
+    };
+    let interfaces = stats
+        .into_iter()
+        .map(|s| Interface {
+            name: s.name,
+            online: s.online,
+            bitrate: s.bitrate,
+            rx_bytes: s.rx_bytes,
+            tx_bytes: s.tx_bytes,
+        })
+        .collect();
+    let _ = events
+        .send(NetEvent::Interfaces { interfaces, links })
+        .await;
 }
 
 /// Encode a Nomad Network form submission as the msgpack map the node expects —
