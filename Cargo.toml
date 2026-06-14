@@ -4,7 +4,16 @@ version = "0.1.0"
 edition = "2024"
 description = "FoxHole — off-grid, keyboard-only, monochrome LXMF comms terminal"
 
+[workspace]
+members = ["crates/foxhole-micron", "crates/foxhole-core", "crates/foxhole-tui"]
+
 [dependencies]
+# --- FoxHole's own layers (workspace member crates) ---------------------------
+# Domain model + state machine (logic only) and the terminal UI (rendering only).
+# The binary wires them to the runtime and, under `net`, the live protocol stack.
+foxhole-core = { path = "crates/foxhole-core" }
+foxhole-tui = { path = "crates/foxhole-tui" }
+
 # TUI framework. The crossterm backend is enabled by default.
 ratatui = "0.30"
 
@@ -50,11 +59,13 @@ rmpv = { version = "1.3", optional = true }
 [features]
 default = ["splash"]
 # Native cold-boot splash: a text-only bring-up sequence that doubles as a live
-# readiness monitor (see src/splash.rs). Pure ASCII, no extra dependencies — the
-# feature only gates FoxHole's own code; `--no-default-features` drops it.
-splash = []
+# readiness monitor (see crates/foxhole-tui/src/splash.rs). Pure ASCII, no extra
+# dependencies — the feature only gates FoxHole's own code; `--no-default-features`
+# drops it. Forwarded to the core (state) and tui (renderer) crates.
+splash = ["foxhole-core/splash", "foxhole-tui/splash"]
 # Live LXMF/Reticulum protocol stack. Flips the status bar to NET:ON and brings up
 # the real transport + LXMF router in `src/net.rs` (see docs/lxmf-integration.md).
+# Also enables the matching net-only cfg gating in the core/tui crates.
 net = [
     "dep:rns-crypto",
     "dep:rns-wire",
@@ -66,4 +77,6 @@ net = [
     "dep:bytes",
     "dep:hex",
     "dep:rmpv",
+    "foxhole-core/net",
+    "foxhole-tui/net",
 ]

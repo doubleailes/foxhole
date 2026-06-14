@@ -1,0 +1,16 @@
+[package]
+name = "foxhole-tui"
+version = "0.1.0"
+edition = "2024"
+description = "FoxHole terminal UI: pure &App -> frame rendering and cold-boot splash"
+
+[dependencies]
+ratatui = "0.30"
+foxhole-core = { path = "../foxhole-core" }
+foxhole-micron = { path = "../foxhole-micron" }
+
+[features]
+# Cold-boot splash renderer; pulls the matching state in core.
+splash = ["foxhole-core/splash"]
+# Status-bar NET indicator + net-only cfg parity with core.
+net = ["foxhole-core/net"]
