@@ -22,6 +22,7 @@ mod browser;
 mod chrome;
 mod conversations;
 mod network;
+mod notes;
 mod popups;
 mod style;
 #[cfg(test)]

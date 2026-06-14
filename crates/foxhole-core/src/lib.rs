@@ -14,4 +14,5 @@ pub mod burn;
 pub mod config;
 pub mod domain;
 pub mod mnemonic;
+pub mod notes;
 pub mod storage;

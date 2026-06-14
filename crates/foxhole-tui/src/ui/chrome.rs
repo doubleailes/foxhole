@@ -12,6 +12,7 @@ use crate::app::{App, Pane, Tool};
 use super::browser::render_browser;
 use super::conversations::render_conversations;
 use super::network::render_network;
+use super::notes::render_notes;
 use super::views::{render_guide, render_interfaces, render_log};
 use super::widgets::pane_block;
 
@@ -45,6 +46,7 @@ pub(super) fn render_tool(frame: &mut Frame, app: &App, area: Rect) {
         Tool::Browser => render_browser(frame, app, area),
         Tool::Log => render_log(frame, app, area),
         Tool::Interfaces => render_interfaces(frame, app, area),
+        Tool::Notes => render_notes(frame, app, area),
         Tool::Guide => render_guide(frame, app, area),
     }
 }

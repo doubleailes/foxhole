@@ -15,7 +15,7 @@
 // referring to `crate::app`, `crate::config`, etc. unchanged.
 #[cfg(feature = "net")]
 pub use foxhole_core::storage;
-pub use foxhole_core::{app, burn, config};
+pub use foxhole_core::{app, burn, config, notes};
 use foxhole_tui::ui;
 
 #[cfg(feature = "net")]
@@ -61,6 +61,7 @@ async fn main() -> io::Result<()> {
 
     let mut app = App::new();
     app.config = config::Config::load();
+    app.notes = notes::Notes::load();
 
     // Under `net` the network task gets a clone of the config plus channels for
     // outbound messages and UI commands; offline it is a quiet stub.
@@ -148,6 +149,12 @@ async fn run(
                         if let Some(tx) = &command_tx {
                             let _ = tx.try_send(cmd);
                         }
+                    }
+                    // Persist the note buffer if a slot changed this keystroke.
+                    if std::mem::take(&mut app.notes_dirty)
+                        && let Err(e) = app.notes.save()
+                    {
+                        app.push_log(format!("[SYS] notes save failed: {e}"));
                     }
                 }
                 // Resize is handled implicitly by redrawing; other events
