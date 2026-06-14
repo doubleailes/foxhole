@@ -328,6 +328,28 @@ mod tests {
     }
 
     #[test]
+    fn telemetry_creates_a_peer_marker_and_refreshes_it() {
+        let mut app = App::new();
+        app.conversations.clear();
+        let log_before = app.syslog.len();
+
+        // A fix from a peer we have never messaged still plots (the conversation
+        // is created on first contact) and is logged.
+        app.set_location("a1b2c3", GeoPos::new(51.5, -0.12));
+        assert_eq!(app.conversations.len(), 1);
+        let markers = app.map_markers();
+        assert_eq!(markers.len(), 1);
+        assert_eq!(markers[0].kind, MarkerKind::Peer);
+        assert_eq!(markers[0].pos, GeoPos::new(51.5, -0.12));
+        assert!(app.syslog.len() > log_before, "telemetry is logged");
+
+        // A later fix refreshes the same peer in place (no duplicate).
+        app.set_location("a1b2c3", GeoPos::new(40.0, -74.0));
+        assert_eq!(app.conversations.len(), 1);
+        assert_eq!(app.map_markers()[0].pos, GeoPos::new(40.0, -74.0));
+    }
+
+    #[test]
     fn cycling_markers_wraps_and_recenters() {
         let mut app = App::new();
         app.config = Config::default();

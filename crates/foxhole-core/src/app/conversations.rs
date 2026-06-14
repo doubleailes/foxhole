@@ -311,6 +311,27 @@ impl App {
         self.mark_dirty(peer);
     }
 
+    /// Record a peer's shared position from LXMF telemetry (Sideband-style),
+    /// creating the conversation on first contact so a fix from a peer we have
+    /// not messaged still plots on the World Map. The location is transient (not
+    /// written to the store) — it is refreshed from live telemetry. Logs the
+    /// update to the Log tool.
+    pub fn set_location(&mut self, peer: &str, pos: GeoPos) {
+        let idx = match self.conversations.iter().position(|c| c.peer == peer) {
+            Some(i) => i,
+            None => {
+                self.conversations.push(Conversation::new(peer));
+                self.conversations.len() - 1
+            }
+        };
+        self.conversations[idx].location = Some(pos);
+        let label = self.conversations[idx].label();
+        self.push_log(format!(
+            "[SYS] telemetry: {label} @ {:.4}, {:.4}",
+            pos.lat, pos.lon
+        ));
+    }
+
     /// Append an inbound or system line. `[SYS]`-tagged lines belong to the Log
     /// tool; everything else is conversation traffic routed to a peer. This
     /// keeps `main`'s single inbound channel routing to the right view without

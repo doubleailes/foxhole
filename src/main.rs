@@ -254,6 +254,9 @@ fn apply_net_event(app: &mut App, ev: NetEvent) {
             };
             app.deliver(&source, &body);
         }
+        NetEvent::Telemetry { source, lat, lon } => {
+            app.set_location(&source, app::GeoPos::new(lat, lon));
+        }
         NetEvent::Sync(status) => app.sync_status = status,
         NetEvent::MsgStatus { id, status } => app.set_msg_status(id, status),
         NetEvent::Path { hash, hops, iface } => app.record_path(hash, hops, iface),
