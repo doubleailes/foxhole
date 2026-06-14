@@ -439,16 +439,19 @@ async fn run_inner(
             // Opportunistic (non-link) inbound: decrypt with our identity.
             Some(raw) = inbound_raw_rx.recv() => {
                 let decoded = decode_inbound(&identity, &lxmf_hash, &raw);
+                answer_telemetry_request(&decoded, &identity, &lxmf_hash, &config, &mut router, &mut link_delivery, &known, &hops, &mut last_path_request, &mut tracker, &transport, events).await;
                 deliver_inbound(events, "opportunistic", raw.len(), decoded).await;
             }
             // Direct (link) inbound: already decrypted by the link manager.
             Some((data, _link)) = link_packet_rx.recv() => {
                 let decoded = decode_link_payload(&lxmf_hash, &data);
+                answer_telemetry_request(&decoded, &identity, &lxmf_hash, &config, &mut router, &mut link_delivery, &known, &hops, &mut last_path_request, &mut tracker, &transport, events).await;
                 deliver_inbound(events, "direct", data.len(), decoded).await;
             }
             // Large messages arriving as a completed resource over a link.
             Some((data, _link)) = resource_rx.recv() => {
                 let decoded = decode_link_payload(&lxmf_hash, &data);
+                answer_telemetry_request(&decoded, &identity, &lxmf_hash, &config, &mut router, &mut link_delivery, &known, &hops, &mut last_path_request, &mut tracker, &transport, events).await;
                 deliver_inbound(events, "direct(resource)", data.len(), decoded).await;
             }
             Some(_link) = link_up_rx.recv() => {
@@ -758,6 +761,7 @@ async fn debug_dump_fields(events: &mpsc::Sender<NetEvent>, msg: &LxMessage) {
     for fid in [
         lxmf_core::constants::FIELD_TELEMETRY,
         lxmf_core::constants::FIELD_TELEMETRY_STREAM,
+        lxmf_core::constants::FIELD_COMMANDS,
     ] {
         if let Some(bytes) = msg.get_field(fid) {
             let _ = events
@@ -825,6 +829,124 @@ fn telemetry_coord(v: &rmpv::Value) -> Option<f64> {
         Some(u as f64 / 1e6)
     } else {
         v.as_f64()
+    }
+}
+
+/// Whether an inbound message is asking us for our telemetry. Sideband's "Request
+/// telemetry" sends a `FIELD_COMMANDS` (0x09) command-only message; we answer any
+/// command-bearing message with our position (the dominant command between
+/// contacts is the telemetry request). The exact command id isn't in the pinned
+/// LXMF, so this stays deliberately lenient — set `FOXHOLE_DEBUG_TELEMETRY` to
+/// capture the raw `0x09` payload if finer discrimination is ever needed.
+fn wants_telemetry(msg: &LxMessage) -> bool {
+    msg.get_field(lxmf_core::constants::FIELD_COMMANDS)
+        .is_some()
+}
+
+/// Pack a position into Sideband's telemetry format (the inverse of
+/// [`parse_location_telemetry`]): a msgpack map `{ 0x01: <time>, 0x02: [lat, lon,
+/// alt, speed, bearing, accuracy, ts] }` with each coordinate a 4-byte big-endian
+/// signed int of `degrees ×1e6` wrapped in a msgpack binary.
+fn pack_location_telemetry(lat: f64, lon: f64, time: u64) -> Vec<u8> {
+    let micro = |deg: f64| rmpv::Value::Binary(((deg * 1e6).round() as i32).to_be_bytes().to_vec());
+    let zero4 = rmpv::Value::Binary(0i32.to_be_bytes().to_vec());
+    let location = rmpv::Value::Array(vec![
+        micro(lat),
+        micro(lon),
+        zero4.clone(),                         // altitude
+        zero4.clone(),                         // speed
+        zero4,                                 // bearing
+        rmpv::Value::Binary(vec![0x00, 0x00]), // accuracy (2 bytes, as Sideband)
+        rmpv::Value::from(time),               // last_update
+    ]);
+    let map = rmpv::Value::Map(vec![
+        (rmpv::Value::from(0x01_u8), rmpv::Value::from(time)), // SID_TIME
+        (rmpv::Value::from(SID_LOCATION), location),
+    ]);
+    let mut buf = Vec::new();
+    rmpv::encode::write_value(&mut buf, &map).expect("encode telemetry");
+    buf
+}
+
+/// Build a signed, telemetry-only LXMF reply to `dest`, carrying our `lat`/`lon`.
+/// Mirrors [`build_message`]: empty title/body, the telemetry rides in
+/// `FIELD_TELEMETRY`.
+fn build_telemetry_reply(
+    identity: &Identity,
+    source: &[u8; 16],
+    dest: [u8; 16],
+    lat: f64,
+    lon: f64,
+) -> Result<LxMessage, String> {
+    let mut msg = LxMessage::new(dest, *source, "", "", DeliveryMethod::Direct);
+    let blob = pack_location_telemetry(lat, lon, now_secs() as u64);
+    msg.set_field(lxmf_core::constants::FIELD_TELEMETRY, blob);
+    let signing_key = identity
+        .get_signing_key()
+        .ok_or_else(|| "identity has no signing key".to_string())?;
+    msg.sign(&signing_key).map_err(|e| format!("sign: {e}"))?;
+    msg.compute_hash().map_err(|e| format!("hash: {e}"))?;
+    Ok(msg)
+}
+
+/// If `decoded` is a telemetry request and the operator has a configured
+/// position, send our location back to the requester. No-op otherwise (e.g. a
+/// non-request message, or no `lat`/`lon` set in the config). Runs in the inbound
+/// path, so the same dispatch machinery as a normal send is reused.
+#[allow(clippy::too_many_arguments)]
+async fn answer_telemetry_request(
+    decoded: &Option<LxMessage>,
+    identity: &Identity,
+    lxmf_hash: &[u8; 16],
+    config: &Config,
+    router: &mut LxmRouter,
+    link_delivery: &mut LinkDeliveryManager,
+    known: &KnownKeys,
+    hops: &HopCache,
+    last_path_request: &mut HashMap<[u8; 16], f64>,
+    tracker: &mut StatusTracker,
+    transport: &mpsc::Sender<TransportMessage>,
+    events: &mpsc::Sender<NetEvent>,
+) {
+    let Some(msg) = decoded else { return };
+    if !wants_telemetry(msg) {
+        return;
+    }
+    let Some(pos) = config.operator_pos() else {
+        let _ = events
+            .send(NetEvent::Sys(
+                "[SYS] telemetry request ignored (no operator position — set lat/lon in foxhole.conf)"
+                    .to_string(),
+            ))
+            .await;
+        return;
+    };
+    match build_telemetry_reply(identity, lxmf_hash, msg.source_hash, pos.lat, pos.lon) {
+        Ok(reply) => {
+            let dest = hex::encode(reply.destination_hash);
+            router.send(reply);
+            dispatch(
+                router,
+                link_delivery,
+                known,
+                hops,
+                last_path_request,
+                tracker,
+                transport,
+                events,
+            )
+            .await;
+            let _ = events
+                .send(NetEvent::Sys(format!(
+                    "[SYS] answered telemetry request from {dest}"
+                )))
+                .await;
+        }
+        Err(e) => {
+            let _ = events
+                .send(NetEvent::Sys(format!("[SYS] telemetry reply: {e}")))
+                .await;
+        }
     }
 }
 
@@ -1680,6 +1802,31 @@ mod tests {
         let mut buf = Vec::new();
         rmpv::encode::write_value(&mut buf, &map).expect("encode");
         buf
+    }
+
+    #[test]
+    fn packs_telemetry_that_round_trips_through_the_decoder() {
+        // What we send back to a requester must decode to the same position.
+        let blob = pack_location_telemetry(48.5342, 3.8325, 1_781_467_583);
+        let (lat, lon) = parse_location_telemetry(&blob).expect("round-trips");
+        assert!((lat - 48.5342).abs() < 1e-6, "lat was {lat}");
+        assert!((lon - 3.8325).abs() < 1e-6, "lon was {lon}");
+
+        // Negative (west/south) coordinates survive the i32 two's-complement pack.
+        let blob = pack_location_telemetry(-33.86, -70.65, 0);
+        let (lat, lon) = parse_location_telemetry(&blob).expect("round-trips");
+        assert!((lat + 33.86).abs() < 1e-6);
+        assert!((lon + 70.65).abs() < 1e-6);
+    }
+
+    #[test]
+    fn detects_telemetry_request_by_commands_field() {
+        let mut msg = LxMessage::new([0u8; 16], [1u8; 16], "", "", DeliveryMethod::Direct);
+        // A plain message is not a request.
+        assert!(!wants_telemetry(&msg));
+        // A command-bearing message is treated as one.
+        msg.set_field(lxmf_core::constants::FIELD_COMMANDS, vec![0x90]);
+        assert!(wants_telemetry(&msg));
     }
 
     #[test]
