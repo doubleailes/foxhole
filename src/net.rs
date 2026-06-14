@@ -832,15 +832,37 @@ fn telemetry_coord(v: &rmpv::Value) -> Option<f64> {
     }
 }
 
-/// Whether an inbound message is asking us for our telemetry. Sideband's "Request
-/// telemetry" sends a `FIELD_COMMANDS` (0x09) command-only message; we answer any
-/// command-bearing message with our position (the dominant command between
-/// contacts is the telemetry request). The exact command id isn't in the pinned
-/// LXMF, so this stays deliberately lenient — set `FOXHOLE_DEBUG_TELEMETRY` to
-/// capture the raw `0x09` payload if finer discrimination is ever needed.
+/// Sideband command id for a telemetry request (`Commands.TELEMETRY_REQUEST`).
+/// Confirmed from a live handset's `FIELD_COMMANDS` payload.
+const COMMAND_TELEMETRY_REQUEST: u8 = 0x01;
+
+/// Whether an inbound message is Sideband's "Request telemetry". The
+/// `FIELD_COMMANDS` (0x09) value is a msgpack array of commands, each a map
+/// `{ command_id: params }`; a telemetry request carries
+/// [`COMMAND_TELEMETRY_REQUEST`] (its params are `[timebase, …]`, which we
+/// ignore — we just answer with our current position).
 fn wants_telemetry(msg: &LxMessage) -> bool {
     msg.get_field(lxmf_core::constants::FIELD_COMMANDS)
-        .is_some()
+        .is_some_and(|bytes| is_telemetry_request(bytes))
+}
+
+/// Parse a `FIELD_COMMANDS` payload and report whether any command is a telemetry
+/// request. Malformed payloads decode to `false` (never a panic).
+fn is_telemetry_request(bytes: &[u8]) -> bool {
+    let Ok(value) = rmpv::decode::read_value(&mut &bytes[..]) else {
+        return false;
+    };
+    let Some(commands) = value.as_array() else {
+        return false;
+    };
+    commands.iter().any(|cmd| {
+        cmd.as_map().is_some_and(|entries| {
+            entries.iter().any(|(k, _)| {
+                let id = k.as_u64().or_else(|| k.as_i64().map(|i| i as u64));
+                id == Some(u64::from(COMMAND_TELEMETRY_REQUEST))
+            })
+        })
+    })
 }
 
 /// Pack a position into Sideband's telemetry format (the inverse of
@@ -1819,14 +1841,39 @@ mod tests {
         assert!((lon + 70.65).abs() < 1e-6);
     }
 
+    /// A `FIELD_COMMANDS` payload carrying a single command with `command_id`.
+    fn commands_blob(command_id: u8) -> Vec<u8> {
+        let cmds = rmpv::Value::Array(vec![rmpv::Value::Map(vec![(
+            rmpv::Value::from(command_id),
+            rmpv::Value::Array(vec![
+                rmpv::Value::from(0.0_f64),
+                rmpv::Value::Boolean(false),
+            ]),
+        )])]);
+        let mut buf = Vec::new();
+        rmpv::encode::write_value(&mut buf, &cmds).expect("encode");
+        buf
+    }
+
     #[test]
-    fn detects_telemetry_request_by_commands_field() {
+    fn detects_telemetry_request_command() {
         let mut msg = LxMessage::new([0u8; 16], [1u8; 16], "", "", DeliveryMethod::Direct);
         // A plain message is not a request.
         assert!(!wants_telemetry(&msg));
-        // A command-bearing message is treated as one.
-        msg.set_field(lxmf_core::constants::FIELD_COMMANDS, vec![0x90]);
+
+        // The exact FIELD_COMMANDS payload captured from a live Sideband handset:
+        // `[ { 0x01: [<float64 timebase>, false] } ]` — command 0x01 is the
+        // telemetry request.
+        let real = hex::decode("91810192cb41da89756a3cdf3bc2").expect("valid hex");
+        assert!(is_telemetry_request(&real));
+        msg.set_field(lxmf_core::constants::FIELD_COMMANDS, real);
         assert!(wants_telemetry(&msg));
+
+        // A different command (not 0x01) is not answered.
+        assert!(is_telemetry_request(&commands_blob(0x01)));
+        assert!(!is_telemetry_request(&commands_blob(0x02)));
+        // Junk never panics.
+        assert!(!is_telemetry_request(&[0xff, 0x00]));
     }
 
     #[test]
