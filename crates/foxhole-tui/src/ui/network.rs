@@ -11,7 +11,7 @@ use ratatui::widgets::Paragraph;
 use crate::app::{App, NetColumn, Trust, path_summary};
 
 use super::style::{fmt_time, tag_style, trust_style, ts_style};
-use super::widgets::{NOSEL, SEL, pane_block};
+use super::widgets::{NOSEL, SEL, count_tag, tactical_block};
 
 /// Network tool: known delivery peers and propagation nodes in two keyboard-
 /// navigable columns, each row carrying a last-seen UTC stamp. The focused
@@ -79,7 +79,11 @@ fn render_peer_column(frame: &mut Frame, app: &App, area: Rect) {
             })
             .collect()
     };
-    let para = Paragraph::new(lines).block(pane_block("PEERS (lxmf.delivery)", focused));
+    let para = Paragraph::new(lines).block(tactical_block(
+        "PEERS (lxmf.delivery)",
+        Some(count_tag(app.conversations.len())),
+        focused,
+    ));
     frame.render_widget(para, area);
 }
 
@@ -112,8 +116,25 @@ fn render_node_column(frame: &mut Frame, app: &App, area: Rect) {
             })
             .collect()
     };
-    let para = Paragraph::new(lines).block(pane_block("PROPAGATION NODES", focused));
+    let para = Paragraph::new(lines).block(tactical_block(
+        "PROPAGATION NODES",
+        Some(count_tag(app.nodes.len())),
+        focused,
+    ));
     frame.render_widget(para, area);
+}
+
+/// A 4-cell signal meter from a probe's hop count: nearer is stronger. `▰` lit,
+/// `▱` dim. An empty meter means a known-but-pathless peer; a blank means we've
+/// never probed it.
+pub(super) fn signal_meter(hops: Option<u8>) -> &'static str {
+    match hops {
+        Some(0) | Some(1) => "▰▰▰▰",
+        Some(2) => "▰▰▰▱",
+        Some(3) => "▰▰▱▱",
+        Some(4) => "▰▱▱▱",
+        _ => "▱▱▱▱",
+    }
 }
 
 /// One roster row: `> <trust> name   hash8.. HH:MM:SSZ <tail>`. Peers carry a
@@ -160,13 +181,14 @@ fn net_row(
     Line::from(spans)
 }
 
-/// Compact per-row path indicator from the last probe: ` 3h`, ` x` (no path),
-/// or empty when never probed.
+/// Compact per-row path indicator from the last probe: a signal meter plus the
+/// hop count (` ▰▰▱▱ 3h`), an empty meter for a known-but-pathless peer
+/// (` ▱▱▱▱ x`), or blank when never probed.
 fn hop_hint(app: &App, hash: &str) -> String {
     match app.path_probes.get(hash) {
         Some(p) => match p.hops {
-            Some(n) => format!(" {n}h"),
-            None => " x".to_string(),
+            Some(n) => format!(" {} {n}h", signal_meter(Some(n))),
+            None => format!(" {} x", signal_meter(None)),
         },
         None => String::new(),
     }

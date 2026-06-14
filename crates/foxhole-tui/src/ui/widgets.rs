@@ -9,12 +9,15 @@
 //! assumes a UTF-8 terminal; pure line-printer gear is no longer a target.
 
 use ratatui::Frame;
-use ratatui::layout::Rect;
+use ratatui::layout::{Margin, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::symbols::border;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{
+    Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
+};
 
+use super::style::ts_style;
 use crate::app::Scroll;
 
 /// Heavy box-drawing frame — the default tactical panel border (`┏━┓┃┗┛`). Reads
@@ -58,11 +61,17 @@ pub(super) fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
     }
 }
 
-/// A bordered tactical panel. Resting panes wear the heavy [`FRAME_BORDER`];
-/// the active pane is flagged by the double-ruled [`FOCUS_BORDER`], a brightened
-/// border, a reversed title, and a leading status pip (`◆` live / `·` resting) so
-/// focus is legible whether or not the terminal honours colour.
-pub(super) fn pane_block(title: &str, active: bool) -> Block<'_> {
+/// A bordered tactical panel with an optional right-aligned HUD readout in the
+/// top border (scroll position, item count, …). Resting panes wear the heavy
+/// [`FRAME_BORDER`]; the active pane is flagged by the double-ruled
+/// [`FOCUS_BORDER`], a brightened border, a reversed title, a leading status pip
+/// (`◆` live / `·` resting) and a `LIVE` corner stamp — so focus is legible
+/// whether or not the terminal honours colour.
+pub(super) fn tactical_block<'a>(
+    title: &'a str,
+    right: Option<Span<'a>>,
+    active: bool,
+) -> Block<'a> {
     let mut title_style = Style::default().add_modifier(Modifier::BOLD);
     let mut border_style = Style::default();
     let (set, pip) = if active {
@@ -72,11 +81,70 @@ pub(super) fn pane_block(title: &str, active: bool) -> Block<'_> {
     } else {
         (FRAME_BORDER, "·")
     };
-    Block::default()
+    let mut block = Block::default()
         .borders(Borders::ALL)
         .border_set(set)
         .border_style(border_style)
-        .title(Span::styled(format!(" {pip} {title} "), title_style))
+        .title_top(Line::from(Span::styled(
+            format!(" {pip} {title} "),
+            title_style,
+        )));
+    // Right-corner readout: the caller's tag, or a `LIVE` stamp on the focused pane.
+    let corner = right.or_else(|| {
+        active.then(|| Span::styled(" ◆LIVE◆ ", Style::default().add_modifier(Modifier::BOLD)))
+    });
+    if let Some(tag) = corner {
+        block = block.title_top(Line::from(tag).right_aligned());
+    }
+    block
+}
+
+/// A bordered tactical panel with no right-corner readout (the common case).
+pub(super) fn pane_block(title: &str, active: bool) -> Block<'_> {
+    tactical_block(title, None, active)
+}
+
+/// A muted right-corner position readout for a scroll pane: the visible row span
+/// over the total (`12–34/80`), or just the line count when it all fits.
+fn pos_tag(off: u16, viewport: u16, content: u16) -> Span<'static> {
+    let label = if content == 0 || content <= viewport {
+        format!(" {content} ln ")
+    } else {
+        let first = off + 1;
+        let last = (off + viewport).min(content);
+        format!(" {first}\u{2013}{last}/{content} ")
+    };
+    Span::styled(label, ts_style())
+}
+
+/// A muted right-corner item count for a roster pane (`▶ PEERS … [ 3 ]`).
+pub(super) fn count_tag(n: usize) -> Span<'static> {
+    Span::styled(format!(" {n} "), ts_style())
+}
+
+/// Overlay a tactical vertical scrollbar on a pane's right border — caps (`▲`/`▼`),
+/// a dotted track and a solid thumb — but only when the content overflows the
+/// viewport (otherwise the heavy border reads cleaner).
+fn render_scrollbar(frame: &mut Frame, area: Rect, content: u16, viewport: u16, off: u16) {
+    if content <= viewport || area.height < 3 {
+        return;
+    }
+    let mut state = ScrollbarState::new(content as usize)
+        .viewport_content_length(viewport as usize)
+        .position(off as usize);
+    let bar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+        .begin_symbol(Some("▲"))
+        .end_symbol(Some("▼"))
+        .track_symbol(Some("┊"))
+        .thumb_symbol("█");
+    frame.render_stateful_widget(
+        bar,
+        area.inner(Margin {
+            vertical: 1,
+            horizontal: 0,
+        }),
+        &mut state,
+    );
 }
 
 /// Render a read-only scrollback pane: a bordered block whose view is pinned to
@@ -93,12 +161,15 @@ pub(super) fn render_scrollback(
     // `inner_h` lines are shown (approximate for wrapped lines — fine here).
     let inner_h = area.height.saturating_sub(2) as usize;
     let scroll = lines.len().saturating_sub(inner_h) as u16;
+    let content = lines.len().min(u16::MAX as usize) as u16;
 
+    let tag = pos_tag(scroll, inner_h as u16, content);
     let para = Paragraph::new(lines)
-        .block(pane_block(title, active))
+        .block(tactical_block(title, Some(tag), active))
         .wrap(Wrap { trim: false })
         .scroll((scroll, 0));
     frame.render_widget(para, area);
+    render_scrollbar(frame, area, content, inner_h as u16, scroll);
 }
 
 /// Total visual rows `lines` occupy once wrapped at `width` — so PageDown/End can
@@ -132,9 +203,11 @@ pub(super) fn render_scroll(
     let inner_w = area.width.saturating_sub(2);
     let content = wrapped_height(&lines, inner_w).min(u16::MAX as usize) as u16;
     let off = scroll.visible(content, inner_h);
+    let tag = pos_tag(off, inner_h, content);
     let para = Paragraph::new(lines)
-        .block(pane_block(title, active))
+        .block(tactical_block(title, Some(tag), active))
         .wrap(Wrap { trim: false })
         .scroll((off, 0));
     frame.render_widget(para, area);
+    render_scrollbar(frame, area, content, inner_h, off);
 }

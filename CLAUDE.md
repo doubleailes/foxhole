@@ -60,8 +60,13 @@ a segmented HUD tab strip + status readout (this trades the former strict 7-bit
 ASCII chrome for the heavier look, assuming a UTF-8 terminal). Focus stays legible
 in monochrome via border weight + `REVERSED` titles, while scrollback *content* is
 tinted by a tactical palette (`style::tag_style`: RX/TX/DLV/LNK/RT/CFG/WRN/ERR/…,
-muted timestamps). `src/ui/` is split into a shared toolkit (`style.rs`, `widgets.rs`),
-chrome (`chrome.rs`), overlays (`popups.rs`), and one body module per tool.
+muted timestamps). The frame helper (`tactical_block`) carries an optional
+right-corner HUD readout — scroll position (`12–34/80`), roster counts, a `◆LIVE◆`
+focus stamp — overflowing scroll panes get a `▲█┊▼` scrollbar on the right border,
+the tab strip a `FOXHOLE` callsign block + chevron-capped active tab, the status
+bar reversed instrument "chips" + a NET `●`/`○` pip, and the Network roster a
+`▰▰▱▱` hop-count signal meter. `src/ui/` is split into a shared toolkit (`style.rs`,
+`widgets.rs`), chrome (`chrome.rs`), overlays (`popups.rs`), and one body module per tool.
 `src/splash.rs` *(default-on `splash` feature)* renders the cold-boot bring-up
 monitor; state lives in core's `App` (`AppState::{Splash,Running}`,
 `BootStep`/`Boot`), advanced by `main`'s 120 ms tick and folded from real
