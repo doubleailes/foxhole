@@ -102,7 +102,9 @@ impl MapView {
     /// clamped to keep the view on the map.
     fn pan(&mut self, dlon: f64, dlat: f64) {
         self.center.lon = wrap_lon(self.center.lon + dlon * self.span);
-        self.center.lat += dlat * self.span;
+        // Latitude span is half the longitude span (2:1 aspect), so a full
+        // viewport height is `span / 2`, not `span`.
+        self.center.lat += dlat * (self.span / 2.0);
         self.clamp_center();
     }
 
@@ -243,6 +245,19 @@ mod tests {
         }
         let limit = 90.0 - v.half_lat();
         assert!(v.center.lat <= limit + f64::EPSILON);
+    }
+
+    #[test]
+    fn pan_vertical_moves_by_the_visible_latitude_height() {
+        let mut v = MapView {
+            center: GeoPos { lat: 0.0, lon: 0.0 },
+            span: 40.0,
+        };
+        // A full-height pan shifts the centre by the visible latitude span,
+        // which is `span / 2` (== `half_lat * 2`), not the longitude `span`.
+        v.pan(0.0, 1.0);
+        assert_eq!(v.center.lat, v.span / 2.0);
+        assert_eq!(v.center.lat, 20.0);
     }
 
     #[test]
