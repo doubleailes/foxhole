@@ -760,11 +760,14 @@ fn parse_location_telemetry(bytes: &[u8]) -> Option<(f64, f64)> {
 
 /// One coordinate from a telemetry array. A msgpack *integer* is Sideband's ×1e6
 /// fixed-point encoding (so it is scaled back to degrees); a *float* is already
-/// degrees. Integers are checked first because rmpv's `as_f64` also coerces
-/// integers, which would otherwise leave the fixed-point value unscaled.
+/// degrees. Both signed and unsigned integers are checked first — positive
+/// values may arrive as msgpack unsigned ints — because rmpv's `as_f64` also
+/// coerces integers, which would otherwise leave the fixed-point value unscaled.
 fn telemetry_coord(v: &rmpv::Value) -> Option<f64> {
     if let Some(i) = v.as_i64() {
         Some(i as f64 / 1e6)
+    } else if let Some(u) = v.as_u64() {
+        Some(u as f64 / 1e6)
     } else {
         v.as_f64()
     }
@@ -1639,6 +1642,19 @@ mod tests {
         let (lat, lon) = parse_location_telemetry(&blob).expect("a fix");
         assert!((lat - 48.85).abs() < 1e-6);
         assert!((lon + 2.35).abs() < 1e-6);
+    }
+
+    #[test]
+    fn parses_unsigned_integer_location_telemetry() {
+        // Positive fixed-point coordinates may be encoded as msgpack unsigned
+        // ints; they must still be scaled by 1e6, not treated as raw degrees.
+        let blob = telemetry_blob(vec![
+            rmpv::Value::from(48_850_000_u64),
+            rmpv::Value::from(2_350_000_u64),
+        ]);
+        let (lat, lon) = parse_location_telemetry(&blob).expect("a fix");
+        assert!((lat - 48.85).abs() < 1e-6);
+        assert!((lon - 2.35).abs() < 1e-6);
     }
 
     #[test]
