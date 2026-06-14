@@ -324,12 +324,17 @@ impl App {
                 self.conversations.len() - 1
             }
         };
+        // Only log an actual move: a stationary peer re-sending the same fix is
+        // common, and logging every repeat would just churn the (bounded) log.
+        let changed = self.conversations[idx].location != Some(pos);
         self.conversations[idx].location = Some(pos);
-        let label = self.conversations[idx].label();
-        self.push_log(format!(
-            "[SYS] telemetry: {label} @ {:.4}, {:.4}",
-            pos.lat, pos.lon
-        ));
+        if changed {
+            let label = self.conversations[idx].label();
+            self.push_log(format!(
+                "[SYS] telemetry: {label} @ {:.4}, {:.4}",
+                pos.lat, pos.lon
+            ));
+        }
     }
 
     /// Append an inbound or system line. `[SYS]`-tagged lines belong to the Log
@@ -339,6 +344,12 @@ impl App {
     pub fn push_log(&mut self, line: String) {
         if line.starts_with("[SYS]") {
             self.syslog.push(Entry::now(line));
+            // Keep memory bounded: drop the oldest beyond the cap. The Log view
+            // is bottom-pinned, so trimming the head is invisible to the operator.
+            if self.syslog.len() > SYSLOG_MAX {
+                let overflow = self.syslog.len() - SYSLOG_MAX;
+                self.syslog.drain(0..overflow);
+            }
         } else {
             self.deliver("(direct)", &line);
         }

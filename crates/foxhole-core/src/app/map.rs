@@ -350,6 +350,47 @@ mod tests {
     }
 
     #[test]
+    fn repeated_identical_telemetry_logs_only_once() {
+        let mut app = App::new();
+        app.conversations.clear();
+        app.syslog.clear();
+        let pos = GeoPos::new(51.5, -0.12);
+
+        app.set_location("peer", pos);
+        let after_first = app.syslog.len();
+        assert_eq!(after_first, 1, "first fix logs");
+
+        // A stationary peer re-sending the same fix adds no log line.
+        app.set_location("peer", pos);
+        app.set_location("peer", pos);
+        assert_eq!(app.syslog.len(), after_first, "unchanged fixes don't churn");
+
+        // Movement logs again.
+        app.set_location("peer", GeoPos::new(52.0, -0.12));
+        assert_eq!(app.syslog.len(), after_first + 1);
+    }
+
+    #[test]
+    fn syslog_is_bounded() {
+        let mut app = App::new();
+        app.syslog.clear();
+        // Far exceed the cap; the buffer must stay bounded and keep the newest.
+        for i in 0..(crate::app::SYSLOG_MAX + 250) {
+            app.push_log(format!("[SYS] line {i}"));
+        }
+        assert_eq!(app.syslog.len(), crate::app::SYSLOG_MAX);
+        let last = crate::app::SYSLOG_MAX + 249;
+        assert!(
+            app.syslog
+                .last()
+                .unwrap()
+                .text
+                .contains(&format!("line {last}")),
+            "the most recent line is retained"
+        );
+    }
+
+    #[test]
     fn cycling_markers_wraps_and_recenters() {
         let mut app = App::new();
         app.config = Config::default();
