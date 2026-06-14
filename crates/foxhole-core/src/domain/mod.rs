@@ -21,6 +21,9 @@ pub enum NetCommand {
     SetPropagationNode(Option<String>),
     /// Pull queued messages from the configured propagation node now.
     SyncNow,
+    /// Abandon an in-progress propagation sync: stop reporting progress and let
+    /// the operator dismiss the pop-up without waiting out the node's timeout.
+    CancelSync,
     /// Operator-initiated path probe (rnpath-style) for a hex destination hash:
     /// request a path, then report the hop count + next-hop interface.
     RequestPath(String),
