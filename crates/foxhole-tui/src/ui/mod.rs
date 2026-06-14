@@ -30,6 +30,7 @@
 mod browser;
 mod chrome;
 mod conversations;
+mod map;
 mod network;
 mod notes;
 mod popups;

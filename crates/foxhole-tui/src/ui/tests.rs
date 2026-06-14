@@ -117,3 +117,70 @@ fn centered_rect_centers_and_clamps() {
     let r2 = centered_rect(48, 4, tiny);
     assert_eq!((r2.width, r2.height), (10, 2));
 }
+
+/// An `App` parked on the World Map tab with the operator fixed at Paris and one
+/// peer (London) carrying telemetry — the shape the map renders.
+fn map_app() -> crate::app::App {
+    use crate::app::{GeoPos, Tool};
+    let mut app = crate::app::App::new();
+    app.active = Tool::WorldMap;
+    app.config.display_name = "base".to_string();
+    app.config.lat = Some(48.85);
+    app.config.lon = Some(2.35);
+    app.conversations[0].display_name = Some("london".to_string());
+    app.conversations[0].location = Some(GeoPos::new(51.5, -0.12));
+    app
+}
+
+#[test]
+fn world_map_renders_world_markers_and_roster() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let app = map_app();
+    let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    term.draw(|f| crate::ui::render(f, &app)).unwrap();
+    let text = term.backend().to_string();
+
+    // The tab strip carries the new tool, the canvas + roster panels are titled,
+    // both marker labels are plotted, and the key legend is present.
+    assert!(text.contains("Map"), "tab strip lists the Map tool");
+    assert!(text.contains("WORLD MAP"), "canvas panel title");
+    assert!(text.contains("POSITIONS"), "roster panel title");
+    assert!(text.contains("base"), "operator marker label");
+    assert!(text.contains("london"), "peer marker label");
+    // The braille world outline drew at least some land cells.
+    assert!(
+        text.chars().any(|c| ('\u{2801}'..='\u{28ff}').contains(&c)),
+        "braille map cells were drawn"
+    );
+}
+
+#[test]
+fn world_map_empty_without_a_fix() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use crate::app::{App, Tool};
+
+    let mut app = App::new();
+    app.active = Tool::WorldMap;
+    let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    term.draw(|f| crate::ui::render(f, &app)).unwrap();
+    let text = term.backend().to_string();
+    // No operator fix and no peer telemetry → the roster shows the hint.
+    assert!(text.contains("no positions yet"));
+}
+
+/// Visual aid: dump the rendered World Map to stdout. Ignored by default; run
+/// with `cargo test dump_world_map -- --ignored --nocapture` to eyeball it.
+#[test]
+#[ignore]
+fn dump_world_map() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let app = map_app();
+    let mut term = Terminal::new(TestBackend::new(110, 30)).unwrap();
+    term.draw(|f| crate::ui::render(f, &app)).unwrap();
+    println!("{}", term.backend());
+}

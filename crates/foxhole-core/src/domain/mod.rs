@@ -311,6 +311,46 @@ impl Entry {
     }
 }
 
+/// A geographic position in EPSG:4326 (WGS-84) decimal degrees — what the World
+/// Map tool plots. The operator's own fix comes from `config`; peer fixes arrive
+/// over LXMF telemetry (e.g. a Sideband contact sharing its location).
+/// Constructed via [`GeoPos::new`], which clamps latitude to the poles and wraps
+/// longitude into −180..=180 so out-of-range telemetry can never project off the
+/// canvas.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GeoPos {
+    /// Latitude in degrees, north positive (−90..=90).
+    pub lat: f64,
+    /// Longitude in degrees, east positive (−180..=180).
+    pub lon: f64,
+}
+
+impl GeoPos {
+    /// A position with latitude clamped to ±90 and longitude wrapped into
+    /// −180..=180. Non-finite inputs collapse to `0.0` so a bad fix is plotted at
+    /// the origin rather than corrupting the viewport.
+    pub fn new(lat: f64, lon: f64) -> Self {
+        let lat = if lat.is_finite() { lat } else { 0.0 };
+        let lon = if lon.is_finite() { lon } else { 0.0 };
+        Self {
+            lat: lat.clamp(-90.0, 90.0),
+            lon: wrap_lon(lon),
+        }
+    }
+}
+
+/// Wrap a longitude into the −180..=180 range so panning across the antimeridian
+/// (or out-of-range telemetry) stays on the map.
+pub(crate) fn wrap_lon(lon: f64) -> f64 {
+    let mut l = (lon + 180.0).rem_euclid(360.0) - 180.0;
+    // `rem_euclid` yields [0,360) → [−180,180); nudge the −180 edge to +180 so a
+    // reset/center reads as the conventional dateline value.
+    if l <= -180.0 {
+        l += 360.0;
+    }
+    l
+}
+
 /// A single peer conversation: its message history and an unsent draft.
 pub struct Conversation {
     /// Routing key: a display name offline, or the hex destination hash under
@@ -340,6 +380,10 @@ pub struct Conversation {
     /// Operator-assigned trust level, cycled with `t` and persisted; colours the
     /// peer rosters. Defaults to [`Trust::Unknown`].
     pub trust: Trust,
+    /// Last location this peer shared over LXMF telemetry (Sideband-style), if
+    /// any. Plotted by the World Map tool. Transient like `draft` — refreshed
+    /// from live telemetry rather than persisted.
+    pub location: Option<GeoPos>,
 }
 
 impl Conversation {
@@ -355,6 +399,7 @@ impl Conversation {
             pinned: false,
             last_seen: 0,
             trust: Trust::default(),
+            location: None,
         }
     }
 
