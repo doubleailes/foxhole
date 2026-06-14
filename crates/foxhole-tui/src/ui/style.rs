@@ -13,18 +13,19 @@ use crate::app::{Entry, MsgStatus, Trust};
 // nearest colour; focus and hierarchy still read without colour at all, carried
 // by the border weight (heavy vs. double) and bold/reversed nameplates.
 
-/// Field-night background — the dark base the whole console sits on.
-pub(super) const BG: Color = Color::Rgb(13, 17, 13);
+/// Field-night background — the dark base the whole console sits on. Kept deep
+/// so the phosphor borders/text separate hard against it.
+pub(super) const BG: Color = Color::Rgb(9, 12, 9);
 /// Slightly raised panel tone — title nameplates and status chips.
-pub(super) const PANEL: Color = Color::Rgb(22, 28, 21);
-/// Phosphor text — the default ink over [`BG`].
-pub(super) const INK: Color = Color::Rgb(178, 188, 168);
-/// Resting pane border — dim ranger green.
-pub(super) const BORDER_REST: Color = Color::Rgb(70, 92, 76);
-/// Focused pane border — lit phosphor green.
-pub(super) const BORDER_LIVE: Color = Color::Rgb(150, 192, 120);
-/// Accent (callsign / active tab) — faded brass.
-pub(super) const ACCENT: Color = Color::Rgb(159, 139, 60);
+pub(super) const PANEL: Color = Color::Rgb(28, 38, 27);
+/// Phosphor text — the default ink over [`BG`]. Bright green-white for contrast.
+pub(super) const INK: Color = Color::Rgb(205, 224, 190);
+/// Resting pane border — clearly-lit ranger green (visible, but calmer than live).
+pub(super) const BORDER_REST: Color = Color::Rgb(108, 146, 112);
+/// Focused pane border — glowing phosphor green.
+pub(super) const BORDER_LIVE: Color = Color::Rgb(190, 244, 150);
+/// Accent (callsign / active tab) — bright brass.
+pub(super) const ACCENT: Color = Color::Rgb(208, 182, 86);
 
 /// The base console style: phosphor ink on the field-night background.
 pub(super) fn base_style() -> Style {
@@ -74,23 +75,23 @@ pub(super) fn trust_style(trust: Trust) -> Style {
     let base = Style::default();
     match trust {
         Trust::Trusted => base
-            .fg(Color::Rgb(143, 166, 122))
+            .fg(Color::Rgb(176, 212, 142))
             .add_modifier(Modifier::BOLD), // Success Olive
         Trust::Compromised => base
-            .fg(Color::Rgb(122, 62, 62))
-            .add_modifier(Modifier::BOLD), // Dark Dried Red
+            .fg(Color::Rgb(214, 102, 92))
+            .add_modifier(Modifier::BOLD), // Dried Red
         Trust::Untrusted => base
-            .fg(Color::Rgb(159, 139, 60))
-            .add_modifier(Modifier::BOLD), // Faded Brass
+            .fg(Color::Rgb(208, 182, 86))
+            .add_modifier(Modifier::BOLD), // Brass
         Trust::Unknown => base
-            .fg(Color::Rgb(102, 112, 102))
+            .fg(Color::Rgb(128, 140, 126))
             .add_modifier(Modifier::DIM),
     }
 }
 
 /// Muted grey-green for timestamps.
 pub(super) fn ts_style() -> Style {
-    Style::default().fg(Color::Rgb(102, 112, 102))
+    Style::default().fg(Color::Rgb(122, 136, 120))
 }
 
 /// Tactical colour for a category tag (the `TACTICAL_STYLES` field theme).
@@ -98,33 +99,33 @@ pub(super) fn tag_style(tag: &str) -> Style {
     let base = Style::default();
     match tag {
         "RX" => base
-            .fg(Color::Rgb(110, 143, 114))
+            .fg(Color::Rgb(150, 196, 150))
             .add_modifier(Modifier::BOLD), // Field Green
         "TX" | "RT" | "LNK" => base
-            .fg(Color::Rgb(79, 107, 88))
+            .fg(Color::Rgb(122, 168, 134))
             .add_modifier(Modifier::BOLD), // Ranger Green
         "DLV" => base
-            .fg(Color::Rgb(143, 166, 122))
+            .fg(Color::Rgb(180, 220, 142))
             .add_modifier(Modifier::BOLD), // Success Olive
         "CFG" | "SYS" => base
-            .fg(Color::Rgb(90, 111, 99))
+            .fg(Color::Rgb(126, 158, 136))
             .add_modifier(Modifier::BOLD), // Slate-Olive
         "ID" => base
-            .fg(Color::Rgb(140, 153, 114))
+            .fg(Color::Rgb(180, 200, 138))
             .add_modifier(Modifier::BOLD), // Olive Drab
         "SEC" => base
-            .fg(Color::Rgb(122, 90, 58))
+            .fg(Color::Rgb(178, 130, 78))
             .add_modifier(Modifier::BOLD), // Weathered Brown
         "WRN" => base
-            .fg(Color::Rgb(159, 139, 60))
-            .add_modifier(Modifier::BOLD), // Faded Brass
+            .fg(Color::Rgb(212, 182, 84))
+            .add_modifier(Modifier::BOLD), // Brass
         "ERR" => base
-            .fg(Color::Rgb(122, 62, 62))
-            .add_modifier(Modifier::BOLD), // Dark Dried Red
+            .fg(Color::Rgb(212, 96, 88))
+            .add_modifier(Modifier::BOLD), // Dried Red
         "OPS" => base
-            .fg(Color::Rgb(139, 143, 135))
+            .fg(Color::Rgb(158, 166, 154))
             .add_modifier(Modifier::DIM), // Desaturated Grey
-        _ => base.fg(Color::Rgb(90, 111, 99)),
+        _ => base.fg(Color::Rgb(126, 158, 136)),
     }
 }
 

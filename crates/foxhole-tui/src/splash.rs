@@ -25,14 +25,14 @@ const STATUS_W: usize = 7;
 /// Width of the centered boot-log column: `[STATUS ]` + space + longest label.
 const BLOCK_W: u16 = (STATUS_W as u16 + 2) + 1 + 30;
 
-/// Muted tactical green — a service reporting in clean (matches `ui::tag_style`
+/// Bright tactical green — a service reporting in clean (matches `ui::tag_style`
 /// "DLV" success-olive).
-const GREEN: Color = Color::Rgb(143, 166, 122);
-/// Faded brass / amber — armed but holding (matches `ui::tag_style` "WRN").
-const AMBER: Color = Color::Rgb(159, 139, 60);
+const GREEN: Color = Color::Rgb(180, 220, 142);
+/// Brass / amber — armed but holding (matches `ui::tag_style` "WRN").
+const AMBER: Color = Color::Rgb(208, 182, 86);
 /// Field-night background — matches the console's `ui::style::BG` so cold boot
 /// and the running console share one continuous dark tactical surface.
-const BG: Color = Color::Rgb(13, 17, 13);
+const BG: Color = Color::Rgb(9, 12, 9);
 
 /// Label and reported status for a boot line.
 fn step_text(step: BootStep) -> (&'static str, &'static str) {
