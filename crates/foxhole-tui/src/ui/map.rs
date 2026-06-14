@@ -49,9 +49,10 @@ pub(super) fn render_map(frame: &mut Frame, app: &App, area: Rect) {
     render_marker_list(frame, app, right[0]);
     render_zone_list(frame, app, right[1]);
 
-    // Footer: the key legend.
+    // Footer: the key legend. Keys are named plainly so none of the separators
+    // read as bindings (the bracket keys cycle markers).
     let legend = Line::styled(
-        "[\u{2190}\u{2191}\u{2193}\u{2192}] pan  [+/-] zoom  [ [ / ] ] marker  [Enter/c] center  [r] reset",
+        "[\u{2190}\u{2191}\u{2193}\u{2192}] pan   [+]/[-] zoom   [Tab] cycle marker   [Enter]/[c] center   [r] reset",
         ts_style(),
     );
     frame.render_widget(Paragraph::new(legend).style(base_style()), rows[1]);
