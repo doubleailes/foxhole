@@ -67,15 +67,18 @@ fn render_canvas(frame: &mut Frame, app: &App, area: Rect) {
     let zones = app.zones.clone();
 
     // Pre-split coordinates by kind so each layer is one cheap `Points` draw.
+    // `project_lon` shifts each point by ±360 when the viewport straddles the
+    // antimeridian, so features near the dateline don't vanish; off-screen ones
+    // drop out.
     let peer_pts: Vec<(f64, f64)> = markers
         .iter()
         .filter(|m| m.kind == MarkerKind::Peer)
-        .map(|m| (m.pos.lon, m.pos.lat))
+        .filter_map(|m| Some((view.project_lon(m.pos.lon)?, m.pos.lat)))
         .collect();
     let op_pts: Vec<(f64, f64)> = markers
         .iter()
         .filter(|m| m.kind == MarkerKind::Operator)
-        .map(|m| (m.pos.lon, m.pos.lat))
+        .filter_map(|m| Some((view.project_lon(m.pos.lon)?, m.pos.lat)))
         .collect();
 
     // HUD readout: viewport centre + zoom span, in the top-right corner.
@@ -94,6 +97,11 @@ fn render_canvas(frame: &mut Frame, app: &App, area: Rect) {
         .x_bounds(view.x_bounds())
         .y_bounds(view.y_bounds())
         .paint(move |ctx| {
+            // ratatui's `Map` shape plots coastlines at their canonical −180..180
+            // longitudes with no offset, so the wrapped sliver of a dateline-
+            // straddling viewport shows no coastline; the operator-critical
+            // markers and zones below are projected (`project_lon`) so they
+            // remain visible there.
             ctx.draw(&Map {
                 resolution: MapResolution::High,
                 color: LAND,
@@ -102,23 +110,29 @@ fn render_canvas(frame: &mut Frame, app: &App, area: Rect) {
             // then its label, beneath the operator/peer markers so those stay
             // legible on top.
             ctx.layer();
+            // Project each zone's centre so dateline-straddling viewports keep
+            // showing it (see `MapView::project_lon`).
             for z in &zones {
-                ctx.draw(&Circle {
-                    x: z.center.lon,
-                    y: z.center.lat,
-                    radius: z.radius_deg(),
-                    color: ZONE,
-                });
+                if let Some(lon) = view.project_lon(z.center.lon) {
+                    ctx.draw(&Circle {
+                        x: lon,
+                        y: z.center.lat,
+                        radius: z.radius_deg(),
+                        color: ZONE,
+                    });
+                }
             }
             for z in &zones {
-                ctx.print(
-                    z.center.lon,
-                    z.center.lat,
-                    Line::styled(
-                        format!("\u{26a0} {}", z.label),
-                        Style::default().fg(ZONE).add_modifier(Modifier::BOLD),
-                    ),
-                );
+                if let Some(lon) = view.project_lon(z.center.lon) {
+                    ctx.print(
+                        lon,
+                        z.center.lat,
+                        Line::styled(
+                            format!("\u{26a0} {}", z.label),
+                            Style::default().fg(ZONE).add_modifier(Modifier::BOLD),
+                        ),
+                    );
+                }
             }
             ctx.layer();
             ctx.draw(&Points {
@@ -132,7 +146,9 @@ fn render_canvas(frame: &mut Frame, app: &App, area: Rect) {
             // Labels ride above the dots; the selected one is lit and chevroned.
             ctx.layer();
             for (i, m) in markers.iter().enumerate() {
-                ctx.print(m.pos.lon, m.pos.lat, marker_label(m, i == selected));
+                if let Some(lon) = view.project_lon(m.pos.lon) {
+                    ctx.print(lon, m.pos.lat, marker_label(m, i == selected));
+                }
             }
         });
     frame.render_widget(canvas, area);

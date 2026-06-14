@@ -90,6 +90,22 @@ impl MapView {
         ]
     }
 
+    /// Project a longitude into the viewport's x-range, handling the
+    /// antimeridian. When the centre sits near ±180 the `x_bounds()` run past the
+    /// canonical edge (e.g. `[150, 190]`), but every feature is stored wrapped
+    /// into −180..=180 by [`GeoPos::new`](crate::domain::GeoPos::new) — so a point
+    /// at −175 (the same place as 185) only falls inside such a window once shifted
+    /// by +360. Returns the input shifted by `0`/`±360` so it lands within
+    /// `x_bounds()`, or `None` when the feature is off-screen horizontally.
+    /// Outside the dateline case this is just the identity for in-view points.
+    pub fn project_lon(&self, lon: f64) -> Option<f64> {
+        let [west, east] = self.x_bounds();
+        [-360.0, 0.0, 360.0]
+            .into_iter()
+            .map(|shift| lon + shift)
+            .find(|&l| l >= west && l <= east)
+    }
+
     /// Multiply the span by `factor`, clamped to the zoom limits, then re-clamp
     /// the centre so the viewport never runs off the poles.
     fn zoom(&mut self, factor: f64) {
@@ -258,6 +274,39 @@ mod tests {
         v.pan(0.0, 1.0);
         assert_eq!(v.center.lat, v.span / 2.0);
         assert_eq!(v.center.lat, 20.0);
+    }
+
+    #[test]
+    fn project_lon_handles_the_antimeridian() {
+        // Centre near +180 with a small span: the window straddles the dateline.
+        let v = MapView {
+            center: GeoPos {
+                lat: 0.0,
+                lon: 178.0,
+            },
+            span: 20.0,
+        };
+        assert_eq!(v.x_bounds(), [168.0, 188.0]);
+        // A marker at −179 (== 181) is wrapped out of the raw window, but a +360
+        // shift brings it inside, so it stays visible.
+        assert_eq!(v.project_lon(-179.0), Some(181.0));
+        // A point already inside the window projects to itself.
+        assert_eq!(v.project_lon(170.0), Some(170.0));
+        // Something on the far side of the globe is genuinely off-screen.
+        assert_eq!(v.project_lon(-10.0), None);
+    }
+
+    #[test]
+    fn project_lon_is_identity_for_in_view_points() {
+        // An ordinary, non-dateline window: in-view points are unchanged and
+        // out-of-view ones drop out.
+        let v = MapView {
+            center: GeoPos { lat: 0.0, lon: 0.0 },
+            span: 40.0,
+        };
+        assert_eq!(v.project_lon(10.0), Some(10.0));
+        assert_eq!(v.project_lon(-10.0), Some(-10.0));
+        assert_eq!(v.project_lon(120.0), None);
     }
 
     #[test]
