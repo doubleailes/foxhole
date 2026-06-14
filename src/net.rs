@@ -37,7 +37,6 @@ use rns_runtime::lifecycle::ShutdownSignal;
 use rns_runtime::link_client::LinkClient;
 use rns_runtime::link_manager::LinkManager;
 use rns_runtime::reticulum;
-use rns_transport::constants::PATHFINDER_M;
 use rns_transport::link_messages::DestinationEvent;
 use rns_transport::messages::{
     AnnounceHandlerEvent, OutboundRequest, TransportMessage, TransportQuery, TransportQueryResponse,
@@ -332,7 +331,7 @@ async fn run_inner(
         delivery_rx,
         &identity,
         LXMF_DELIVERY,
-        link_signing_key,
+        Some(link_signing_key),
     );
     let (inbound_raw_tx, mut inbound_raw_rx) = mpsc::channel::<Vec<u8>>(256);
     let (link_packet_tx, mut link_packet_rx) = mpsc::channel::<(Vec<u8>, [u8; 16])>(256);
@@ -373,9 +372,6 @@ async fn run_inner(
     // hop count per node identity (hex) for sizing page links.
     let nomad_name_hash = name_hash(NOMAD_NODE);
     let mut nomad_hops: HashMap<String, u8> = HashMap::new();
-    // Each node's announced public key (identity hex → 64-byte key), so page
-    // fetches can use `LinkClient::query_with_key` instead of re-discovering it.
-    let mut nomad_keys: HashMap<String, [u8; 64]> = HashMap::new();
     let mut tracker = StatusTracker::default();
     let mut ticks: u32 = 0;
     let mut syncing = false;
@@ -548,10 +544,6 @@ async fn run_inner(
                         Ok(id) => {
                             // The 30 s query blocks, so run it off the select loop.
                             let hops = nomad_hops.get(&identity).copied().unwrap_or(DEFAULT_PAGE_HOPS);
-                            // Use the cached public key when we have it (reliable for
-                            // already-heard nodes); otherwise fall back to announce
-                            // discovery.
-                            let key = nomad_keys.get(&identity).copied();
                             let id8 = identity.get(..8).unwrap_or(&identity);
                             let nfields = fields.len();
                             let suffix = if nfields > 0 { format!(", {nfields} field(s)") } else { String::new() };
@@ -561,22 +553,11 @@ async fn run_inner(
                             let lc = link_client.clone();
                             let ev = events.clone();
                             tokio::spawn(async move {
-                                let result = match key {
-                                    Some(pk) => {
-                                        lc.query_with_key(
-                                            id, pk, NOMAD_NODE, &path, payload, hops,
-                                            PAGE_FETCH_TIMEOUT,
-                                        )
-                                        .await
-                                    }
-                                    None => {
-                                        lc.query(
-                                            id, NOMAD_NODE, &path, payload, hops,
-                                            PAGE_FETCH_TIMEOUT,
-                                        )
-                                        .await
-                                    }
-                                };
+                                // `query` discovers the node's pubkey via its announce
+                                // before opening the link, so no cached key is needed.
+                                let result = lc
+                                    .query(id, NOMAD_NODE, &path, payload, hops, PAGE_FETCH_TIMEOUT)
+                                    .await;
                                 let log = match &result {
                                     Ok(b) => format!("[SYS] page fetch {path}: ok, {} bytes", b.len()),
                                     Err(e) => format!("[SYS] page fetch {path}: FAILED — {e}"),
@@ -652,7 +633,6 @@ async fn run_inner(
                         &handle,
                         &nomad_name_hash,
                         &mut nomad_hops,
-                        &mut nomad_keys,
                         events,
                     )
                     .await;
@@ -810,11 +790,9 @@ async fn resolve_path_probes(
         .collect();
 
     for dest in due {
-        let hops = match handle.query_control(TransportQuery::HopsTo { dest }).await {
-            Some(TransportQueryResponse::IntResult(h))
-                if (0..i64::from(PATHFINDER_M)).contains(&h) =>
-            {
-                Some(h as u8)
+        let hops = match handle.query_control(TransportQuery::GetPathTable).await {
+            Some(TransportQueryResponse::PathTable(entries)) => {
+                entries.iter().find(|e| e.hash == dest).map(|e| e.hops)
             }
             _ => None,
         };
@@ -861,7 +839,6 @@ async fn discover_nomad_nodes(
     handle: &reticulum::ReticulumHandle,
     nomad_name_hash: &[u8; 10],
     nomad_hops: &mut HashMap<String, u8>,
-    nomad_keys: &mut HashMap<String, [u8; 64]>,
     events: &mpsc::Sender<NetEvent>,
 ) {
     let Some(TransportQueryResponse::Announces(entries)) = handle
@@ -878,7 +855,6 @@ async fn discover_nomad_nodes(
         let id_hash = truncated_hash(&pk);
         let identity = hex::encode(id_hash);
         let name = nomad_name_from_app_data(e.app_data.as_deref());
-        nomad_keys.insert(identity.clone(), pk);
         // Log the first time we see each node.
         if nomad_hops.insert(identity.clone(), e.hops).is_none() {
             // Cross-check: the destination a fetch addresses should equal the

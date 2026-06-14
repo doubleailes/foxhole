@@ -85,9 +85,13 @@ readiness events via `mark_boot`. `cfg(test)` and `FOXHOLE_NO_SPLASH` start in
 
 Off by default (the build stays dependency-light and offline, with seeded demo
 peers). `--features net` pulls the `rns-*` (Reticulum) and `lxmf-core` crates as
-**path deps from sibling checkouts** `../rsReticulum` and `../rsLXMF` (both must
-sit next to this repo; both are AGPL-3.0-or-later). The integration mirrors the
-Ratspeak reference client — see `docs/lxmf-integration.md` for the full binding.
+**git deps pinned by commit** from `github.com/doubleailes/rsReticulum` and
+`…/rsLXMF` (both AGPL-3.0-or-later). `rsLXMF`'s own `rns-*` deps use sibling-path
+references, so a root `[patch."…/rsLXMF"]` redirects them to the same pinned
+`rsReticulum` revision (cargo unifies the stack on one source). Bump by editing
+the `rev`s (and the matching `[patch]` revs) in `Cargo.toml`. The integration
+mirrors the Ratspeak reference client — see `docs/lxmf-integration.md` for the
+full binding.
 
 ## Commands
 
@@ -95,7 +99,7 @@ The `splash`/`net` features are declared on the root binary and forwarded to the
 member crates, so drive everything from the workspace root.
 
 - Build: `cargo build` (release: `cargo build --release`)
-- Build with networking: `cargo build --features net` (needs `../rsReticulum` + `../rsLXMF`)
+- Build with networking: `cargo build --features net` (fetches the pinned `rsReticulum`/`rsLXMF` git revs)
 - Run: `cargo run` (or `cargo run --features net`)
 - Test: `cargo test --workspace` (single test: `cargo test <name>`)
 - Lint: `cargo clippy --workspace --all-targets -- -D warnings`

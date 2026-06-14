@@ -21,22 +21,23 @@ at `../rsReticulum` and `../rsLXMF`.
 
 Ratspeak is a Cargo workspace; **all** Reticulum/LXMF binding lives in one member
 crate, `ratspeak-runtime` (the others are UI/db/tauri). It path-depends the
-libraries as sibling checkouts — the same layout FoxHole uses:
+libraries as sibling checkouts. FoxHole binds the same library surface but pulls
+the crates from git, pinned by commit (behind the `net` feature):
 
 ```toml
-# ratspeak-runtime/Cargo.toml (and FoxHole's, behind the `net` feature)
-rns-crypto    = { path = "../rsReticulum/crates/rns-crypto" }
-rns-wire      = { path = "../rsReticulum/crates/rns-wire" }
-rns-identity  = { path = "../rsReticulum/crates/rns-identity" }
-rns-transport = { path = "../rsReticulum/crates/rns-transport" }
-rns-interface = { path = "../rsReticulum/crates/rns-interface" }
-rns-runtime   = { path = "../rsReticulum/crates/rns-runtime" }
-lxmf-core     = { path = "../rsLXMF/crates/lxmf-core" }
+# FoxHole Cargo.toml — net-only deps, pinned by rev
+rns-crypto    = { git = "https://github.com/doubleailes/rsReticulum", rev = "<rev>", optional = true }
+# …rns-wire / rns-identity / rns-transport / rns-interface / rns-runtime, same rev…
+lxmf-core     = { git = "https://github.com/doubleailes/rsLXMF",      rev = "<rev>", optional = true }
 ```
 
-All crates are **edition 2024, tokio-based, AGPL-3.0**. `rsLXMF` itself
-path-depends `rsReticulum` via `[workspace.dependencies]`, so the two repos must
-sit side-by-side; no `[patch]` is required.
+All crates are **edition 2024, tokio-based, AGPL-3.0**. `rsLXMF` itself depends on
+`rsReticulum` via `[workspace.dependencies]` using sibling-checkout *paths*
+(`../rsReticulum/...`), which don't exist when `rsLXMF` is fetched from git — so
+FoxHole's root manifest carries a `[patch."…/rsLXMF"]` block redirecting those
+`rns-*` names to the same pinned `rsReticulum` rev, unifying the whole stack on
+one source. (Ratspeak's sibling-path layout avoids the patch by keeping both
+repos side-by-side on disk.)
 
 **Reusable vs. not.** `lxmf_core::message::LxMessage` (pack/unpack/sign) and the
 `rns-*` primitives are cleanly reusable. `lxmf_core::router::LxmRouter` is a
