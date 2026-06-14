@@ -7,6 +7,30 @@ use ratatui::text::{Line, Span};
 
 use crate::app::{Entry, MsgStatus, Trust};
 
+// ── Tactical truecolor palette ──────────────────────────────────────────────
+// Assumes a modern UTF-8 + 24-bit terminal (Raspberry Pi OS Bookworm's default
+// and friends). Where truecolor is unavailable these map to the terminal's
+// nearest colour; focus and hierarchy still read without colour at all, carried
+// by the border weight (heavy vs. double) and bold/reversed nameplates.
+
+/// Field-night background — the dark base the whole console sits on.
+pub(super) const BG: Color = Color::Rgb(13, 17, 13);
+/// Slightly raised panel tone — title nameplates and status chips.
+pub(super) const PANEL: Color = Color::Rgb(22, 28, 21);
+/// Phosphor text — the default ink over [`BG`].
+pub(super) const INK: Color = Color::Rgb(178, 188, 168);
+/// Resting pane border — dim ranger green.
+pub(super) const BORDER_REST: Color = Color::Rgb(70, 92, 76);
+/// Focused pane border — lit phosphor green.
+pub(super) const BORDER_LIVE: Color = Color::Rgb(150, 192, 120);
+/// Accent (callsign / active tab) — faded brass.
+pub(super) const ACCENT: Color = Color::Rgb(159, 139, 60);
+
+/// The base console style: phosphor ink on the field-night background.
+pub(super) fn base_style() -> Style {
+    Style::default().fg(INK).bg(BG)
+}
+
 /// Plain (untinted) scrollback lines for static panes (Network/Interfaces/Guide).
 pub(super) fn plain_lines<I, S>(lines: I) -> Vec<Line<'static>>
 where

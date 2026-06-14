@@ -9,7 +9,7 @@ use ratatui::widgets::Paragraph;
 
 use crate::app::{App, BrowserPane, PageStatus};
 
-use super::style::{fmt_time, tag_style, ts_style};
+use super::style::{BORDER_LIVE, INK, base_style, fmt_time, tag_style, ts_style};
 use super::widgets::{NOSEL, SEL, count_tag, render_scroll, tactical_block};
 
 /// Browser tool: discovered Nomad Network nodes (left) and the current micron
@@ -33,13 +33,18 @@ pub(super) fn render_browser(frame: &mut Frame, app: &App, area: Rect) {
                 PageStatus::Error(_) => "error",
             };
             Line::from(vec![
-                Span::styled("PAGE ", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(format!("{}  [{status}]", p.path)),
+                Span::styled(
+                    "PAGE ",
+                    Style::default()
+                        .fg(BORDER_LIVE)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(format!("{}  [{status}]", p.path), Style::default().fg(INK)),
             ])
         }
         None => Line::styled("PAGE  (select a node, press Enter)", ts_style()),
     };
-    frame.render_widget(Paragraph::new(header), rows[0]);
+    frame.render_widget(Paragraph::new(header).style(base_style()), rows[0]);
 
     let cols = Layout::default()
         .direction(Direction::Horizontal)
@@ -54,7 +59,10 @@ pub(super) fn render_browser(frame: &mut Frame, app: &App, area: Rect) {
             "[Up/Dn] field/link  type to edit  [Enter] follow/submit  [Bksp] back  [PgUp/PgDn] scroll"
         }
     };
-    frame.render_widget(Paragraph::new(Line::styled(legend, ts_style())), rows[2]);
+    frame.render_widget(
+        Paragraph::new(Line::styled(legend, ts_style())).style(base_style()),
+        rows[2],
+    );
 }
 
 /// The discovered Nomad node list, with a last-seen UTC stamp per row.

@@ -10,7 +10,7 @@ use ratatui::widgets::Paragraph;
 
 use crate::app::{App, NetColumn, Trust, path_summary};
 
-use super::style::{fmt_time, tag_style, trust_style, ts_style};
+use super::style::{BORDER_LIVE, INK, base_style, fmt_time, tag_style, trust_style, ts_style};
 use super::widgets::{NOSEL, SEL, count_tag, tactical_block};
 
 /// Network tool: known delivery peers and propagation nodes in two keyboard-
@@ -36,11 +36,13 @@ pub(super) fn render_network(frame: &mut Frame, app: &App, area: Rect) {
     let header = Line::from(vec![
         Span::styled(
             "THIS NODE (lxmf.delivery): ",
-            Style::default().add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(BORDER_LIVE)
+                .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(addr.to_string()),
+        Span::styled(addr.to_string(), Style::default().fg(INK)),
     ]);
-    frame.render_widget(Paragraph::new(header), rows[0]);
+    frame.render_widget(Paragraph::new(header).style(base_style()), rows[0]);
 
     let cols = Layout::default()
         .direction(Direction::Horizontal)
@@ -54,7 +56,10 @@ pub(super) fn render_network(frame: &mut Frame, app: &App, area: Rect) {
         "[Tab/<>] col [Up/Dn] sel [Enter] open/set [p] path [s] sync [m] mnemonic [t] trust",
         ts_style(),
     );
-    frame.render_widget(Paragraph::new(vec![legend, last_probe_line(app)]), rows[2]);
+    frame.render_widget(
+        Paragraph::new(vec![legend, last_probe_line(app)]).style(base_style()),
+        rows[2],
+    );
 }
 
 /// Left column: known `lxmf.delivery` peers (the conversations roster).
@@ -71,7 +76,8 @@ fn render_peer_column(frame: &mut Frame, app: &App, area: Rect) {
                     &c.label(),
                     &c.peer,
                     c.last_seen,
-                    hop_hint(app, &c.peer),
+                    String::new(),
+                    probe_hops(app, &c.peer),
                     Some(c.trust),
                     i == app.selected,
                     focused,
@@ -98,17 +104,18 @@ fn render_node_column(frame: &mut Frame, app: &App, area: Rect) {
             .iter()
             .enumerate()
             .map(|(i, n)| {
-                let mut tail = String::new();
-                if active == Some(n.hash.as_str()) {
-                    tail.push_str(" [active]");
-                }
-                tail.push_str(&hop_hint(app, &n.hash));
+                let tail = if active == Some(n.hash.as_str()) {
+                    " [active]".to_string()
+                } else {
+                    String::new()
+                };
                 let name = n.name.as_deref().unwrap_or("?");
                 net_row(
                     name,
                     &n.hash,
                     n.last_seen,
                     tail,
+                    probe_hops(app, &n.hash),
                     None,
                     i == app.node_selected,
                     focused,
@@ -137,15 +144,34 @@ pub(super) fn signal_meter(hops: Option<u8>) -> &'static str {
     }
 }
 
-/// One roster row: `> <trust> name   hash8.. HH:MM:SSZ <tail>`. Peers carry a
-/// colour-coded trust glyph (`trust = Some`); nodes don't (`None`). The selected
+/// Colour grade for a signal meter: green within 2 hops, amber at 3–4, red
+/// beyond that or when there's no path. Mirrors the tactical traffic palette.
+fn meter_style(hops: Option<u8>) -> Style {
+    match hops {
+        Some(0) | Some(1) | Some(2) => tag_style("DLV"),
+        Some(3) | Some(4) => tag_style("WRN"),
+        _ => tag_style("ERR"),
+    }
+}
+
+/// The last probe's hop count for `hash`: `None` = never probed; `Some(None)` =
+/// probed but no path; `Some(Some(n))` = `n` hops away.
+fn probe_hops(app: &App, hash: &str) -> Option<Option<u8>> {
+    app.path_probes.get(hash).map(|p| p.hops)
+}
+
+/// One roster row: `▶ <trust> name   hash8.. HH:MM:SSZ <tail>  ▰▰▱▱ 3h`. Peers
+/// carry a colour-coded trust glyph (`trust = Some`); nodes don't (`None`). When
+/// probed, a colour-graded signal meter + hop count trails the row. The selected
 /// row is reversed only while its column holds focus, so the active column is
 /// obvious.
+#[allow(clippy::too_many_arguments)]
 fn net_row(
     name: &str,
     hash: &str,
     last_seen: u64,
     tail: String,
+    probe: Option<Option<u8>>,
     trust: Option<Trust>,
     selected: bool,
     focused: bool,
@@ -163,7 +189,7 @@ fn net_row(
         Style::default()
     };
 
-    let mut spans = Vec::with_capacity(2);
+    let mut spans = Vec::with_capacity(3);
     match trust {
         Some(t) => {
             let mut gstyle = trust_style(t);
@@ -178,20 +204,18 @@ fn net_row(
         format!("{name:<10.10} {h8}.. {ts}{tail}"),
         row_style,
     ));
-    Line::from(spans)
-}
-
-/// Compact per-row path indicator from the last probe: a signal meter plus the
-/// hop count (` ▰▰▱▱ 3h`), an empty meter for a known-but-pathless peer
-/// (` ▱▱▱▱ x`), or blank when never probed.
-fn hop_hint(app: &App, hash: &str) -> String {
-    match app.path_probes.get(hash) {
-        Some(p) => match p.hops {
-            Some(n) => format!(" {} {n}h", signal_meter(Some(n))),
-            None => format!(" {} x", signal_meter(None)),
-        },
-        None => String::new(),
+    if let Some(hops) = probe {
+        let mut ms = meter_style(hops);
+        if reversed {
+            ms = ms.add_modifier(Modifier::REVERSED);
+        }
+        let label = match hops {
+            Some(n) => format!(" {n}h"),
+            None => " x".to_string(),
+        };
+        spans.push(Span::styled(format!("  {}{label}", signal_meter(hops)), ms));
     }
+    Line::from(spans)
 }
 
 /// The most recent path probe, formatted for the Network footer (or blank).
