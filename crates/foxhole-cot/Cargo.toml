@@ -1,0 +1,11 @@
+[package]
+name = "foxhole-cot"
+version = "0.1.0"
+edition = "2024"
+description = "FoxHole CoT (Cursor-on-Target) subset codec: the intel-sharing wire format"
+
+# Deliberately dependency-free. The codec hand-rolls a hardened XML subset
+# reader/writer (no quick-xml, no chrono) so it stays as light as `foxhole-core`,
+# is reusable by other NomadNet/Reticulum tooling, and is fully unit-testable in
+# isolation. See docs/intel-sharing.md (P1).
+[dependencies]

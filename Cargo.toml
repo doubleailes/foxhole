@@ -5,7 +5,7 @@ edition = "2024"
 description = "FoxHole — off-grid, keyboard-only, monochrome LXMF comms terminal"
 
 [workspace]
-members = ["crates/foxhole-micron", "crates/foxhole-core", "crates/foxhole-tui"]
+members = ["crates/foxhole-micron", "crates/foxhole-cot", "crates/foxhole-core", "crates/foxhole-tui"]
 
 [dependencies]
 # --- FoxHole's own layers (workspace member crates) ---------------------------

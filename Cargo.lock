@@ -580,6 +580,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "foxhole-cot"
+version = "0.1.0"
+
+[[package]]
 name = "foxhole-micron"
 version = "0.1.0"
 dependencies = [

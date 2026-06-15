@@ -51,6 +51,20 @@ focusable `Element`s (links + text fields) the Browser navigates/submits. Unknow
 tags stripped, never fatal; unit-tested. Standalone (reusable by other NomadNet
 tooling).
 
+### `crates/foxhole-cot` — CoT (Cursor-on-Target) codec (dependency-free)
+
+Pure, `std`-only codec for foxhole's **intel-sharing** wire format: a subset of
+CoT, the open ATAK/TAK situational-awareness event model, carried inside LXMF
+messages (see `docs/intel-sharing.md`). `parse(&str) -> CotEvent` decodes one CoT
+`<event>` (markers + circular hazard zones) **leniently** (unknown
+tags/attributes ignored) and **safely** — a hand-rolled hardened XML subset
+reader rejects DOCTYPE/ENTITY (no XXE) and bounds size/depth/text; `CotEvent::{to_xml,
+summary}` generate the standard event + human one-liner, and `CotEvent::{marker,
+zone}` are the producer side (a `Zone` becomes a `u-d-c-c`). `Affiliation`/`Kind`
+read the `type` for the TUI tint/glyph + map layer. No XML/date crates (ISO-8601
+↔ epoch is in-house); fully unit-tested, standalone. This is **P1** of the
+intel-sharing plan; ingest/render/share (P2–P4) live in `net.rs` + `foxhole-core`.
+
 ### `crates/foxhole-tui` — rendering (ratatui), pure `&App` → frame
 
 Depends on `foxhole-core` + `foxhole-micron`. **Truecolor tactical theme over
