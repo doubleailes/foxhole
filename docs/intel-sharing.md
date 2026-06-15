@@ -1,189 +1,224 @@
 # Intel Sharing — Design Note
 
-Status: **draft / proposal**. No code yet — this pins the model and wire format
-before implementation, the same discipline that made the telemetry formats stick.
+**v2: Foxhole speaks CoT over Reticulum.**
+Status: **draft / proposal** — pins the model and wire format before any code.
 
-## 1. Motivation
+## 0. What changed from v1
 
-Foxhole's World Map has two distinct kinds of geographic data, and conflating
-them is a category error we want to avoid:
+v1 proposed a foxhole-native msgpack schema (`foxhole.intel/1`). That was
+reinventing — badly — a standard that already exists: **CoT
+(Cursor-on-Target)**, the open event format the ATAK/TAK ecosystem uses for
+shared situational awareness. v2 **adopts a CoT subset** instead, gaining a
+battle-tested model, MIL-STD-2525 symbology, built-in validity/expiry, and a path
+to interoperate with ATAK / WinTAK / TAK Server / FreeTAKServer.
 
-- **Telemetry** — a node reporting **itself**: *"I am at X, battery Y."*
-  Self-authored, live, ephemeral. Already implemented (Sideband-compatible
-  `FIELD_TELEMETRY`, plotted as `◆` peer markers).
-- **Intel** — an operator annotating **the world**: *"that area is a hazard,"*
-  *"this point is an objective."* Authored about third parties/areas, shared
-  deliberately, persistent with provenance and expiry.
+Telemetry stays as-is (Sideband-compatible `FIELD_TELEMETRY`); CoT covers the
+**intel / marker / zone** layer. Foxhole becomes, in effect, a **CoT node on
+Reticulum** — and a potential gateway between the Sideband/Reticulum and TAK
+ecosystems.
 
-Telemetry cannot carry intel (it only describes the sender). Intel is therefore
-its own concept with its own transport. The existing hazard-AO overlay
-(`zones.conf`) is the seed of the intel layer; this note specifies how to make it
-**shareable peer-to-peer over LXMF**.
+## 1. Telemetry vs. intel (unchanged premise)
 
-The two are orthogonal layers on the same map:
+Two orthogonal map layers; conflating them is a category error:
 
-| Layer | Answers | Source | Lifetime |
-|-------|---------|--------|----------|
-| Telemetry (`◆`) | "who is where" | self-reported per node | ephemeral |
-| Intel (`⚠`, waypoints) | "what is where" | operator-authored | persistent + expiry |
+| Layer | Answers | Source | Lifetime | Mechanism |
+|-------|---------|--------|----------|-----------|
+| Telemetry (`◆`) | "who is where" | self-reported per node | ephemeral | Sideband `FIELD_TELEMETRY` (done) |
+| Intel (markers, zones) | "what is where" | operator-authored | validity window | **CoT over LXMF** (this note) |
 
-## 2. Data model
+## 2. Why CoT
 
-A shared unit is an **Annotation**, a superset of today's `Zone`:
+- **It is the spec we were sketching**, only standardized. The v1 model maps 1:1:
 
-```
-Annotation {
-    id:      String,        // stable id, unique per source (e.g. short random)
-    kind:    AnnotationKind, // Zone | Point
-    label:   String,        // short display name ("AO ALPHA", "OP-1")
-    lat: f64, lon: f64,     // WGS-84 decimal degrees (clamped on ingest)
-    radius_km: Option<f64>, // Zone only
-    category: Category,      // Hazard | Conflict | Objective | Contact | Waypoint | Note
-    severity: u8,            // 0..=3 (0 = info, 3 = critical); advisory only
-    expiry:   Option<u64>,   // Unix seconds; None => default TTL
-    note:     String,        // short free text (bounded)
-}
-```
+  | v1 field | CoT |
+  |---|---|
+  | `id` | `uid` (latest `time` wins for a uid) |
+  | `category`/severity | `type` (MIL-STD-2525 hierarchical code + affiliation) |
+  | `lat`,`lon`,accuracy | `<point lat lon hae ce le>` |
+  | `expiry`/TTL | `start` + **`stale`** (validity interval, built in) |
+  | provenance hint | `how` |
+  | `note`, radius, shape | `<detail>` children |
 
-- `Zone` (today's `{label, center, radius_km}`) becomes the `Zone` kind of an
-  Annotation. `zones.conf` keeps working as the *local* authoring path.
-- `Point` is a zero-radius marker (objective, contact, waypoint).
-- Identity across the net is `(source, id)` — two sources may reuse `id`s without
-  colliding, and a source can only update/revoke its own annotations.
+- Hands us, for free: markers, zones/drawing shapes, routes, GeoChat, MEDEVAC,
+  and affiliation (friend/hostile/neutral/unknown).
+- Interop: a real bridge to the TAK world is *possible* later (out of scope here,
+  but the door stays open by speaking the wire format).
 
-## 3. Wire format (LXMF custom fields)
+## 3. The CoT event model (the part foxhole uses)
 
-Intel travels as an **LXMF message** carrying two custom fields (the sanctioned
-app-extension slots — distinct from telemetry's `0x02`):
+A CoT message is one `<event>`:
 
-- `FIELD_CUSTOM_TYPE` (`0xFB`) = msgpack string **`"foxhole.intel/1"`** — the
-  schema id a receiver matches before decoding.
-- `FIELD_CUSTOM_DATA` (`0xFC`) = msgpack payload:
-
-```
-{
-  "ann": [ <annotation>, ... ],   // additions / updates
-  "rm":  [ "<id>", ... ]          // revocations (optional)
-}
+```xml
+<event version="2.0" uid="J-OP-1" type="a-h-G-U-C" how="h-g-i-g-o"
+       time="2026-06-15T07:00:00Z" start="2026-06-15T07:00:00Z"
+       stale="2026-06-15T13:00:00Z">
+  <point lat="50.4000" lon="30.5000" hae="0" ce="9999999" le="9999999"/>
+  <detail>
+    <contact callsign="AO ALPHA"/>
+    <remarks>shelling reported</remarks>
+    <shape><ellipse major="400000" minor="400000" angle="0"/></shape>
+  </detail>
+</event>
 ```
 
-Annotation encoding (string keys for readability; intel volume is low):
+- **`uid`** — globally unique object id; a newer event for the same uid replaces
+  the prior one. (We additionally key by *source*, see §6.)
+- **`type`** — hierarchical 2525 code. Affiliation is the 2nd token:
+  `f`=friendly, `h`=hostile, `n`=neutral, `u`=unknown. Battle dimension is the
+  3rd (`G`round/`A`ir/`S`ea/…). Examples we care about (authoritative strings come
+  from the CoT type catalog / MIL-STD-2525):
 
-```
-{ "id":"z7f3", "k":"zone",  "label":"AO ALPHA", "lat":50.4, "lon":30.5,
-  "r":400.0, "cat":"hazard", "sev":3, "exp":1781600000, "note":"shelling" }
+  | Intent | Representative `type` |
+  |---|---|
+  | Friendly ground unit | `a-f-G-U-C` |
+  | Hostile ground unit | `a-h-G-U-C` |
+  | Neutral / unknown contact | `a-n-G`, `a-u-G` |
+  | Generic point marker | `b-m-p-s-m` |
+  | Drawn area / hazard zone (circle) | `u-d-c-c` (+ `<shape><ellipse>`) |
+  | Route | `b-m-r` |
+  | GeoChat (future) | `b-t-f` |
 
-{ "id":"p12",  "k":"point", "label":"OP-1", "lat":48.86, "lon":2.29,
-  "cat":"contact", "sev":1, "exp":0, "note":"" }
-```
+- **`point`** — `lat`/`lon` (deg), `hae` (height above ellipsoid, m), `ce`/`le`
+  (circular/linear error, m; `9999999` = unknown).
+- **`detail`** — extensible: `contact/@callsign`, `remarks`, `color`, and the
+  `shape`/`ellipse` (or a radius) that turns a point into a **zone**. Foxhole reads
+  the handful it renders and ignores the rest (never fatal).
+- **`stale`** — when the event stops being valid → our expiry, for free.
 
-- Coordinates are **float degrees** (operator-authored, human-edited — no need
-  for telemetry's `×1e6` fixed-point). Clamped/wrapped on ingest via `GeoPos::new`.
-- `r` present only for zones. `exp` of `0`/absent ⇒ apply the default TTL.
-- Unknown keys ignored; malformed annotations skipped (one bad row never drops the
-  batch) — mirrors the lenient parsing already used for `zones.conf` and telemetry.
+## 4. The foxhole CoT subset
 
-**Graceful degradation:** the message SHOULD also set a human-readable text body
-(e.g. `"INTEL: AO ALPHA hazard @ 50.4,30.5 r400km"`) so a non-foxhole client
-(Sideband) at least shows something legible while foxhole reads the structured
-field.
+Foxhole is a monochrome TUI, not ATAK — it implements a pragmatic **subset**:
 
-## 4. Provenance & trust
+- **Consume**: `point`/`type`/`stale` + `detail.contact.callsign`,
+  `detail.remarks`, and `shape.ellipse`/radius. Map `type` →
+  `(affiliation, kind)`; render affiliation as a tint + glyph, kind as a category.
+  Unknown `type`s render as a generic marker — display-only, never an error.
+- **Produce**: markers (`a-{f,h,n,u}-G…`) and drawn hazard zones (`u-d-c-c` with an
+  ellipse) — i.e. exactly today's `Zone` plus affiliated points.
+- **Out of subset (for now)**: PLI (overlaps telemetry — kept on Sideband),
+  GeoChat (overlaps LXMF messaging), routes, MEDEVAC. Reserved for later phases.
 
-The carrying LXMF message is **signed by the sender's identity** — so the source
-of every annotation is *cryptographically authenticated*. We do not put a source
-field in the payload; the message `source_hash` is the provenance, and it can't be
-spoofed.
+Today's `Zone` (`{label, center, radius_km}`) becomes a produced `u-d-c-c` event;
+`zones.conf` stays the local authoring path and is rendered as *local* intel.
 
-Foxhole already has per-peer `Trust` (`Unknown` / `Untrusted` / `Trusted` /
-`Compromised`). Proposed gating:
+## 5. Transport over Reticulum
 
-- **Trusted** source → auto-apply to the map.
-- **Unknown / Untrusted** → **staged**: held in an "incoming intel" review list;
-  the operator accepts (applies) or discards. (A config toggle may opt into
-  auto-applying from all.)
-- **Compromised** → dropped silently.
+CoT rides inside an **LXMF message** via the sanctioned custom fields:
 
-## 5. Lifecycle
+- `FIELD_CUSTOM_TYPE` (`0xFB`) = content tag — **`"cot/xml"`** (v1) or
+  `"cot/proto"` (upgrade). The receiver matches this before decoding.
+- `FIELD_CUSTOM_DATA` (`0xFC`) = the CoT event bytes (one `<event>` per message,
+  per CoT convention; sharing several items = several messages).
+- The LXMF **text body** SHOULD carry a one-line human summary
+  (`"INTEL: AO ALPHA (hostile) @ 50.40,30.50 r400km, stale 13:00Z"`) so a
+  non-foxhole/non-TAK client still shows something legible (graceful degradation).
 
-- **Apply**: an annotation upserts into the received-intel layer keyed by
-  `(source, id)`. A later message from the same source with the same `id` updates
-  it in place; `rm` removes it.
-- **Expiry**: each annotation carries an absolute `expiry`; a periodic sweep drops
-  expired ones. No `expiry` ⇒ default TTL (config, e.g. 24 h) so stale intel fades.
-- **Dedup / conflict**: same `(source, id)` ⇒ newest wins. Same area from
-  *different* sources ⇒ keep both, attributed (operators reconcile, the app
-  doesn't merge silently).
-- **No auto-relay** in v1: foxhole does not rebroadcast received intel (avoids
-  loops/amplification). Forwarding is an explicit operator action.
+**Bandwidth vs. MTU — an important nuance.** CoT XML is verbose (~1 KB/event),
+but **Reticulum fragments/segments payloads itself** (links/resources), unlike raw
+Meshtastic frames — so a CoT event does *not* need to fit one LoRa frame; Reticulum
+delivers it. XML-vs-protobuf is therefore an **efficiency** choice over a slow
+link, not a "does it fit" one:
 
-## 6. Distribution
+- **v1 baseline — CoT XML** (`cot/xml`): simplest, fully standard,
+  human-debuggable, no schema work. Recommended to start.
+- **Upgrade — TAK Protocol v1 protobuf** (`cot/proto`): compact and directly
+  interoperable with TAK servers; costs a protobuf dependency. Add when bandwidth
+  or TAK-server interop demands it. (This is the same compaction the Meshtastic
+  ATAK plugin uses for LoRa.)
 
-- **Direct** — to one peer (an LXMF message with the custom fields).
-- **Group** — via `FIELD_GROUP` to a shared net.
-- **Broadcast** — N direct sends across the roster (LXMF has no native broadcast),
-  or to a designated group destination.
+## 6. Provenance, trust, lifecycle
 
-## 7. UI
+- **Provenance is the LXMF signature**, not the CoT `uid`. The carrying message is
+  signed by the sender's identity, so the *origin* of every event is
+  cryptographically authenticated and unspoofable. Events are keyed internally by
+  **`(source, uid)`**.
+- **Trust gating** (reuses foxhole's per-peer `Trust`):
+  - `Trusted` → auto-apply to the map.
+  - `Unknown`/`Untrusted` → **staged** in an "incoming intel" review list; operator
+    accepts or discards. (Config toggle may opt into auto-apply from all.)
+  - `Compromised` → dropped silently.
+- **Lifecycle**:
+  - *Apply/update*: upsert by `(source, uid)`; newer `time` wins (CoT semantics).
+  - *Expiry*: drop when `now > stale`; a periodic sweep enforces it. Missing/`0`
+    stale ⇒ a config default TTL.
+  - *Revoke*: a CoT event with `stale ≤ time` (or a TAK delete `t-x-d-d` event)
+    removes the object.
+  - *Conflict*: same `(source, uid)` ⇒ newest wins; same area from *different*
+    sources ⇒ keep both, attributed (no silent merge).
+- **No auto-relay** in v1: foxhole does not rebroadcast received CoT (no
+  flooding/loops). Forwarding is an explicit operator action.
+
+## 7. Rendering / UI
 
 - **Map layers**, visually distinct so the operator always knows the source class:
-  - *Local* intel (`zones.conf` / in-app authored) — authoritative, brass.
-  - *Received* intel — tinted by trust, tagged with the sender's short hash + an
-    expiry hint.
+  - *Local* intel (`zones.conf` / authored) — authoritative, brass.
+  - *Received* CoT — tinted by **affiliation** (friend/hostile/neutral/unknown),
+    tagged with the sender's short hash + a `stale` countdown.
   - *Telemetry* peers — `◆` (unchanged).
-- **HAZARD AOs panel** extends to show, for received items, `source` + time-to-expiry.
-- **Authoring** (later phase): create/edit a zone or point at a coordinate, set
-  category/severity/expiry, then **share** to peer/group/roster. v1 can ship with
-  `zones.conf` authoring + a "share current zones" action only.
+- **Affiliation → tint/glyph** (monochrome-safe via glyph; decision in §10):
+  friendly / hostile / neutral / unknown each get a distinct glyph and color.
+- **INTEL panel** (today's HAZARD AOs, generalized): lists events with
+  callsign/`uid`, `type`, source, and time-to-stale.
+- **Authoring** (later phase): place a marker/zone, pick affiliation + type +
+  stale, then **share** (direct/group). v1 ships `zones.conf` authoring + a
+  "share zone" action only.
 
-## 8. Persistence
+## 8. Bridging to TAK (future, enabled-not-built)
 
-Received intel MAY be persisted in the existing **encrypted store** (like
-conversations) keyed by source, so it survives a restart and is destroyed by a
-burn — consistent with the off-grid posture. v1 may keep received intel
-**in-memory** (rebuilt as messages re-arrive) to stay small; persistence is a
-later phase. Local authored intel stays in `zones.conf`.
+Because foxhole speaks CoT on the wire, a **gateway node** can translate
+LXMF-CoT ↔ a TAK Server stream (CoT/TAK Protocol over TCP/TLS), making an off-grid
+Reticulum mesh a CoT feed into/out of standard TAK infrastructure. Explicitly out
+of scope for this note, but the format choice is what makes it possible.
 
 ## 9. Security considerations
 
-Received intel is **attacker-controllable external input** (any peer can send it).
-Required handling:
+Received CoT is **attacker-controllable external input** (any peer can send it):
 
 - **Authenticated source** via the LXMF signature (anti-spoof) — but a *trusted*
   peer can still send bad data, hence trust gating + staging.
-- **Clamp/validate** every coordinate (`GeoPos::new`), bound `radius_km`, truncate
-  `note`/`label`.
-- **Bound volume**: cap annotations per message (e.g. 64), cap total stored
-  per-source and overall, enforce expiry — DoS / map-flooding defence.
-- **Never execute**: intel is data only; it influences nothing but the display.
+- **Hardened XML parsing** is mandatory for the `cot/xml` path: a reader with
+  **external entities / DTDs disabled** (no XXE), bounded nesting and total size.
+  Prefer a small hardened parser (e.g. `quick-xml`) or a hand-rolled subset reader
+  over the known element set. (The protobuf path sidesteps XML attack surface.)
+- **Validate/clamp** every `point` (`GeoPos::new` for lat/lon, bound radius),
+  truncate `callsign`/`remarks`, ignore unknown/active `detail`.
+- **Bound volume**: cap events per message, per-source, and overall; enforce
+  `stale` expiry — DoS / map-flooding defence.
+- **Never execute**: CoT is display data only.
 
-## 10. Non-goals (v1)
+## 10. Open decisions
 
-- Not telemetry, not live tracking.
-- No automatic multi-hop intel flooding/gossip (manual forward only).
-- No new routing/transport layer — rides plain LXMF.
-- Not a real-time C2 system.
+1. **Transport v1** — `cot/xml` (recommended) vs. `cot/proto` from the start.
+2. **XML codec** — hardened library (`quick-xml`, entities off) vs. a hand-rolled
+   subset parser/generator (smaller dep surface, only our element set).
+3. **Subset scope v1** — markers + hazard zones only, with PLI/GeoChat deferred?
+4. **Persistence** — store received CoT in the encrypted store (survives restart,
+   burn-wiped) vs. ephemeral/in-memory for v1.
+5. **Affiliation glyph/tint mapping** for the TUI (e.g. friendly `▲`/green,
+   hostile `◆`/red, neutral `■`/grey, unknown `●`/amber).
+6. **Crate placement** — CoT codec in the root binary's net layer, or a new
+   dependency-light `foxhole-cot` member crate (keeps `foxhole-core` clean and the
+   codec reusable/testable in isolation).
 
-## 11. Open decisions
+## 11. Non-goals (v1)
 
-1. **Auto-apply policy** — trusted-auto + others-staged (recommended), or a global
-   auto-apply toggle?
-2. **Default TTL** — 24 h (recommended), with per-annotation `exp` override?
-3. **Persistence in v1** — ephemeral/in-memory (recommended) vs. encrypted-store now?
-4. **Coordinate encoding** — float degrees (recommended) vs. `i32 ×1e6`.
-5. **Categories** — fix the initial enum (Hazard / Conflict / Objective / Contact /
-   Waypoint / Note) or keep it an open string?
+- Not full CoT/TAK compliance — a pragmatic, documented subset.
+- Not a telemetry replacement (Sideband telemetry stays).
+- No automatic multi-hop flooding/gossip (manual forward only).
+- Not a TAK server, and no live TAK bridge yet (§8 is future).
 
 ## 12. Phased implementation
 
-1. **P1 — model + codec (pure, tested).** `Annotation`/`AnnotationKind`/`Category`
-   in `foxhole-core`; the `foxhole.intel/1` msgpack encode/decode. No I/O, no UI.
-   Round-trip + lenient-parse unit tests. (`Zone` folds in as the `Zone` kind.)
-2. **P2 — ingest + render.** Parse the custom fields in `net.rs` → a
-   `NetEvent::Intel` → core applies to the received-intel layer with trust gating
-   and an expiry sweep. Render the new layer distinctly on the Map; extend the
-   HAZARD panel.
-3. **P3 — share.** Build an LXMF message with the custom fields (+ human-readable
-   body) and send it; trigger from an in-app "share" action (direct/group).
-4. **P4 — authoring + durability.** In-app create/edit of zones/points, encrypted
-   persistence, revocation, and the staging/review workflow for untrusted sources.
+1. **P1 — CoT subset codec (pure, tested).** Parse/generate the foxhole subset of
+   CoT `event`/`point`/`detail` (XML first, hardened). An `Annotation`/`CotEvent`
+   model with affiliation+kind, round-trip + lenient-parse + malformed-input +
+   XXE-rejection tests. Lives in `foxhole-cot` (proposed) or the binary; `Zone`
+   folds in as a produced `u-d-c-c`.
+2. **P2 — ingest + render.** Parse the custom fields in `net.rs` → `NetEvent::Cot`
+   → core applies to the received-intel layer with trust gating + `stale` sweep.
+   Render the affiliation-tinted layer; generalize the HAZARD panel to INTEL.
+3. **P3 — share.** Generate a CoT event + human-readable body, send via the LXMF
+   custom field; trigger from an in-app "share" action (direct/group).
+4. **P4 — durability + reach.** In-app authoring, encrypted persistence, revoke
+   workflow, the protobuf transport (`cot/proto`), and — separately — a TAK gateway
+   and PLI/GeoChat unification.
