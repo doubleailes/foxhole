@@ -10,6 +10,9 @@ description = "FoxHole core: domain model, state machine, config, durable storag
 crossterm = "0.29"
 # The micron page model/parser the Browser state and page elements depend on.
 foxhole-micron = { path = "../foxhole-micron" }
+# The CoT codec for the intel-sharing layer (received-intel model + producers).
+# Dependency-free, so the core stays light.
+foxhole-cot = { path = "../foxhole-cot" }
 
 [features]
 # Cold-boot splash state (App::boot, BootStep). Pure flag — no extra deps.

@@ -21,6 +21,7 @@
 mod boot;
 mod browser;
 mod conversations;
+mod intel;
 mod map;
 mod network;
 #[cfg(test)]
@@ -41,7 +42,12 @@ pub use crate::notes::Notes;
 pub use boot::{AppState, Scroll};
 #[cfg(feature = "splash")]
 pub use boot::{Boot, BootStep};
+pub use intel::{IntelRecord, IntelReview, IntelZone};
 pub use map::{MapMarker, MapView, MarkerKind};
+
+// Re-exported so the renderer (and the binary) reach the CoT model through
+// `crate::app::…` without each crate depending on `foxhole-cot` directly.
+pub use foxhole_cot::{Affiliation, CotEvent, Kind as CotKind};
 
 /// Which field the New Conversation popup is editing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -285,8 +291,18 @@ pub struct App {
     /// Selected marker index within [`App::map_markers`] (World Map tab).
     pub map_selected: usize,
     /// Hazard areas overlaid on the World Map (war zones / areas of operations).
-    /// Seeded with a demo set; overridden from `zones.conf` when present.
+    /// Seeded with a demo set; overridden from `zones.conf` when present. This is
+    /// *local* (operator-authored) intel — distinct from `intel` below.
     pub zones: Vec<Zone>,
+    /// Live received CoT intel applied to the map (from Trusted peers, or all
+    /// peers when `intel_auto_apply` is set, or operator-accepted). Keyed by
+    /// `(source, uid)`; expired entries are swept. See [`intel`].
+    pub intel: Vec<IntelRecord>,
+    /// Received CoT intel from Unknown/Untrusted peers, staged for operator
+    /// review (accept → `intel`, or discard). See the incoming-intel modal.
+    pub intel_staged: Vec<IntelRecord>,
+    /// When `Some`, the incoming-intel review modal is open (captures input).
+    pub intel_review: Option<IntelReview>,
     /// Latest rnpath-style path probe per hex destination hash (Network tab).
     pub path_probes: HashMap<String, PathProbe>,
     /// Live interface status (Interfaces tab); empty until the stack reports.
@@ -384,6 +400,9 @@ impl App {
             map: MapView::default(),
             map_selected: 0,
             zones: crate::zones::demo(),
+            intel: Vec::new(),
+            intel_staged: Vec::new(),
+            intel_review: None,
             path_probes: HashMap::new(),
             interfaces: Vec::new(),
             link_count: 0,
@@ -459,6 +478,12 @@ impl App {
         // The New Conversation modal, when open, captures all input.
         if self.new_conv.is_some() {
             self.handle_new_conv_key(ctrl, key);
+            return;
+        }
+
+        // The incoming-intel review modal, when open, captures all input.
+        if self.intel_review.is_some() {
+            self.handle_intel_review_key(key);
             return;
         }
 

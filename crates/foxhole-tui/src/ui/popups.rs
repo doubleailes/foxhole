@@ -7,7 +7,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
-use crate::app::{BURN_TOKEN, BurnConfirm, MnemonicView, NewConv, NewConvField};
+use crate::app::{App, BURN_TOKEN, BurnConfirm, IntelReview, MnemonicView, NewConv, NewConvField};
 
 use super::style::{base_style, tag_style};
 use super::widgets::{FRAME_BORDER, centered_rect};
@@ -136,6 +136,67 @@ pub(super) fn render_mnemonic_popup(frame: &mut Frame, m: &MnemonicView) {
         Line::raw(""),
         Line::raw("  read aloud to share/verify    [any key] close"),
     ];
+    let para = Paragraph::new(lines)
+        .block(block)
+        .wrap(Wrap { trim: false });
+    frame.render_widget(para, area);
+}
+
+/// The incoming-intel review modal (`i` on the World Map): the CoT events staged
+/// from Unknown/Untrusted peers, which the operator accepts onto the map or
+/// discards. Reads the staged list straight off `App`, highlighting the selected
+/// row (design note §6 — trust gating / staging).
+pub(super) fn render_intel_review_popup(frame: &mut Frame, app: &App, review: &IntelReview) {
+    let area = centered_rect(70, 16, frame.area());
+    frame.render_widget(Clear, area);
+    let wrn = tag_style("WRN");
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_set(FRAME_BORDER)
+        .style(base_style())
+        .border_style(wrn)
+        .title(Span::styled(
+            " INCOMING INTEL ",
+            wrn.add_modifier(Modifier::BOLD),
+        ));
+
+    let mut lines = vec![
+        Line::styled(
+            "  Unvetted CoT from unknown/untrusted peers — review before applying.",
+            base_style(),
+        ),
+        Line::raw(""),
+    ];
+    if app.intel_staged.is_empty() {
+        lines.push(Line::styled("  (nothing staged)", base_style()));
+    } else {
+        for (i, r) in app.intel_staged.iter().enumerate() {
+            let sel = i == review.selected;
+            let lead = if sel { "\u{25b6} " } else { "  " }; // ▶
+            let source = r.source.get(..8).unwrap_or(&r.source);
+            let mut style = Style::default();
+            if sel {
+                style = style.add_modifier(Modifier::REVERSED);
+            }
+            lines.push(Line::styled(
+                format!(
+                    "{lead}{} {:<14.14} {:<10.10} {} {}",
+                    r.affiliation().glyph(),
+                    r.label(),
+                    r.affiliation().label(),
+                    source,
+                    r.event.cot_type,
+                ),
+                style,
+            ));
+        }
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::styled(
+        "  [\u{2191}\u{2193}] select   [a]/[Enter] accept   [x]/[d] discard   [Esc] close",
+        base_style(),
+    ));
+
     let para = Paragraph::new(lines)
         .block(block)
         .wrap(Wrap { trim: false });

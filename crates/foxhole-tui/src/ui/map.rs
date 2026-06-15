@@ -13,7 +13,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::canvas::{Canvas, Circle, Map, MapResolution, Points};
 
-use crate::app::{App, MapMarker, MarkerKind, Zone};
+use crate::app::{Affiliation, App, MapMarker, MarkerKind, Zone};
 
 use super::style::{ACCENT, BG, BORDER_LIVE, BORDER_REST, INK, base_style, tag_style, ts_style};
 use super::widgets::{NOSEL, SEL, count_tag, tactical_block};
@@ -24,6 +24,43 @@ const LAND: Color = BORDER_REST;
 const PEER: Color = Color::Rgb(120, 220, 160);
 /// Hazard-zone tint — dried tactical red, matching the `ERR` palette.
 const ZONE: Color = Color::Rgb(214, 96, 88);
+
+/// Affiliation → tint for the received-intel layer (design note §10.5): friendly
+/// green, hostile red, neutral grey, unknown amber. Colour reinforces the glyph
+/// (`Affiliation::glyph`) so meaning still reads on a monochrome display.
+fn affil_color(a: Affiliation) -> Color {
+    match a {
+        Affiliation::Friendly => Color::Rgb(120, 220, 160),
+        Affiliation::Hostile => Color::Rgb(214, 96, 88),
+        Affiliation::Neutral => Color::Rgb(170, 178, 170),
+        Affiliation::Unknown => Color::Rgb(214, 176, 96),
+    }
+}
+
+/// Format a time-to-stale (seconds) compactly for the INTEL panel: `"5h59m"`,
+/// `"12m"`, `"45s"`, or `"stale"` once elapsed.
+fn fmt_ttl(secs: i64) -> String {
+    if secs <= 0 {
+        return "stale".to_string();
+    }
+    let (h, m, s) = (secs / 3600, (secs % 3600) / 60, secs % 60);
+    if h > 0 {
+        format!("{h}h{m:02}m")
+    } else if m > 0 {
+        format!("{m}m")
+    } else {
+        format!("{s}s")
+    }
+}
+
+/// Current Unix time in whole seconds (UTC) — the clock the TTL readouts count
+/// down against. `0` if the system clock predates the epoch.
+fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
 
 /// World Map tool: the canvas on the left (most of the width) and a selectable
 /// roster of plotted positions on the right.
@@ -38,21 +75,24 @@ pub(super) fn render_map(frame: &mut Frame, app: &App, area: Rect) {
         .constraints([Constraint::Min(20), Constraint::Length(34)])
         .split(rows[0]);
 
-    // Right column stacks the positions roster over the hazard-zone roster.
-    let zone_h = (app.zones.len() as u16 + 2).clamp(3, 10);
+    // Right column stacks the positions roster over the INTEL roster (local
+    // hazard zones + received CoT intel).
+    let staged_row = usize::from(!app.intel_staged.is_empty());
+    let intel_rows = app.zones.len() + app.live_intel().len() + staged_row;
+    let intel_h = (intel_rows as u16 + 2).clamp(3, 14);
     let right = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(4), Constraint::Length(zone_h)])
+        .constraints([Constraint::Min(4), Constraint::Length(intel_h)])
         .split(cols[1]);
 
     render_canvas(frame, app, cols[0]);
     render_marker_list(frame, app, right[0]);
-    render_zone_list(frame, app, right[1]);
+    render_intel_list(frame, app, right[1]);
 
     // Footer: the key legend. Keys are named plainly so none of the separators
-    // read as bindings (the bracket keys cycle markers).
+    // read as bindings (the bracket keys cycle markers). `i` reviews staged intel.
     let legend = Line::styled(
-        "[\u{2190}\u{2191}\u{2193}\u{2192}] pan   [+]/[-] zoom   [Tab] cycle marker   [Enter]/[c] center   [r] reset",
+        "[\u{2190}\u{2191}\u{2193}\u{2192}] pan   [+]/[-] zoom   [Tab] cycle   [Enter]/[c] center   [r] reset   [i] intel",
         ts_style(),
     );
     frame.render_widget(Paragraph::new(legend).style(base_style()), rows[1]);
@@ -65,6 +105,8 @@ fn render_canvas(frame: &mut Frame, app: &App, area: Rect) {
     let markers = app.map_markers();
     let selected = app.map_selected;
     let zones = app.zones.clone();
+    // Received-intel circular overlays (live, affiliation-tinted).
+    let intel_zones = app.intel_zones();
 
     // Pre-split coordinates by kind so each layer is one cheap `Points` draw.
     // `project_lon` shifts each point by ±360 when the viewport straddles the
@@ -134,6 +176,18 @@ fn render_canvas(frame: &mut Frame, app: &App, area: Rect) {
                     );
                 }
             }
+            // Received-intel zones ride on the same layer, tinted by affiliation
+            // so a hostile AO reads differently from a friendly/neutral one.
+            for z in &intel_zones {
+                if let Some(lon) = view.project_lon(z.center.lon) {
+                    ctx.draw(&Circle {
+                        x: lon,
+                        y: z.center.lat,
+                        radius: (z.radius_km / 111.0).max(0.3),
+                        color: affil_color(z.affiliation),
+                    });
+                }
+            }
             ctx.layer();
             ctx.draw(&Points {
                 coords: &peer_pts,
@@ -143,6 +197,17 @@ fn render_canvas(frame: &mut Frame, app: &App, area: Rect) {
                 coords: &op_pts,
                 color: ACCENT,
             });
+            // Received-intel point markers, each dot in its affiliation tint.
+            for m in &markers {
+                if let MarkerKind::Intel(a) = m.kind
+                    && let Some(lon) = view.project_lon(m.pos.lon)
+                {
+                    ctx.draw(&Points {
+                        coords: &[(lon, m.pos.lat)],
+                        color: affil_color(a),
+                    });
+                }
+            }
             // Labels ride above the dots; the selected one is lit and chevroned.
             ctx.layer();
             for (i, m) in markers.iter().enumerate() {
@@ -159,12 +224,14 @@ fn render_canvas(frame: &mut Frame, app: &App, area: Rect) {
 /// cluster; the rest take their kind colour.
 fn marker_label(m: &MapMarker, selected: bool) -> Line<'static> {
     let glyph = match m.kind {
-        MarkerKind::Operator => "\u{25b2}", // ▲ — this node
-        MarkerKind::Peer => "\u{25c6}",     // ◆ — a peer
+        MarkerKind::Operator => "\u{25b2}".to_string(), // ▲ — this node
+        MarkerKind::Peer => "\u{25c6}".to_string(),     // ◆ — a peer
+        MarkerKind::Intel(a) => a.glyph().to_string(),  // affiliation glyph
     };
     let base = match m.kind {
         MarkerKind::Operator => Style::default().fg(ACCENT),
         MarkerKind::Peer => Style::default().fg(PEER),
+        MarkerKind::Intel(a) => Style::default().fg(affil_color(a)),
     };
     let style = if selected {
         Style::default()
@@ -211,12 +278,14 @@ fn render_marker_list(frame: &mut Frame, app: &App, area: Rect) {
 fn marker_row(m: &MapMarker, selected: bool) -> Line<'static> {
     let marker = if selected { SEL } else { NOSEL };
     let glyph = match m.kind {
-        MarkerKind::Operator => "\u{25b2}",
-        MarkerKind::Peer => "\u{25c6}",
+        MarkerKind::Operator => "\u{25b2}".to_string(),
+        MarkerKind::Peer => "\u{25c6}".to_string(),
+        MarkerKind::Intel(a) => a.glyph().to_string(),
     };
     let glyph_style = match m.kind {
         MarkerKind::Operator => Style::default().fg(ACCENT),
         MarkerKind::Peer => tag_style("DLV"),
+        MarkerKind::Intel(a) => Style::default().fg(affil_color(a)),
     };
     let mut row = Style::default().fg(INK);
     let mut gstyle = glyph_style;
@@ -233,30 +302,63 @@ fn marker_row(m: &MapMarker, selected: bool) -> Line<'static> {
     ])
 }
 
-/// Bottom-right roster of overlaid hazard zones, one per row with its danger
-/// radius. Read-only — zones come from `zones.conf` (or the demo set), not from
-/// keyboard interaction.
-fn render_zone_list(frame: &mut Frame, app: &App, area: Rect) {
-    let lines: Vec<Line<'static>> = if app.zones.is_empty() {
-        vec![Line::styled("  (no hazard zones)", ts_style())]
-    } else {
-        app.zones.iter().map(zone_row).collect()
-    };
-    let para = Paragraph::new(lines).block(tactical_block(
-        "HAZARD AOs",
-        Some(count_tag(app.zones.len())),
-        false,
-    ));
+/// Bottom-right INTEL roster: local hazard zones (operator-authored, brass) over
+/// the received CoT intel layer (affiliation-tinted, with source + time-to-stale)
+/// — design note §7. A footer flags any staged intel awaiting review (`i`).
+fn render_intel_list(frame: &mut Frame, app: &App, area: Rect) {
+    let live = app.live_intel();
+    let now = now_secs();
+    let ttl = app.config.intel_ttl_secs;
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    for z in &app.zones {
+        lines.push(zone_row(z));
+    }
+    for r in &live {
+        lines.push(intel_row(
+            &r.label(),
+            r.affiliation(),
+            r.source.get(..8).unwrap_or(&r.source),
+            r.seconds_to_stale(now, ttl),
+        ));
+    }
+    if !app.intel_staged.is_empty() {
+        lines.push(Line::styled(
+            format!("  \u{2691} {} staged — [i] review", app.intel_staged.len()),
+            tag_style("WRN").add_modifier(Modifier::BOLD),
+        ));
+    }
+    if lines.is_empty() {
+        lines.push(Line::styled("  (no intel)", ts_style()));
+    }
+
+    let count = app.zones.len() + live.len();
+    let para = Paragraph::new(lines).block(tactical_block("INTEL", Some(count_tag(count)), false));
     frame.render_widget(para, area);
 }
 
-/// One hazard row: `⚠ AO ALPHA          r450km`, in the danger-red palette.
+/// One local-zone row: `⚠ AO ALPHA      LOCAL  r450km`, in the danger-red palette
+/// with a `LOCAL` provenance tag (authoritative, operator-authored).
 fn zone_row(z: &Zone) -> Line<'static> {
     Line::from(vec![
         Span::styled(
-            format!("\u{26a0} {:<14.14}", z.label),
+            format!("\u{26a0} {:<12.12}", z.label),
             Style::default().fg(ZONE).add_modifier(Modifier::BOLD),
         ),
+        Span::styled(" LOCAL", ts_style()),
         Span::styled(format!(" r{:.0}km", z.radius_km), ts_style()),
+    ])
+}
+
+/// One received-intel row: `◆ AO ALPHA   a1b2c3d4  5h59m`, the glyph + label in
+/// the affiliation tint, then the source short-hash and time-to-stale.
+fn intel_row(label: &str, affil: Affiliation, source: &str, ttl_secs: i64) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            format!("{} {:<11.11}", affil.glyph(), label),
+            Style::default().fg(affil_color(affil)),
+        ),
+        Span::styled(format!(" {source:<8.8}"), ts_style()),
+        Span::styled(format!(" {:>5}", fmt_ttl(ttl_secs)), ts_style()),
     ])
 }

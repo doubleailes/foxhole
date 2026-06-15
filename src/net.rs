@@ -721,6 +721,7 @@ async fn emit_message(events: &mpsc::Sender<NetEvent>, msg: LxMessage) {
     debug_dump_fields(events, &msg).await;
     let source = hex::encode(msg.source_hash);
     let location = telemetry_location(&msg);
+    let cot = cot_payload(&msg);
     if has_text_body(&msg) {
         let _ = events
             .send(NetEvent::Message {
@@ -731,8 +732,64 @@ async fn emit_message(events: &mpsc::Sender<NetEvent>, msg: LxMessage) {
             .await;
     }
     if let Some((lat, lon)) = location {
-        let _ = events.send(NetEvent::Telemetry { source, lat, lon }).await;
+        let _ = events
+            .send(NetEvent::Telemetry {
+                source: source.clone(),
+                lat,
+                lon,
+            })
+            .await;
     }
+    // CoT intel (markers / hazard zones) carried in the LXMF custom field. Parsed
+    // here so the UI only ever sees a validated event; a malformed/oversized/XXE
+    // payload is logged and dropped (never fatal) — see docs/intel-sharing.md §9.
+    if let Some(xml) = cot {
+        match foxhole_cot::parse(&xml) {
+            Ok(event) => {
+                let _ = events.send(NetEvent::Cot { source, event }).await;
+            }
+            Err(e) => {
+                let _ = events
+                    .send(NetEvent::Sys(format!(
+                        "[SYS] intel: dropped malformed CoT ({e:?})"
+                    )))
+                    .await;
+            }
+        }
+    }
+}
+
+/// Extract the CoT-XML payload from an inbound message's custom fields, if it is
+/// tagged `cot/xml` (`FIELD_CUSTOM_TYPE` = `0xFB`) and carries data
+/// (`FIELD_CUSTOM_DATA` = `0xFC`). The wire framing is the design note's §5.
+fn cot_payload(msg: &LxMessage) -> Option<String> {
+    let tag = msg.get_field(lxmf_core::constants::FIELD_CUSTOM_TYPE)?;
+    if custom_field_text(tag) != foxhole_cot::CONTENT_TAG_XML {
+        return None;
+    }
+    let data = msg.get_field(lxmf_core::constants::FIELD_CUSTOM_DATA)?;
+    Some(custom_field_text(data))
+}
+
+/// Decode an LXMF custom-field value to text, tolerating both encodings the
+/// stack can hand back: a msgpack `bin` arrives as raw bytes (so XML/`"cot/xml"`
+/// is already UTF-8), while a msgpack `str` arrives re-serialized (so it must be
+/// msgpack-decoded). Try the raw bytes first, then fall back to a msgpack decode.
+fn custom_field_text(bytes: &[u8]) -> String {
+    // CoT XML and the `cot/xml` tag are both plain UTF-8 when sent as a bin.
+    let raw = String::from_utf8_lossy(bytes);
+    if raw.trim_start().starts_with('<') {
+        return raw.into_owned();
+    }
+    if let Ok(value) = rmpv::decode::read_value(&mut &bytes[..]) {
+        if let Some(s) = value.as_str() {
+            return s.to_string();
+        }
+        if let rmpv::Value::Binary(b) = value {
+            return String::from_utf8_lossy(&b).into_owned();
+        }
+    }
+    raw.into_owned()
 }
 
 /// Whether a decoded message carries any text the operator should see in the

@@ -152,14 +152,74 @@ fn world_map_renders_world_markers_and_roster() {
     assert!(text.contains("POSITIONS"), "roster panel title");
     assert!(text.contains("base"), "operator marker label");
     assert!(text.contains("london"), "peer marker label");
-    // The seeded demo hazard zones overlay: panel title + an AO callsign.
-    assert!(text.contains("HAZARD AOs"), "hazard-zone panel title");
+    // The seeded demo hazard zones overlay in the generalized INTEL panel:
+    // panel title + an AO callsign (local zones are tagged LOCAL).
+    assert!(text.contains("INTEL"), "intel panel title");
     assert!(text.contains("AO ALPHA"), "demo hazard zone listed");
     // The braille world outline drew at least some land cells.
     assert!(
         text.chars().any(|c| ('\u{2801}'..='\u{28ff}').contains(&c)),
         "braille map cells were drawn"
     );
+}
+
+#[test]
+fn world_map_renders_received_intel_and_review_modal() {
+    use crate::app::{Affiliation, CotEvent, IntelReview, Trust};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let mut app = map_app();
+    // A trusted peer's hostile zone is applied (live); an unknown peer's marker is
+    // staged for review. Far-future stale so the sweep/render keeps them.
+    let stale = super_now() + 36_000;
+    app.conversations[0].peer = "aa11bb22cc33".to_string();
+    app.conversations[0].trust = Trust::Trusted;
+    app.apply_cot(
+        "aa11bb22cc33".to_string(),
+        CotEvent::zone("z1", "AO INTEL", 50.0, 10.0, 200_000.0, super_now(), stale),
+    );
+    app.conversations
+        .push(crate::app::Conversation::new("dead00beef11")); // Unknown
+    app.apply_cot(
+        "dead00beef11".to_string(),
+        CotEvent::marker(
+            "m1",
+            Affiliation::Friendly,
+            "SCOUT",
+            49.0,
+            9.0,
+            super_now(),
+            stale,
+        ),
+    );
+
+    let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    term.draw(|f| crate::ui::render(f, &app)).unwrap();
+    let text = term.backend().to_string();
+    // The applied zone shows in the INTEL panel; the staged marker is flagged.
+    assert!(
+        text.contains("AO INTEL"),
+        "received intel listed in INTEL panel"
+    );
+    assert!(text.contains("staged"), "staged-intel review hint shown");
+
+    // Opening the review modal lists the staged event with accept/discard keys.
+    app.intel_review = Some(IntelReview { selected: 0 });
+    term.draw(|f| crate::ui::render(f, &app)).unwrap();
+    let text = term.backend().to_string();
+    assert!(text.contains("INCOMING INTEL"), "review modal title");
+    assert!(text.contains("SCOUT"), "staged event shown in the modal");
+    assert!(text.contains("accept"), "accept/discard legend shown");
+}
+
+/// Wall-clock seconds — the test builds events relative to now so the live filter
+/// and stale sweep keep them.
+fn super_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 #[test]

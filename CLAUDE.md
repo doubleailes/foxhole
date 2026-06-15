@@ -29,8 +29,14 @@ terminal, or networking. Fast to build, fully unit-tested.
   Interfaces / Guide, switched with Ctrl+N/Ctrl+P) and **panes** within a tool
   (PeerList / Thread / Transmit, cycled with Tab). The struct + program-global
   key routing + modals live in `mod.rs`; per-tool behaviour is split into
-  sibling `impl App` blocks (`conversations.rs`, `network.rs`, `browser.rs`) and
-  the cold-boot/scroll machinery into `boot.rs`. Free of I/O and rendering.
+  sibling `impl App` blocks (`conversations.rs`, `network.rs`, `browser.rs`,
+  `map.rs`, `intel.rs`) and the cold-boot/scroll machinery into `boot.rs`. Free
+  of I/O and rendering. `intel.rs` is the **received-intel layer** (P2 of the
+  intel-sharing plan): `apply_cot` folds a decoded `CotEvent` in with trust
+  gating (Trusted→live, Unknown/Untrusted→staged for review, Compromised→dropped),
+  newest-`(source,uid)`-wins upsert, revocation, and a `sweep_intel` stale sweep
+  (default TTL from config). The incoming-intel review modal accepts/discards
+  staged events.
 - `src/config.rs` — persistent `key = value` settings (no serde/TOML);
   `config_dir()` (overridable via `FOXHOLE_CONFIG_DIR`).
 - `src/storage.rs` — `atomic_write` (write-temp → fsync → rename) for durable state.
@@ -63,7 +69,11 @@ summary}` generate the standard event + human one-liner, and `CotEvent::{marker,
 zone}` are the producer side (a `Zone` becomes a `u-d-c-c`). `Affiliation`/`Kind`
 read the `type` for the TUI tint/glyph + map layer. No XML/date crates (ISO-8601
 ↔ epoch is in-house); fully unit-tested, standalone. This is **P1** of the
-intel-sharing plan; ingest/render/share (P2–P4) live in `net.rs` + `foxhole-core`.
+intel-sharing plan; **P2** (ingest + render) is wired: `net.rs` decodes the
+`cot/xml` custom field → `NetEvent::Cot` → `foxhole-core`'s `app/intel.rs`
+applies it, and `foxhole-tui`'s map renders the affiliation-tinted layer + INTEL
+panel. Share/durability (P3–P4) remain. `tools/cot_inject.py` is the reference
+injector (Appendix A) for live ingest + decoder fixtures.
 
 ### `crates/foxhole-tui` — rendering (ratatui), pure `&App` → frame
 
@@ -104,7 +114,9 @@ readiness events via `mark_boot`. `cfg(test)` and `FOXHOLE_NO_SPLASH` start in
   stack: identity, `ReticulumHandle`, `LxmRouter`, announce/delivery tasks. Also
   Nomad Network node discovery (recent-announce-cache poll for
   `nomadnetwork.node`) and page fetching via `LinkClient::query` (spawned off the
-  select loop), reported as `NetEvent::{NomadNode,Page}`.
+  select loop), reported as `NetEvent::{NomadNode,Page}`. Inbound CoT intel is
+  decoded from the `FIELD_CUSTOM_TYPE=cot/xml` / `FIELD_CUSTOM_DATA` fields and
+  reported as `NetEvent::Cot` (malformed payloads logged + dropped, never fatal).
 
 ## Networking (the `net` feature)
 

@@ -135,6 +135,10 @@ async fn run(
     let mut splash_tick = tokio::time::interval(std::time::Duration::from_millis(120));
 
     while !app.should_quit {
+        // Expire received intel past its validity window before drawing. The
+        // render also hides expired entries, but this reclaims them so the map and
+        // INTEL panel can't accrete stale markers (design note §6 periodic sweep).
+        app.sweep_intel(now_secs());
         terminal.draw(|frame| ui::render(frame, app))?;
 
         tokio::select! {
@@ -229,6 +233,15 @@ async fn run(
     Ok(())
 }
 
+/// Current Unix time in whole seconds (UTC); `0` if the clock predates the
+/// epoch. The clock the intel stale-sweep counts against.
+fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 /// Fold a single network event into UI state.
 fn apply_net_event(app: &mut App, ev: NetEvent) {
     // While the cold-boot splash is up, let the real readiness events flip its
@@ -257,6 +270,7 @@ fn apply_net_event(app: &mut App, ev: NetEvent) {
         NetEvent::Telemetry { source, lat, lon } => {
             app.set_location(&source, app::GeoPos::new(lat, lon));
         }
+        NetEvent::Cot { source, event } => app.apply_cot(source, event),
         NetEvent::Sync(status) => app.sync_status = status,
         NetEvent::MsgStatus { id, status } => app.set_msg_status(id, status),
         NetEvent::Path { hash, hops, iface } => app.record_path(hash, hops, iface),

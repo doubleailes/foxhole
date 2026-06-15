@@ -7,7 +7,8 @@
 //! arriving over LXMF telemetry (stored on each [`Conversation`](super::Conversation)).
 
 use super::*;
-use crate::domain::{GeoPos, wrap_lon};
+use crate::domain::{GeoPos, now_secs, wrap_lon};
+use foxhole_cot::Affiliation;
 
 /// What a plotted marker represents — drives its glyph and colour in the UI.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -16,6 +17,8 @@ pub enum MarkerKind {
     Operator,
     /// A peer whose position we learned over LXMF telemetry.
     Peer,
+    /// A received CoT intel point marker, tinted by its affiliation.
+    Intel(Affiliation),
 }
 
 /// A single thing plotted on the world map: a label, where it is, and what it is.
@@ -162,6 +165,18 @@ impl App {
                 });
             }
         }
+        // Received intel point markers (live, non-expired); zones are drawn as
+        // circles separately (see [`App::intel_zones`]). Selection cycling
+        // (`map_selected`) tours these alongside the peers.
+        for r in self.live_intel_at(now_secs() as i64) {
+            if r.kind() == crate::app::CotKind::Marker {
+                out.push(MapMarker {
+                    label: r.label(),
+                    pos: r.pos(),
+                    kind: MarkerKind::Intel(r.affiliation()),
+                });
+            }
+        }
         out
     }
 
@@ -182,6 +197,8 @@ impl App {
                 self.map = MapView::default();
                 self.map_selected = 0;
             }
+            // Open the incoming-intel review list (staged CoT from unvetted peers).
+            KeyCode::Char('i') => self.open_intel_review(),
             _ => {}
         }
     }
