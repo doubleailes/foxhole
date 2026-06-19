@@ -80,13 +80,24 @@ def main():
     if not a.to:
         ap.error("--to is required unless --dry-run")
 
+    # Accept a hash with the usual separators (colons/spaces/angle brackets) and
+    # validate it before touching the network, so a placeholder or typo gives a
+    # clear message instead of a hex traceback.
+    hex_to = "".join(c for c in a.to if c in "0123456789abcdefABCDEF")
+    if len(hex_to) != 32:
+        ap.error(
+            f"--to must be a 32-hex-char lxmf.delivery hash, got {a.to!r} "
+            "(it's the address foxhole shows in its status bar / Log tab; "
+            "don't paste the literal <foxhole-hash> placeholder)"
+        )
+
     import RNS, LXMF  # constants are 0xFB / 0xFC if your LXMF doesn't export the names
     RNS.Reticulum(a.config)
     router = LXMF.LXMRouter(storagepath="./.cot_inject_lxm")
     source = router.register_delivery_identity(RNS.Identity(), display_name="cot-inject")
     router.announce(source.hash)
 
-    dest_hash = bytes.fromhex(a.to)
+    dest_hash = bytes.fromhex(hex_to)
     if not RNS.Transport.has_path(dest_hash):
         RNS.Transport.request_path(dest_hash)
         deadline = time.time() + 15
