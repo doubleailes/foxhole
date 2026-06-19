@@ -213,6 +213,30 @@ fn world_map_renders_received_intel_and_review_modal() {
     assert!(text.contains("accept"), "accept/discard legend shown");
 }
 
+#[test]
+fn share_zone_modal_lists_local_zones_for_the_peer() {
+    use crate::app::{ShareZone, Tool};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let mut app = map_app();
+    app.active = Tool::Conversations;
+    app.conversations[0].display_name = Some("kilo".to_string());
+    app.share_zone = Some(ShareZone {
+        selected: 0,
+        peer: app.conversations[0].peer.clone(),
+        peer_label: "kilo".to_string(),
+    });
+
+    let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    term.draw(|f| crate::ui::render(f, &app)).unwrap();
+    let text = term.backend().to_string();
+    assert!(text.contains("SHARE INTEL"), "share modal title");
+    assert!(text.contains("kilo"), "recipient named in the header");
+    assert!(text.contains("AO ALPHA"), "a local zone is listed to share");
+    assert!(text.contains("share"), "share/cancel legend shown");
+}
+
 /// Wall-clock seconds — the test builds events relative to now so the live filter
 /// and stale sweep keep them.
 fn super_now() -> i64 {

@@ -74,6 +74,8 @@ impl App {
     pub(super) fn handle_conversations_key(&mut self, ctrl: bool, key: KeyEvent) {
         match (ctrl, key.code) {
             (true, KeyCode::Char('s')) => self.transmit(),
+            // Share a local hazard zone (zones.conf) as CoT intel to this peer.
+            (true, KeyCode::Char('g')) => self.open_share_zone(),
             (true, KeyCode::Char('x')) => self.purge(),
             // On-demand propagation sync (off-grid: no automatic polling).
             (true, KeyCode::Char('r')) => self.commands.push_back(NetCommand::SyncNow),
@@ -183,7 +185,7 @@ impl App {
 
     /// Flag a conversation as needing a re-save (deduplicated). `main` drains
     /// `dirty` and persists; `App` itself never touches the disk.
-    fn mark_dirty(&mut self, peer: &str) {
+    pub(super) fn mark_dirty(&mut self, peer: &str) {
         if !self.dirty.iter().any(|p| p == peer) {
             self.dirty.push(peer.to_string());
         }
@@ -251,6 +253,7 @@ impl App {
             peer: peer.clone(),
             title,
             body,
+            cot_xml: None,
         });
         // Sending resets the compose form back to the body field.
         self.transmit_field = TransmitField::Body;
@@ -258,7 +261,7 @@ impl App {
     }
 
     /// Next correlation id for an outbound message.
-    fn next_id(&mut self) -> u64 {
+    pub(super) fn next_id(&mut self) -> u64 {
         let id = self.next_msg_id;
         self.next_msg_id += 1;
         id

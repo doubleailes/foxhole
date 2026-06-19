@@ -1076,6 +1076,19 @@ fn build_message(
 ) -> Result<LxMessage, String> {
     let dest = parse_hash(&out.peer)?;
     let mut msg = LxMessage::new(dest, *source, &out.title, &out.body, DeliveryMethod::Direct);
+    // Attach a shared CoT event as the sanctioned intel custom fields (§5), before
+    // signing so they're covered by the signature. The type tag is `cot/xml`; the
+    // data is the UTF-8 event bytes.
+    if let Some(xml) = &out.cot_xml {
+        msg.set_field(
+            lxmf_core::constants::FIELD_CUSTOM_TYPE,
+            foxhole_cot::CONTENT_TAG_XML.as_bytes().to_vec(),
+        );
+        msg.set_field(
+            lxmf_core::constants::FIELD_CUSTOM_DATA,
+            xml.as_bytes().to_vec(),
+        );
+    }
     let signing_key = identity
         .get_signing_key()
         .ok_or_else(|| "identity has no signing key".to_string())?;

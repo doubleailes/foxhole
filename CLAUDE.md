@@ -36,7 +36,8 @@ terminal, or networking. Fast to build, fully unit-tested.
   gating (Trusted→live, Unknown/Untrusted→staged for review, Compromised→dropped),
   newest-`(source,uid)`-wins upsert, revocation, and a `sweep_intel` stale sweep
   (default TTL from config). The incoming-intel review modal accepts/discards
-  staged events.
+  staged events; `share_zone` (P3) produces a `u-d-c-c` CoT event from a local
+  `zones.conf` zone and enqueues it (with a summary body) for a peer.
 - `src/config.rs` — persistent `key = value` settings (no serde/TOML);
   `config_dir()` (overridable via `FOXHOLE_CONFIG_DIR`).
 - `src/storage.rs` — `atomic_write` (write-temp → fsync → rename) for durable state.
@@ -72,8 +73,11 @@ read the `type` for the TUI tint/glyph + map layer. No XML/date crates (ISO-8601
 intel-sharing plan; **P2** (ingest + render) is wired: `net.rs` decodes the
 `cot/xml` custom field → `NetEvent::Cot` → `foxhole-core`'s `app/intel.rs`
 applies it, and `foxhole-tui`'s map renders the affiliation-tinted layer + INTEL
-panel. Share/durability (P3–P4) remain. `tools/cot_inject.py` is the reference
-injector (Appendix A) for live ingest + decoder fixtures.
+panel. **P3** (share) is wired too: Ctrl+G in Conversations shares a local zone
+as a `cot/xml` LXMF message (`net.rs` `build_message` attaches the custom
+fields). Durability/reach (P4: persistence, protobuf, TAK gateway) remain.
+`tools/cot_inject.py` is the reference injector (Appendix A) for live ingest +
+decoder fixtures.
 
 ### `crates/foxhole-tui` — rendering (ratatui), pure `&App` → frame
 

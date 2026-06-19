@@ -42,7 +42,7 @@ pub use crate::notes::Notes;
 pub use boot::{AppState, Scroll};
 #[cfg(feature = "splash")]
 pub use boot::{Boot, BootStep};
-pub use intel::{IntelRecord, IntelReview, IntelZone};
+pub use intel::{IntelRecord, IntelReview, IntelZone, ShareZone};
 pub use map::{MapMarker, MapView, MarkerKind};
 
 // Re-exported so the renderer (and the binary) reach the CoT model through
@@ -303,6 +303,8 @@ pub struct App {
     pub intel_staged: Vec<IntelRecord>,
     /// When `Some`, the incoming-intel review modal is open (captures input).
     pub intel_review: Option<IntelReview>,
+    /// When `Some`, the share-zone picker is open (captures input).
+    pub share_zone: Option<ShareZone>,
     /// Latest rnpath-style path probe per hex destination hash (Network tab).
     pub path_probes: HashMap<String, PathProbe>,
     /// Live interface status (Interfaces tab); empty until the stack reports.
@@ -403,6 +405,7 @@ impl App {
             intel: Vec::new(),
             intel_staged: Vec::new(),
             intel_review: None,
+            share_zone: None,
             path_probes: HashMap::new(),
             interfaces: Vec::new(),
             link_count: 0,
@@ -484,6 +487,12 @@ impl App {
         // The incoming-intel review modal, when open, captures all input.
         if self.intel_review.is_some() {
             self.handle_intel_review_key(key);
+            return;
+        }
+
+        // The share-zone picker, when open, captures all input.
+        if self.share_zone.is_some() {
+            self.handle_share_zone_key(key);
             return;
         }
 

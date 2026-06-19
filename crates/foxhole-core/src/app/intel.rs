@@ -116,6 +116,18 @@ pub struct IntelReview {
     pub selected: usize,
 }
 
+/// Modal state for sharing a local hazard zone as CoT to the active peer (P3):
+/// pick which `zones.conf` zone to send. The recipient is captured at open time
+/// (the selected conversation), so the picker only chooses the zone.
+pub struct ShareZone {
+    /// Highlighted row within [`App::zones`].
+    pub selected: usize,
+    /// Recipient peer key (hex hash / display key) the zone will be sent to.
+    pub peer: String,
+    /// Human-friendly recipient label for the modal header.
+    pub peer_label: String,
+}
+
 impl App {
     /// Fold a decoded CoT event from `source` into the received-intel layer,
     /// applying trust gating, revocation, and newest-wins upsert. The entry point
@@ -314,6 +326,103 @@ impl App {
                 .min(self.intel_staged.len().saturating_sub(1));
         }
     }
+
+    /// Open the "share zone" picker for the active conversation (P3). No-op when
+    /// there is no selected peer or no local zone to share.
+    pub(super) fn open_share_zone(&mut self) {
+        if self.zones.is_empty() {
+            self.push_log("[SYS] intel: no local zones to share (add to zones.conf)".to_string());
+            return;
+        }
+        let Some(conv) = self.conversations.get(self.selected) else {
+            return;
+        };
+        self.share_zone = Some(ShareZone {
+            selected: 0,
+            peer: conv.peer.clone(),
+            peer_label: conv.label(),
+        });
+    }
+
+    /// Key handling while the share-zone picker is open: Up/Down select, Enter/`s`
+    /// share the highlighted zone, Esc cancel.
+    pub(super) fn handle_share_zone_key(&mut self, key: KeyEvent) {
+        let Some(state) = self.share_zone.as_ref() else {
+            return;
+        };
+        let selected = state.selected;
+        match key.code {
+            KeyCode::Esc => self.share_zone = None,
+            KeyCode::Up => {
+                if let Some(s) = self.share_zone.as_mut() {
+                    s.selected = selected.saturating_sub(1);
+                }
+            }
+            KeyCode::Down => {
+                if selected + 1 < self.zones.len()
+                    && let Some(s) = self.share_zone.as_mut()
+                {
+                    s.selected = selected + 1;
+                }
+            }
+            KeyCode::Enter | KeyCode::Char('s') => {
+                if let Some(state) = self.share_zone.take() {
+                    self.share_zone(state.selected, &state.peer);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Produce a CoT `u-d-c-c` hazard-zone event from local zone `zone_idx` and
+    /// enqueue it for transmission to `peer` (with a human-readable summary body
+    /// for graceful degradation). The wire generation is `foxhole-cot`'s producer
+    /// side — "today's `Zone` becomes a produced `u-d-c-c`" (design note §4).
+    pub fn share_zone(&mut self, zone_idx: usize, peer: &str) {
+        let Some(zone) = self.zones.get(zone_idx) else {
+            return;
+        };
+        let (label, lat, lon, radius_km) = (
+            zone.label.clone(),
+            zone.center.lat,
+            zone.center.lon,
+            zone.radius_km,
+        );
+        let now = now_secs() as i64;
+        let stale = now + self.config.intel_ttl_secs as i64;
+        // A stable-ish uid: our own short identity (if known) + the zone label, so
+        // re-sharing the same zone updates rather than duplicates on the receiver.
+        let origin = self
+            .local_address
+            .as_deref()
+            .map(crate::domain::short_hash)
+            .unwrap_or("foxhole");
+        let uid = format!("{origin}-{}", label.replace(' ', "-"));
+        let event = CotEvent::zone(uid, &label, lat, lon, radius_km * 1000.0, now, stale);
+        let summary = event.summary();
+        let xml = event.to_xml();
+
+        let id = self.next_id();
+        // Echo into the recipient's thread so the operator sees what was shared.
+        if let Some(conv) = self.conversations.iter_mut().find(|c| c.peer == peer) {
+            let mut entry = Entry::now(format!("[TX] shared intel: {label}"));
+            entry.id = id;
+            entry.status = MsgStatus::Sending;
+            conv.messages.push(entry);
+        }
+        self.outbound.push_back(Outbound {
+            id,
+            peer: peer.to_string(),
+            title: String::new(),
+            body: summary,
+            cot_xml: Some(xml),
+        });
+        self.mark_dirty(peer);
+        self.push_log(format!(
+            "[SYS] intel: shared {label} to {}",
+            crate::domain::short_hash(peer)
+        ));
+    }
 }
 
 /// Upsert a record into a layer keyed by `(source, uid)` with newest-`time`-wins
@@ -465,6 +574,61 @@ mod tests {
         app.discard_staged(0);
         assert!(app.intel_staged.is_empty());
         assert_eq!(app.intel.len(), 1);
+    }
+
+    #[test]
+    fn share_zone_enqueues_a_cot_event_and_echoes() {
+        let mut app = App::new();
+        app.conversations.clear();
+        app.conversations.push(Conversation::new("aa11"));
+        app.selected = 0;
+        app.zones = vec![crate::domain::Zone::new("AO ALPHA", 50.4, 30.5, 400.0)];
+
+        app.share_zone(0, "aa11");
+
+        // One outbound carrying the CoT XML + a summary body, echoed in the thread.
+        assert_eq!(app.outbound.len(), 1);
+        let out = &app.outbound[0];
+        assert_eq!(out.peer, "aa11");
+        assert!(out.body.contains("AO ALPHA"), "summary body");
+        let xml = out.cot_xml.as_ref().expect("cot xml attached");
+
+        // The produced event is a u-d-c-c hazard zone the codec round-trips.
+        let event = foxhole_cot::parse(xml).unwrap();
+        assert_eq!(event.cot_type, "u-d-c-c");
+        assert_eq!(event.kind(), Kind::Zone);
+        assert_eq!(event.radius_m, Some(400_000.0));
+        assert_eq!(event.point.lat, 50.4);
+        assert!(
+            app.conversations[0]
+                .messages
+                .last()
+                .unwrap()
+                .text
+                .contains("shared intel"),
+            "thread echo"
+        );
+    }
+
+    #[test]
+    fn share_picker_opens_only_with_a_peer_and_zone() {
+        let mut app = App::new();
+        app.conversations.clear();
+        app.zones.clear();
+        // No zones → no picker (logs a hint instead).
+        app.open_share_zone();
+        assert!(app.share_zone.is_none());
+
+        app.zones = vec![crate::domain::Zone::new("AO", 0.0, 0.0, 10.0)];
+        // No conversation selected → still no picker.
+        app.open_share_zone();
+        assert!(app.share_zone.is_none());
+
+        app.conversations.push(Conversation::new("bb22"));
+        app.selected = 0;
+        app.open_share_zone();
+        assert!(app.share_zone.is_some());
+        assert_eq!(app.share_zone.as_ref().unwrap().peer, "bb22");
     }
 
     #[test]

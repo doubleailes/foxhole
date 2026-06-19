@@ -7,7 +7,9 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
-use crate::app::{App, BURN_TOKEN, BurnConfirm, IntelReview, MnemonicView, NewConv, NewConvField};
+use crate::app::{
+    App, BURN_TOKEN, BurnConfirm, IntelReview, MnemonicView, NewConv, NewConvField, ShareZone,
+};
 
 use super::style::{base_style, tag_style};
 use super::widgets::{FRAME_BORDER, centered_rect};
@@ -194,6 +196,64 @@ pub(super) fn render_intel_review_popup(frame: &mut Frame, app: &App, review: &I
     lines.push(Line::raw(""));
     lines.push(Line::styled(
         "  [\u{2191}\u{2193}] select   [a]/[Enter] accept   [x]/[d] discard   [Esc] close",
+        base_style(),
+    ));
+
+    let para = Paragraph::new(lines)
+        .block(block)
+        .wrap(Wrap { trim: false });
+    frame.render_widget(para, area);
+}
+
+/// The share-zone picker (Ctrl+G in Conversations): choose a local hazard zone
+/// to send to the active peer as CoT intel. Reads the zone list off `App`,
+/// highlighting the selected row; the header names the recipient.
+pub(super) fn render_share_zone_popup(frame: &mut Frame, app: &App, share: &ShareZone) {
+    let area = centered_rect(64, 14, frame.area());
+    frame.render_widget(Clear, area);
+    let cfg = tag_style("CFG");
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_set(FRAME_BORDER)
+        .style(base_style())
+        .border_style(cfg)
+        .title(Span::styled(
+            " SHARE INTEL ",
+            cfg.add_modifier(Modifier::BOLD),
+        ));
+
+    let mut lines = vec![
+        Line::styled(
+            format!("  Send a hazard zone to {} as CoT:", share.peer_label),
+            base_style(),
+        ),
+        Line::raw(""),
+    ];
+    if app.zones.is_empty() {
+        lines.push(Line::styled(
+            "  (no local zones — add to zones.conf)",
+            base_style(),
+        ));
+    } else {
+        for (i, z) in app.zones.iter().enumerate() {
+            let sel = i == share.selected;
+            let lead = if sel { "\u{25b6} " } else { "  " }; // ▶
+            let mut style = Style::default();
+            if sel {
+                style = style.add_modifier(Modifier::REVERSED);
+            }
+            lines.push(Line::styled(
+                format!(
+                    "{lead}\u{26a0} {:<18.18} {:>7.2},{:>7.2}  r{:.0}km",
+                    z.label, z.center.lat, z.center.lon, z.radius_km
+                ),
+                style,
+            ));
+        }
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::styled(
+        "  [\u{2191}\u{2193}] select   [Enter]/[s] share   [Esc] cancel",
         base_style(),
     ));
 

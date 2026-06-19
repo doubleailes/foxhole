@@ -49,6 +49,10 @@ pub struct Outbound {
     pub title: String,
     /// The message text.
     pub body: String,
+    /// When `Some`, a CoT `<event>` (XML) to attach as the `cot/xml` intel custom
+    /// field (`FIELD_CUSTOM_TYPE`/`FIELD_CUSTOM_DATA`); `body` carries its
+    /// human-readable summary for graceful degradation. `None` for a plain message.
+    pub cot_xml: Option<String>,
 }
 
 /// Whether a discovered peer is a messaging endpoint or a propagation relay.
