@@ -62,8 +62,31 @@ The remainder of Section 1 is withheld under exemption (b)(█).
   status gauges and colour-graded signal meters. Tuned for a modern terminal
   (Raspberry Pi OS Bookworm and friends); colour only reinforces — it stays
   legible stripped to one bit on ██████ recovered from ████████████.
+- **World map situational display.** A pan/zoom tactical map plots the
+  operator's own fix, peers broadcasting position (Sideband-style LXMF location
+  telemetry), an embedded capitals/major-cities gazetteer, and shared intel.
+  Reads the viewport centre out as an **MGRS** grid reference; reframe onto a
+  typed reference, or designate a position by grid. Hazard zones overlay as
+  circular keep-out rings from a local `████████.conf`.
+- **Intel sharing over the mesh (CoT).** A `████████`-on-Target subset rides
+  inside LXMF messages — markers and circular hazard zones, tinted by
+  affiliation (friendly / hostile / neutral / unknown). Inbound reports from
+  vetted peers post live; unvetted ones are **staged for operator review**
+  before they touch the map. Share a local zone to a peer with one key, and
+  **revoke** it later so the peer's map drops the object. Authored in-app or
+  ingested off the wire; the received layer is sealed at rest like history.
+- **Operator-assigned trust.** Every peer carries a trust level
+  (`TRUSTED / UNKNOWN / UNTRUSTED / COMPROMISED`), shown as a colour-coded glyph
+  on its roster row and persisted across sessions. Trust gates whether inbound
+  intel posts live, is staged, or is dropped.
+- **Spoken-word addressing.** A 32-hex destination hash renders as a 12-word
+  mnemonic phrase (with checksum word) you can read aloud over a radio to verify
+  or share; the New Conversation prompt accepts either form.
+- **Scratch buffer.** A ten-slot note pad for stashing a hash, a grid reference,
+  or a frequency without copy/paste; persists across restarts and is destroyed
+  by a BURN with everything else.
 
-Capabilities 7 through ██ are withheld. ████████████████████████████████████
+Capabilities ██ through ██ are withheld. ████████████████████████████████████
 
 ---
 
@@ -117,25 +140,34 @@ surface the heavy/double box-drawing and bold nameplates still carry focus.
 Two-tier layout. **Tools** along the top; **panes** within each.
 
 ```
- Conversations | Network | Browser | Log | Interfaces | Guide
+ Conversations | Network | Map | Browser | Log | Interfaces | Notes | Guide
 ```
 
 | Key            | Action                                              |
 |----------------|-----------------------------------------------------|
 | `Ctrl+N/Ctrl+P`| Cycle tools (tabs)                                  |
-| `Ctrl+O`       | Open a conversation by raw LXMF address             |
+| `Ctrl+O`       | Open a conversation by LXMF address or mnemonic     |
 | `Tab`          | Cycle panes (Peers / Thread / Transmit)             |
-| `Up/Down`      | Select contact / node / link                        |
+| `Up/Down`      | Select contact / node / link / map marker / slot    |
 | `PgUp/PgDn`    | Scroll the focused text pane (page / log / thread)  |
 | `Home/End`     | Jump to top / bottom of the focused pane            |
+| `Ctrl+T`       | Toggle message title / body (Conversations)         |
 | `Ctrl+S`       | Transmit                                            |
 | `Ctrl+R`       | Sync from propagation node (operator-initiated)     |
+| `Ctrl+G`       | Share / revoke a hazard zone to the peer (CoT intel)|
+| `t`            | Cycle selected peer's trust level (Conv / Network)  |
+| `m`            | Show selected address as a mnemonic phrase (Network)|
 | `p`            | Path probe selected peer/node (Network, rnpath)     |
 | `Enter`        | Open node index / follow selected link (Browser)    |
 | `Backspace`    | Back to previous page (Browser, page pane)          |
-| `Ctrl+X`       | Purge compose buffer                                |
+| `Ctrl+X`       | Purge compose buffer / clear note slot              |
 | `Ctrl+K`       | **BURN** — destroy all session data (confirm `BURN`)|
 | `Ctrl+Q`       | ████████ (terminate session)                        |
+
+**World Map** keys: `Arrows` pan, `+`/`-` zoom, `Tab`/`[`/`]` cycle markers,
+`Enter`/`c` centre, `g` toggle the cities layer, `/` go to an MGRS grid
+reference, `r` reset the view, `i` review staged intel, `a`/`e`/`x` author /
+edit / remove the selected intel object.
 
 The **Browser** tool reads Nomad Network ████ pages: it lists discovered
 `nomadnetwork.node` stations and fetches `index.mu` over a Reticulum link,
@@ -154,8 +186,9 @@ this release.
 
 - Store key: HKDF-derived from the operator identity. No passphrase prompt in
   this configuration; ████████ tier withheld.
-- Container format: `FXC1` → authenticated token → atomic write
-  (write-temp → fsync → rename). Torn writes ████ possible.
+- Container format: `FXC1` (per-conversation history) and `FXI1` (the received
+  intel layer) → authenticated token → atomic write (write-temp → fsync →
+  rename), both keyed off the same operator identity. Torn writes ████ possible.
 - Foreign, corrupt, or ████████ containers are skipped on load; one bad file
   does not compromise the ████████████.
 
