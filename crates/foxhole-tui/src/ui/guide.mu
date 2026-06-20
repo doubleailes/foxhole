@@ -77,10 +77,14 @@ The UI has two focus tiers, mirroring Nomad Network:
   `!Enter / c`!         Centre on the selected marker
   `!r`!                 Reset the viewport to the whole globe
   `!i`!                 Review incoming (staged) CoT intel: accept / discard
+  `!a`!                 Author a new marker / zone at the map centre
+  `!e`!                 Edit the selected intel object in place
+  `!x`!                 Remove the selected intel object (local only)
 
   Received intel is tinted by affiliation (friendly / hostile / neutral /
   unknown); local `*zones.conf`* hazard areas are tagged LOCAL. Unvetted intel
-  from unknown/untrusted peers is staged until you accept it (`!i`!). Share a
+  from unknown/untrusted peers is staged until you accept it (`!i`!). Author your
+  own markers/zones with `!a`! (edit `!e`!, remove `!x`! the selected one). Share a
   local hazard zone to a peer with Ctrl+G in the Conversations tool (and `!r`! in
   that picker revokes it — peers drop the object from their map).
 

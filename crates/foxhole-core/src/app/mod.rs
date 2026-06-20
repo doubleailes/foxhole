@@ -42,7 +42,9 @@ pub use crate::notes::Notes;
 pub use boot::{AppState, Scroll};
 #[cfg(feature = "splash")]
 pub use boot::{Boot, BootStep};
-pub use intel::{IntelRecord, IntelReview, IntelZone, ShareZone};
+pub use intel::{
+    AuthorField, AuthorForm, AuthorKind, IntelRecord, IntelReview, IntelZone, ShareZone,
+};
 pub use map::{MapMarker, MapView, MarkerKind};
 
 // Re-exported so the renderer (and the binary) reach the CoT model through
@@ -305,6 +307,8 @@ pub struct App {
     pub intel_review: Option<IntelReview>,
     /// When `Some`, the share-zone picker is open (captures input).
     pub share_zone: Option<ShareZone>,
+    /// When `Some`, the intel authoring form is open (captures input).
+    pub author: Option<AuthorForm>,
     /// Set when the live/staged intel layer changed this iteration; `main` drains
     /// it and persists the encrypted intel store. Keeps `App` free of I/O.
     pub intel_dirty: bool,
@@ -409,6 +413,7 @@ impl App {
             intel_staged: Vec::new(),
             intel_review: None,
             share_zone: None,
+            author: None,
             intel_dirty: false,
             path_probes: HashMap::new(),
             interfaces: Vec::new(),
@@ -497,6 +502,12 @@ impl App {
         // The share-zone picker, when open, captures all input.
         if self.share_zone.is_some() {
             self.handle_share_zone_key(key);
+            return;
+        }
+
+        // The intel authoring form, when open, captures all input.
+        if self.author.is_some() {
+            self.handle_author_key(key);
             return;
         }
 

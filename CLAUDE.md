@@ -39,7 +39,11 @@ terminal, or networking. Fast to build, fully unit-tested.
   staged events; `share_zone` (P3) produces a `u-d-c-c` CoT event from a local
   `zones.conf` zone and enqueues it (with a summary body) for a peer, and
   `revoke_shared_zone` (P4) sends a `stale==time` revocation (same deterministic
-  uid) so the peer's `apply_cot` revoke path drops it.
+  uid) so the peer's `apply_cot` revoke path drops it. In-app authoring (P4,
+  `AuthorForm`) places/edits markers & zones of any affiliation into the live
+  intel layer (map keys `a`/`e`), and `remove_selected_intel` (`x`) drops the
+  selected object locally — so a received report can be cleared without a network
+  round-trip.
 - `src/config.rs` — persistent `key = value` settings (no serde/TOML);
   `config_dir()` (overridable via `FOXHOLE_CONFIG_DIR`).
 - `src/storage.rs` — `atomic_write` (write-temp → fsync → rename) for durable state.

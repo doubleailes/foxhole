@@ -31,6 +31,10 @@ pub struct MapMarker {
     pub pos: GeoPos,
     /// What it is (drives glyph/colour).
     pub kind: MarkerKind,
+    /// For an intel marker, its `(source, uid)` key — lets map actions (edit /
+    /// local remove) resolve the selected marker back to its [`IntelRecord`].
+    /// `None` for the operator/peer markers.
+    pub intel_key: Option<(String, String)>,
 }
 
 /// The map viewport: a centre point plus how many degrees of longitude span its
@@ -154,6 +158,7 @@ impl App {
                 label: self.config.display_name.clone(),
                 pos,
                 kind: MarkerKind::Operator,
+                intel_key: None,
             });
         }
         for c in &self.conversations {
@@ -162,20 +167,20 @@ impl App {
                     label: c.label(),
                     pos,
                     kind: MarkerKind::Peer,
+                    intel_key: None,
                 });
             }
         }
-        // Received intel point markers (live, non-expired); zones are drawn as
-        // circles separately (see [`App::intel_zones`]). Selection cycling
-        // (`map_selected`) tours these alongside the peers.
+        // Live (non-expired) received/authored intel — markers and zones alike are
+        // selectable (a zone's centre is its handle; its ring is drawn separately
+        // by [`App::intel_zones`]). Selection cycling tours these with the peers.
         for r in self.live_intel_at(now_secs() as i64) {
-            if r.kind() == crate::app::CotKind::Marker {
-                out.push(MapMarker {
-                    label: r.label(),
-                    pos: r.pos(),
-                    kind: MarkerKind::Intel(r.affiliation()),
-                });
-            }
+            out.push(MapMarker {
+                label: r.label(),
+                pos: r.pos(),
+                kind: MarkerKind::Intel(r.affiliation()),
+                intel_key: Some((r.source.clone(), r.event.uid.clone())),
+            });
         }
         out
     }
@@ -199,6 +204,12 @@ impl App {
             }
             // Open the incoming-intel review list (staged CoT from unvetted peers).
             KeyCode::Char('i') => self.open_intel_review(),
+            // Author a new intel object (marker/zone) at the map centre.
+            KeyCode::Char('a') => self.open_author(false),
+            // Edit the selected intel object in place.
+            KeyCode::Char('e') => self.open_author(true),
+            // Remove the selected intel object from the local map.
+            KeyCode::Char('x') | KeyCode::Delete => self.remove_selected_intel(),
             _ => {}
         }
     }

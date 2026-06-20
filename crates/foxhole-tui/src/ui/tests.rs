@@ -237,6 +237,38 @@ fn share_zone_modal_lists_local_zones_for_the_peer() {
     assert!(text.contains("share"), "share/cancel legend shown");
 }
 
+#[test]
+fn author_form_renders_fields_and_toggles() {
+    use crate::app::{Affiliation, AuthorField, AuthorForm, AuthorKind};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let mut app = map_app();
+    app.author = Some(AuthorForm {
+        kind: AuthorKind::Zone,
+        affiliation: Affiliation::Hostile,
+        callsign: "AO ZULU".to_string(),
+        lat: "50.0".to_string(),
+        lon: "30.0".to_string(),
+        radius_km: "200".to_string(),
+        remarks: String::new(),
+        field: AuthorField::Kind,
+        edit_key: None,
+        error: None,
+    });
+
+    let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    term.draw(|f| crate::ui::render(f, &app)).unwrap();
+    let text = term.backend().to_string();
+    assert!(text.contains("AUTHOR INTEL"), "author modal title");
+    assert!(text.contains("Kind"), "kind field");
+    assert!(text.contains("Zone"), "kind toggle shows Zone");
+    assert!(text.contains("Affil"), "affiliation field");
+    assert!(text.contains("Radius km"), "zone shows the radius field");
+    assert!(text.contains("AO ZULU"), "callsign value shown");
+    assert!(text.contains("commit"), "commit/cancel legend");
+}
+
 /// Wall-clock seconds — the test builds events relative to now so the live filter
 /// and stale sweep keep them.
 fn super_now() -> i64 {

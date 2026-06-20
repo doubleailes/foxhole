@@ -8,7 +8,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
 use crate::app::{
-    App, BURN_TOKEN, BurnConfirm, IntelReview, MnemonicView, NewConv, NewConvField, ShareZone,
+    App, AuthorField, AuthorForm, AuthorKind, BURN_TOKEN, BurnConfirm, IntelReview, MnemonicView,
+    NewConv, NewConvField, ShareZone,
 };
 
 use super::style::{base_style, tag_style};
@@ -256,6 +257,117 @@ pub(super) fn render_share_zone_popup(frame: &mut Frame, app: &App, share: &Shar
         "  [\u{2191}\u{2193}] select   [Enter]/[s] share   [r] revoke   [Esc] cancel",
         base_style(),
     ));
+
+    let para = Paragraph::new(lines)
+        .block(block)
+        .wrap(Wrap { trim: false });
+    frame.render_widget(para, area);
+}
+
+/// The intel authoring form (`a`/`e` on the World Map): place or edit a marker
+/// or zone of any affiliation, committed to the live intel layer. The focused
+/// field is chevroned; text fields carry a synthetic caret.
+pub(super) fn render_author_popup(frame: &mut Frame, form: &AuthorForm) {
+    let area = centered_rect(60, 14, frame.area());
+    frame.render_widget(Clear, area);
+    let cfg = tag_style("CFG");
+    let title = if form.edit_key.is_some() {
+        " EDIT INTEL "
+    } else {
+        " AUTHOR INTEL "
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_set(FRAME_BORDER)
+        .style(base_style())
+        .border_style(cfg)
+        .title(Span::styled(title, cfg.add_modifier(Modifier::BOLD)));
+
+    let caret = Span::styled(" ", Style::default().add_modifier(Modifier::REVERSED));
+    // One row: `▶ Label   value`, with the chevron on the focused field and a
+    // caret after a focused text value.
+    let row = |label: &str, value: String, focused: bool, is_text: bool| -> Line<'static> {
+        let lead = if focused { "\u{25b6} " } else { "  " };
+        let lstyle = if focused {
+            cfg.add_modifier(Modifier::BOLD)
+        } else {
+            base_style()
+        };
+        let mut spans = vec![
+            Span::styled(format!("{lead}{label:<11}"), lstyle),
+            Span::raw(value),
+        ];
+        if focused && is_text {
+            spans.push(caret.clone());
+        }
+        Line::from(spans)
+    };
+
+    let kind_str = match form.kind {
+        AuthorKind::Marker => "Marker",
+        AuthorKind::Zone => "Zone",
+    };
+    let mut lines = vec![
+        row(
+            "Kind",
+            format!("< {kind_str} >"),
+            form.field == AuthorField::Kind,
+            false,
+        ),
+        row(
+            "Affil",
+            format!("< {} >", form.affiliation.label()),
+            form.field == AuthorField::Affiliation,
+            false,
+        ),
+        row(
+            "Callsign",
+            form.callsign.clone(),
+            form.field == AuthorField::Callsign,
+            true,
+        ),
+        row(
+            "Lat",
+            form.lat.clone(),
+            form.field == AuthorField::Lat,
+            true,
+        ),
+        row(
+            "Lon",
+            form.lon.clone(),
+            form.field == AuthorField::Lon,
+            true,
+        ),
+    ];
+    // Radius only matters for a zone; show it dimmed for a marker.
+    if form.kind == AuthorKind::Zone {
+        lines.push(row(
+            "Radius km",
+            form.radius_km.clone(),
+            form.field == AuthorField::Radius,
+            true,
+        ));
+    } else {
+        lines.push(Line::styled(
+            "  Radius km  (zone only)",
+            Style::default().add_modifier(Modifier::DIM),
+        ));
+    }
+    lines.push(row(
+        "Remarks",
+        form.remarks.clone(),
+        form.field == AuthorField::Remarks,
+        true,
+    ));
+    lines.push(Line::raw(""));
+    if let Some(err) = form.error {
+        lines.push(Line::styled(format!("  {err}"), tag_style("ERR")));
+    } else {
+        lines.push(Line::styled(
+            "  [\u{2191}\u{2193}] field  [\u{2190}\u{2192}] toggle  [Enter] commit  [Esc] cancel",
+            base_style(),
+        ));
+    }
 
     let para = Paragraph::new(lines)
         .block(block)

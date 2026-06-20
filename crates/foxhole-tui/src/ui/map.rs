@@ -92,7 +92,7 @@ pub(super) fn render_map(frame: &mut Frame, app: &App, area: Rect) {
     // Footer: the key legend. Keys are named plainly so none of the separators
     // read as bindings (the bracket keys cycle markers). `i` reviews staged intel.
     let legend = Line::styled(
-        "[\u{2190}\u{2191}\u{2193}\u{2192}] pan   [+]/[-] zoom   [Tab] cycle   [Enter]/[c] center   [r] reset   [i] intel",
+        "[\u{2190}\u{2191}\u{2193}\u{2192}] pan  [+/-] zoom  [Tab] cycle  [c] center  [a] author  [e] edit  [x] remove  [i] intel",
         ts_style(),
     );
     frame.render_widget(Paragraph::new(legend).style(base_style()), rows[1]);
