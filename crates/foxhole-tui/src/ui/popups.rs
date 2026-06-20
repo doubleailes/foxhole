@@ -253,7 +253,7 @@ pub(super) fn render_share_zone_popup(frame: &mut Frame, app: &App, share: &Shar
     }
     lines.push(Line::raw(""));
     lines.push(Line::styled(
-        "  [\u{2191}\u{2193}] select   [Enter]/[s] share   [Esc] cancel",
+        "  [\u{2191}\u{2193}] select   [Enter]/[s] share   [r] revoke   [Esc] cancel",
         base_style(),
     ));
 

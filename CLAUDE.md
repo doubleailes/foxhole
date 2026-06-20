@@ -37,7 +37,9 @@ terminal, or networking. Fast to build, fully unit-tested.
   newest-`(source,uid)`-wins upsert, revocation, and a `sweep_intel` stale sweep
   (default TTL from config). The incoming-intel review modal accepts/discards
   staged events; `share_zone` (P3) produces a `u-d-c-c` CoT event from a local
-  `zones.conf` zone and enqueues it (with a summary body) for a peer.
+  `zones.conf` zone and enqueues it (with a summary body) for a peer, and
+  `revoke_shared_zone` (P4) sends a `stale==time` revocation (same deterministic
+  uid) so the peer's `apply_cot` revoke path drops it.
 - `src/config.rs` — persistent `key = value` settings (no serde/TOML);
   `config_dir()` (overridable via `FOXHOLE_CONFIG_DIR`).
 - `src/storage.rs` — `atomic_write` (write-temp → fsync → rename) for durable state.
