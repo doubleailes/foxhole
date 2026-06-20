@@ -38,6 +38,9 @@ pub use crate::domain::{
     path_summary,
 };
 pub use crate::notes::Notes;
+// World Map domain types, surfaced through `app` so the UI and binary reach them
+// via the familiar `app::…` path (the logic itself lives in `foxhole-map`).
+pub use foxhole_map::{CITIES, City, CityKind, MapMarker, MapView, MarkerKind};
 
 pub use boot::{AppState, Scroll};
 #[cfg(feature = "splash")]
@@ -45,7 +48,6 @@ pub use boot::{Boot, BootStep};
 pub use intel::{
     AuthorField, AuthorForm, AuthorKind, IntelRecord, IntelReview, IntelZone, ShareZone,
 };
-pub use map::{MapMarker, MapView, MarkerKind};
 
 // Re-exported so the renderer (and the binary) reach the CoT model through
 // `crate::app::…` without each crate depending on `foxhole-cot` directly.
@@ -292,6 +294,9 @@ pub struct App {
     pub map: MapView,
     /// Selected marker index within [`App::map_markers`] (World Map tab).
     pub map_selected: usize,
+    /// Whether the embedded capitals/cities reference layer is drawn on the
+    /// World Map (toggled with `g`). On by default for orientation.
+    pub map_cities: bool,
     /// Hazard areas overlaid on the World Map (war zones / areas of operations).
     /// Seeded with a demo set; overridden from `zones.conf` when present. This is
     /// *local* (operator-authored) intel — distinct from `intel` below.
@@ -408,6 +413,7 @@ impl App {
             net_col: NetColumn::Peers,
             map: MapView::default(),
             map_selected: 0,
+            map_cities: true,
             zones: crate::zones::demo(),
             intel: Vec::new(),
             intel_staged: Vec::new(),

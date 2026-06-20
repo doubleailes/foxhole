@@ -13,6 +13,12 @@
 
 use std::collections::HashMap;
 
+// The geographic position and hazard-zone types now live in the standalone
+// `foxhole-map` crate. Re-exported here so the conversation model (peer
+// telemetry is a `GeoPos`) and every `crate::domain::{GeoPos,Zone}` consumer
+// keep resolving unchanged.
+pub use foxhole_map::{GeoPos, Zone};
+
 /// A command from the UI down to the network task (mirrors [`NetEvent`] in the
 /// other direction). Produced by Network-tab key handling, drained by `main`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -325,81 +331,6 @@ impl Entry {
             status: MsgStatus::None,
         }
     }
-}
-
-/// A geographic position in EPSG:4326 (WGS-84) decimal degrees — what the World
-/// Map tool plots. The operator's own fix comes from `config`; peer fixes arrive
-/// over LXMF telemetry (e.g. a Sideband contact sharing its location).
-/// Constructed via [`GeoPos::new`], which clamps latitude to the poles and wraps
-/// longitude into −180..=180 so out-of-range telemetry can never project off the
-/// canvas.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct GeoPos {
-    /// Latitude in degrees, north positive (−90..=90).
-    pub lat: f64,
-    /// Longitude in degrees, east positive (−180..=180).
-    pub lon: f64,
-}
-
-impl GeoPos {
-    /// A position with latitude clamped to ±90 and longitude wrapped into
-    /// −180..=180. Non-finite inputs collapse to `0.0` so a bad fix is plotted at
-    /// the origin rather than corrupting the viewport.
-    pub fn new(lat: f64, lon: f64) -> Self {
-        let lat = if lat.is_finite() { lat } else { 0.0 };
-        let lon = if lon.is_finite() { lon } else { 0.0 };
-        Self {
-            lat: lat.clamp(-90.0, 90.0),
-            lon: wrap_lon(lon),
-        }
-    }
-}
-
-/// A hazard area overlaid on the World Map — a named region with a danger
-/// radius, drawn as a red circle. Sourced from the operator's hand-editable
-/// `zones.conf` (situational intel) or the offline demo set; e.g. an active
-/// conflict "area of operations" the operator wants kept in view.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Zone {
-    /// Short label (e.g. `AO ALPHA`), shown on the map and in the roster.
-    pub label: String,
-    /// Centre of the hazard area.
-    pub center: GeoPos,
-    /// Danger radius in kilometres.
-    pub radius_km: f64,
-}
-
-impl Zone {
-    /// A zone with its centre normalised and a non-negative radius.
-    pub fn new(label: impl Into<String>, lat: f64, lon: f64, radius_km: f64) -> Self {
-        Self {
-            label: label.into(),
-            center: GeoPos::new(lat, lon),
-            radius_km: if radius_km.is_finite() {
-                radius_km.max(0.0)
-            } else {
-                0.0
-            },
-        }
-    }
-
-    /// Radius in latitude degrees (~111 km per degree) for the canvas circle,
-    /// floored so a small zone still renders as a visible ring.
-    pub fn radius_deg(&self) -> f64 {
-        (self.radius_km / 111.0).max(0.3)
-    }
-}
-
-/// Wrap a longitude into the −180..=180 range so panning across the antimeridian
-/// (or out-of-range telemetry) stays on the map.
-pub(crate) fn wrap_lon(lon: f64) -> f64 {
-    let mut l = (lon + 180.0).rem_euclid(360.0) - 180.0;
-    // `rem_euclid` yields [0,360) → [−180,180); nudge the −180 edge to +180 so a
-    // reset/center reads as the conventional dateline value.
-    if l <= -180.0 {
-        l += 360.0;
-    }
-    l
 }
 
 /// A single peer conversation: its message history and an unsent draft.

@@ -13,7 +13,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::canvas::{Canvas, Circle, Map, MapResolution, Points};
 
-use crate::app::{Affiliation, App, MapMarker, MarkerKind, Zone};
+use crate::app::{Affiliation, App};
+use foxhole_map::{CITIES, City, CityKind, MapMarker, MarkerKind, Zone};
 
 use super::style::{ACCENT, BG, BORDER_LIVE, BORDER_REST, INK, base_style, tag_style, ts_style};
 use super::widgets::{NOSEL, SEL, count_tag, tactical_block};
@@ -24,6 +25,11 @@ const LAND: Color = BORDER_REST;
 const PEER: Color = Color::Rgb(120, 220, 160);
 /// Hazard-zone tint — dried tactical red, matching the `ERR` palette.
 const ZONE: Color = Color::Rgb(214, 96, 88);
+/// Capital-city reference tint — a cool steel blue that sits apart from the
+/// green land/markers and the red zones without competing with them.
+const CITY_CAP: Color = Color::Rgb(140, 168, 186);
+/// Major (non-capital) city reference tint — dimmer still, a hint of a place.
+const CITY: Color = Color::Rgb(96, 120, 134);
 
 /// Affiliation → tint for the received-intel layer (design note §10.5): friendly
 /// green, hostile red, neutral grey, unknown amber. Colour reinforces the glyph
@@ -92,7 +98,7 @@ pub(super) fn render_map(frame: &mut Frame, app: &App, area: Rect) {
     // Footer: the key legend. Keys are named plainly so none of the separators
     // read as bindings (the bracket keys cycle markers). `i` reviews staged intel.
     let legend = Line::styled(
-        "[\u{2190}\u{2191}\u{2193}\u{2192}] pan  [+/-] zoom  [Tab] cycle  [c] center  [a] author  [e] edit  [x] remove  [i] intel",
+        "[\u{2190}\u{2191}\u{2193}\u{2192}] pan  [+/-] zoom  [Tab] cycle  [c] center  [g] cities  [a] author  [e] edit  [x] remove  [i] intel  [r] reset",
         ts_style(),
     );
     frame.render_widget(Paragraph::new(legend).style(base_style()), rows[1]);
@@ -107,6 +113,7 @@ fn render_canvas(frame: &mut Frame, app: &App, area: Rect) {
     let zones = app.zones.clone();
     // Received-intel circular overlays (live, affiliation-tinted).
     let intel_zones = app.intel_zones();
+    let show_cities = app.map_cities;
 
     // Pre-split coordinates by kind so each layer is one cheap `Points` draw.
     // `project_lon` shifts each point by ±360 when the viewport straddles the
@@ -148,6 +155,40 @@ fn render_canvas(frame: &mut Frame, app: &App, area: Rect) {
                 resolution: MapResolution::High,
                 color: LAND,
             });
+            // Capitals/cities reference layer, just above the land and beneath
+            // everything operator-critical. Dots for every in-view place (split
+            // by kind so each is one cheap `Points` draw, capitals on top), then
+            // names that reveal as the operator zooms in past each city's
+            // `label_span` — so the globe view stays legible. `project_lon`
+            // keeps dateline-straddling viewports populated.
+            if show_cities {
+                ctx.layer();
+                let major_pts: Vec<(f64, f64)> = CITIES
+                    .iter()
+                    .filter(|c| c.kind == CityKind::Major)
+                    .filter_map(|c| Some((view.project_lon(c.lon)?, c.lat)))
+                    .collect();
+                let capital_pts: Vec<(f64, f64)> = CITIES
+                    .iter()
+                    .filter(|c| c.kind == CityKind::Capital)
+                    .filter_map(|c| Some((view.project_lon(c.lon)?, c.lat)))
+                    .collect();
+                ctx.draw(&Points {
+                    coords: &major_pts,
+                    color: CITY,
+                });
+                ctx.draw(&Points {
+                    coords: &capital_pts,
+                    color: CITY_CAP,
+                });
+                for city in CITIES {
+                    if view.span <= city.label_span
+                        && let Some(lon) = view.project_lon(city.lon)
+                    {
+                        ctx.print(lon, city.lat, city_label(city));
+                    }
+                }
+            }
             // Hazard zones sit just above the land: a red danger ring per area,
             // then its label, beneath the operator/peer markers so those stay
             // legible on top.
@@ -217,6 +258,23 @@ fn render_canvas(frame: &mut Frame, app: &App, area: Rect) {
             }
         });
     frame.render_widget(canvas, area);
+}
+
+/// A reference city's on-map label: a kind glyph (capital ring vs. city dot)
+/// plus its name, in the dim cool-steel city palette so it never competes with
+/// the operator/peer markers drawn above it. Capitals read brighter and bold.
+fn city_label(c: &City) -> Line<'static> {
+    let (glyph, style) = match c.kind {
+        CityKind::Capital => (
+            "\u{229b} ", // ⊛ — a national capital
+            Style::default().fg(CITY_CAP).add_modifier(Modifier::BOLD),
+        ),
+        CityKind::Major => (
+            "\u{00b7} ", // · — a major city
+            Style::default().fg(CITY),
+        ),
+    };
+    Line::styled(format!("{glyph}{}", c.name), style)
 }
 
 /// A marker's on-map label: a kind glyph plus the name. The selected marker is

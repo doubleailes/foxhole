@@ -23,27 +23,30 @@ terminal, or networking. Fast to build, fully unit-tested.
 - `src/domain/` — the shared model every layer agrees on: `Conversation`,
   `Entry`, `MsgStatus`; the UI↔network events/commands (`NetEvent`,
   `NetCommand`, `Outbound`, `PeerKind`); the Network/Browser registries (`Node`,
-  `PathProbe`, `NomadNode`, `Page`). Carries no UI focus/navigation semantics.
+  `PathProbe`, `NomadNode`, `Page`). The geographic types `GeoPos`/`Zone` are
+  re-exported here from `foxhole-map`. Carries no UI focus/navigation semantics.
 - `src/app/` — all state and key routing (`App`). Two focus tiers mirror
-  Nomadnet: top-level **tools** (tabs: Conversations / Network / Browser / Log /
-  Interfaces / Guide, switched with Ctrl+N/Ctrl+P) and **panes** within a tool
-  (PeerList / Thread / Transmit, cycled with Tab). The struct + program-global
-  key routing + modals live in `mod.rs`; per-tool behaviour is split into
-  sibling `impl App` blocks (`conversations.rs`, `network.rs`, `browser.rs`,
-  `map.rs`, `intel.rs`) and the cold-boot/scroll machinery into `boot.rs`. Free
-  of I/O and rendering. `intel.rs` is the **received-intel layer** (P2 of the
-  intel-sharing plan): `apply_cot` folds a decoded `CotEvent` in with trust
-  gating (Trusted→live, Unknown/Untrusted→staged for review, Compromised→dropped),
-  newest-`(source,uid)`-wins upsert, revocation, and a `sweep_intel` stale sweep
-  (default TTL from config). The incoming-intel review modal accepts/discards
-  staged events; `share_zone` (P3) produces a `u-d-c-c` CoT event from a local
-  `zones.conf` zone and enqueues it (with a summary body) for a peer, and
-  `revoke_shared_zone` (P4) sends a `stale==time` revocation (same deterministic
-  uid) so the peer's `apply_cot` revoke path drops it. In-app authoring (P4,
-  `AuthorForm`) places/edits markers & zones of any affiliation into the live
-  intel layer (map keys `a`/`e`), and `remove_selected_intel` (`x`) drops the
-  selected object locally — so a received report can be cleared without a network
-  round-trip.
+  Nomadnet: top-level **tools** (tabs: Conversations / Network / Map / Browser /
+  Log / Interfaces / Notes / Guide, switched with Ctrl+N/Ctrl+P) and **panes**
+  within a tool (PeerList / Thread / Transmit, cycled with Tab). The struct +
+  program-global key routing + modals live in `mod.rs`; per-tool behaviour is
+  split into sibling `impl App` blocks (`conversations.rs`, `network.rs`,
+  `browser.rs`, `map.rs`, `intel.rs`) and the cold-boot/scroll machinery into
+  `boot.rs`. Free of I/O and rendering. `map.rs` is only the App-level *binding*
+  for the World Map — deriving markers from peer telemetry/intel and routing keys
+  to `MapView`; the geometry/data live in `foxhole-map`. `intel.rs` is the
+  **received-intel layer** (P2 of the intel-sharing plan): `apply_cot` folds a
+  decoded `CotEvent` in with trust gating (Trusted→live, Unknown/Untrusted→staged
+  for review, Compromised→dropped), newest-`(source,uid)`-wins upsert, revocation,
+  and a `sweep_intel` stale sweep (default TTL from config). The incoming-intel
+  review modal accepts/discards staged events; `share_zone` (P3) produces a
+  `u-d-c-c` CoT event from a local `zones.conf` zone and enqueues it (with a
+  summary body) for a peer, and `revoke_shared_zone` (P4) sends a `stale==time`
+  revocation (same deterministic uid) so the peer's `apply_cot` revoke path drops
+  it. In-app authoring (P4, `AuthorForm`) places/edits markers & zones of any
+  affiliation into the live intel layer (map keys `a`/`e`), and
+  `remove_selected_intel` (`x`) drops the selected object locally — so a received
+  report can be cleared without a network round-trip.
 - `src/config.rs` — persistent `key = value` settings (no serde/TOML);
   `config_dir()` (overridable via `FOXHOLE_CONFIG_DIR`).
 - `src/storage.rs` — `atomic_write` (write-temp → fsync → rename) for durable state.
@@ -86,9 +89,25 @@ fields). **P4** is under way: received intel now persists across restarts
 gateway remain. `tools/cot_inject.py` is the reference injector (Appendix A) for
 live ingest + decoder fixtures.
 
+### `crates/foxhole-map` — World Map domain (pure logic + data)
+
+The whole map feature's logic and data, extracted into a standalone crate whose
+**only dependency is the dependency-free `foxhole-cot`** (for `Affiliation`,
+which tints intel markers) — so it builds fast and is fully unit-tested in
+isolation. `geo` (`GeoPos` + `wrap_lon`), `view` (the `MapView` pan/zoom
+viewport — all geometry/limits/antimeridian projection behind intent-named
+methods like `pan_east`/`zoom_in`/`frame_on` — plus `MapMarker`/`MarkerKind`,
+including the intel-tinted `MarkerKind::Intel`), `zones` (`Zone` + the
+`parse`/`demo` hazard-area overlay), and `cities` (the embedded `CITIES`
+capitals/major-cities gazetteer with zoom-staged `label_span`s). Knows nothing of
+`App`, the terminal, or networking: `foxhole-core` owns the field state, routes
+keys to `MapView`'s methods, and builds the marker list from peer telemetry and
+the intel layer; `foxhole-tui` draws it.
+
 ### `crates/foxhole-tui` — rendering (ratatui), pure `&App` → frame
 
-Depends on `foxhole-core` + `foxhole-micron`. **Truecolor tactical theme over
+Depends on `foxhole-core` + `foxhole-micron` + `foxhole-map` (the map body draws
+the latter's `MapView`/markers/zones/cities). **Truecolor tactical theme over
 Unicode box-drawing** — a dark field-night surface (`style::BG`, painted under the
 whole frame and shared by the boot splash) with phosphor-green panels: resting
 panes use the heavy `FRAME_BORDER` (`┏━┓┃┗┛`) with a dim border, the focused pane

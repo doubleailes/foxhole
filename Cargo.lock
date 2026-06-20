@@ -578,12 +578,20 @@ version = "0.1.0"
 dependencies = [
  "crossterm",
  "foxhole-cot",
+ "foxhole-map",
  "foxhole-micron",
 ]
 
 [[package]]
 name = "foxhole-cot"
 version = "0.1.0"
+
+[[package]]
+name = "foxhole-map"
+version = "0.1.0"
+dependencies = [
+ "foxhole-cot",
+]
 
 [[package]]
 name = "foxhole-micron"
@@ -597,6 +605,7 @@ name = "foxhole-tui"
 version = "0.1.0"
 dependencies = [
  "foxhole-core",
+ "foxhole-map",
  "foxhole-micron",
  "ratatui",
 ]
