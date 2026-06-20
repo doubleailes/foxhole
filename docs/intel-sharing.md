@@ -209,23 +209,80 @@ Received CoT is **attacker-controllable external input** (any peer can send it):
 
 ## 12. Phased implementation
 
-1. **P1 — CoT subset codec (pure, tested).** Parse/generate the foxhole subset of
-   CoT `event`/`point`/`detail` (XML first, hardened). An `Annotation`/`CotEvent`
-   model with affiliation+kind, round-trip + lenient-parse + malformed-input +
-   XXE-rejection tests. Lives in `foxhole-cot` (proposed) or the binary; `Zone`
-   folds in as a produced `u-d-c-c`. **Test vectors come from the reference
-   injector** (Appendix A, `--dry-run`) — the same capture-as-fixture discipline
-   used for the telemetry formats.
-2. **P2 — ingest + render.** Parse the custom fields in `net.rs` → `NetEvent::Cot`
-   → core applies to the received-intel layer with trust gating + `stale` sweep.
-   Render the affiliation-tinted layer; generalize the HAZARD panel to INTEL.
-   **Dev-tested live with the reference injector** (Appendix A) — no second
-   foxhole or ATAK needed.
-3. **P3 — share.** Generate a CoT event + human-readable body, send via the LXMF
-   custom field; trigger from an in-app "share" action (direct/group).
-4. **P4 — durability + reach.** In-app authoring, encrypted persistence, revoke
-   workflow, the protobuf transport (`cot/proto`), and — separately — a TAK gateway
-   and PLI/GeoChat unification.
+1. **P1 — CoT subset codec (pure, tested).** ✅ **Done** — `crates/foxhole-cot`:
+   hardened XML subset parse/generate of `event`/`point`/`detail`, an
+   affiliation+kind model, in-house ISO-8601↔epoch, round-trip + lenient-parse +
+   malformed-input + XXE-rejection tests. `Zone` folds in as a produced
+   `u-d-c-c`. Test vectors come from the reference injector (Appendix A).
+2. **P2 — ingest + render.** ✅ **Done** — `net.rs` parses the custom fields →
+   `NetEvent::Cot` → `foxhole-core`'s `app/intel.rs` applies it with trust gating
+   + `stale` sweep; the World Map renders the affiliation-tinted layer and the
+   generalized INTEL panel. Dev-tested live with the reference injector.
+3. **P3 — share.** ✅ **Done** — Ctrl+G in Conversations shares a local zone as a
+   `cot/xml` LXMF message (CoT event + human-readable summary body) to the peer.
+4. **P4 — durability + reach.** *In progress.*
+   - ✅ **Encrypted persistence** — `src/intel_store.rs` (`FXI1` blob, same
+     AES-256-CBC+HMAC/atomic recipe as the conversation store); intel survives a
+     restart and is burn-wiped.
+   - ✅ **Revoke workflow** — Ctrl+G → `r` sends a `stale==time` revocation so the
+     peer drops the object; `x` on the map removes a received/authored object
+     locally.
+   - ✅ **In-app authoring** — `a`/`e` on the World Map place/edit markers & zones
+     of any affiliation into the live intel layer.
+   - ⏳ **Remaining:** the protobuf transport (`cot/proto`) and a TAK gateway
+     (plus PLI/GeoChat unification). See §13.
+
+## 13. Remaining work (not yet built)
+
+The interactive intel layer (P1–P4 above) is complete. Two larger, deliberately
+separate efforts remain — each adds a dependency or an external attack surface,
+so they are scoped here rather than rushed:
+
+### 13.1 `cot/proto` — TAK Protocol v1 (protobuf) transport
+
+An **efficiency** upgrade over `cot/xml`, not a correctness one (Reticulum already
+fragments large payloads — §5). Carry the event as TAK Protocol v1 protobuf in
+`FIELD_CUSTOM_DATA` with `FIELD_CUSTOM_TYPE = "cot/proto"`.
+
+- **Why:** ~3–5× smaller than XML, the same compaction the Meshtastic ATAK plugin
+  uses — worth it over a slow LoRa link, and directly interoperable with TAK
+  servers that speak the protobuf stream.
+- **Sketch:** add a `cot/proto` codec path to `foxhole-cot` (a small protobuf
+  dependency, e.g. `prost`, or a hand-rolled encoder for the handful of fields).
+  Producer picks the format (config/per-peer); `net.rs` matches the content tag
+  and routes to the XML or proto decoder. The decoded `CotEvent` and everything
+  above it (ingest, trust, render, store) are unchanged.
+- **Cost:** a protobuf dependency (or hand-rolled varint code) — the first
+  non-trivial dep in the dependency-light `foxhole-cot`. Gate it behind a feature
+  if XML-only builds should stay dependency-free.
+
+### 13.2 TAK gateway (bridge to TAK Server / FreeTAKServer)
+
+A separate **gateway node** that translates LXMF-CoT ↔ a TAK Server stream
+(CoT/TAK Protocol over TCP/TLS), making an off-grid Reticulum mesh a CoT feed
+into/out of standard TAK infrastructure (§8). Explicitly out of the foxhole TUI;
+likely a small standalone binary/service.
+
+- **Reference:** FreeTAKTeam's **Reticulum-Community-Hub** already implements the
+  mesh→TAK direction (its `atak_cot` module uses **PyTAK** to push CoT over
+  `tcp/udp` to a TAK Server, default `tcp://127.0.0.1:8087`, optional TLS). It is
+  *unidirectional* and uses its own on-mesh JSON envelope (`r3akt.*`), **not**
+  foxhole's `cot/xml` — so it is a model to follow, not a drop-in peer.
+- **foxhole's advantage:** foxhole already emits real CoT XML on the wire, so its
+  gateway is mostly "frame the existing event onto a TCP/TLS socket" (no
+  JSON→CoT translation), and can be **bidirectional** (TAK → mesh) more naturally.
+- **Scope:** out of the `net` feature; a dedicated bridge process that subscribes
+  to a foxhole node's LXMF delivery and relays to/from the TAK server. Pin the
+  CoT type mappings (telemetry→`a-f-G-U-C`, GeoChat→`b-t-f`) and a trust/allowlist
+  policy for what crosses the boundary.
+
+### 13.3 Note on the shared `0xFB` namespace
+
+`FIELD_CUSTOM_TYPE` (`0xFB`) is becoming a shared namespace in the
+Reticulum/TAK space — foxhole uses `cot/xml`, Reticulum-Community-Hub uses
+`r3akt.*`. They coexist safely (foxhole ignores non-`cot/*` tags), but anyone
+adding a transport here should keep matching on the exact tag value.
+
 
 ## Appendix A — Reference injector (`cot_inject.py`)
 
