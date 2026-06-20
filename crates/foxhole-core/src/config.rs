@@ -33,7 +33,20 @@ pub struct Config {
     pub lat: Option<f64>,
     /// Operator's own longitude in decimal degrees (east positive), if set.
     pub lon: Option<f64>,
+    /// Auto-apply received CoT intel from *every* peer, bypassing the staging
+    /// review for Unknown/Untrusted sources (Trusted is always auto-applied,
+    /// Compromised always dropped — see the intel trust gating). Off by default
+    /// so unvetted intel is staged for the operator (design note §6).
+    pub intel_auto_apply: bool,
+    /// Default time-to-live (seconds) applied to a received CoT event that
+    /// carries no usable `stale`, so map-flooding stale-less intel still expires
+    /// (§6 / §9). Defaults to [`DEFAULT_INTEL_TTL_SECS`].
+    pub intel_ttl_secs: u64,
 }
+
+/// Fallback validity window for a stale-less CoT event: 6 hours, matching the
+/// reference injector's default `--stale`.
+pub const DEFAULT_INTEL_TTL_SECS: u64 = 6 * 3600;
 
 impl Default for Config {
     fn default() -> Self {
@@ -43,6 +56,8 @@ impl Default for Config {
             propagation_node: None,
             lat: None,
             lon: None,
+            intel_auto_apply: false,
+            intel_ttl_secs: DEFAULT_INTEL_TTL_SECS,
         }
     }
 }
@@ -84,6 +99,16 @@ impl Config {
                 // edit never plots the operator at a bogus spot.
                 "lat" => cfg.lat = parse_coord(value),
                 "lon" => cfg.lon = parse_coord(value),
+                "intel_auto_apply" => cfg.intel_auto_apply = parse_bool(value),
+                // A blank/unparseable value falls back to the default TTL so a
+                // junk edit never disables expiry.
+                "intel_ttl_secs" => {
+                    cfg.intel_ttl_secs = value
+                        .parse()
+                        .ok()
+                        .filter(|&n| n > 0)
+                        .unwrap_or(DEFAULT_INTEL_TTL_SECS)
+                }
                 _ => {}
             }
         }
@@ -104,6 +129,12 @@ impl Config {
         }
         if let Some(lon) = self.lon {
             s.push_str(&format!("lon = {lon}\n"));
+        }
+        if self.intel_auto_apply {
+            s.push_str("intel_auto_apply = true\n");
+        }
+        if self.intel_ttl_secs != DEFAULT_INTEL_TTL_SECS {
+            s.push_str(&format!("intel_ttl_secs = {}\n", self.intel_ttl_secs));
         }
         s
     }
@@ -140,6 +171,15 @@ fn parse_coord(value: &str) -> Option<f64> {
     value.parse::<f64>().ok().filter(|v| v.is_finite())
 }
 
+/// Parse a boolean flag: `true`/`yes`/`on`/`1` (case-insensitive) are true,
+/// anything else false.
+fn parse_bool(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "true" | "yes" | "on" | "1"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -152,6 +192,8 @@ mod tests {
             propagation_node: Some("00112233445566778899aabbccddeeff".to_string()),
             lat: Some(48.8566),
             lon: Some(2.3522),
+            intel_auto_apply: true,
+            intel_ttl_secs: 3600,
         };
         assert_eq!(Config::parse(&cfg.serialize()), cfg);
     }
@@ -169,6 +211,23 @@ mod tests {
         assert!(cfg.lat.is_none() && cfg.lon.is_none());
         assert!(cfg.operator_pos().is_none());
         assert!(Config::parse("lat = 10\n").operator_pos().is_none());
+    }
+
+    #[test]
+    fn parses_intel_knobs_and_falls_back_on_junk() {
+        let cfg = Config::parse("intel_auto_apply = yes\nintel_ttl_secs = 1800\n");
+        assert!(cfg.intel_auto_apply);
+        assert_eq!(cfg.intel_ttl_secs, 1800);
+
+        // Defaults: staging on, the standard TTL.
+        let cfg = Config::default();
+        assert!(!cfg.intel_auto_apply);
+        assert_eq!(cfg.intel_ttl_secs, DEFAULT_INTEL_TTL_SECS);
+
+        // A junk or zero TTL clears back to the default (expiry never disabled).
+        let cfg = Config::parse("intel_auto_apply = nope\nintel_ttl_secs = 0\n");
+        assert!(!cfg.intel_auto_apply);
+        assert_eq!(cfg.intel_ttl_secs, DEFAULT_INTEL_TTL_SECS);
     }
 
     #[test]

@@ -556,6 +556,7 @@ dependencies = [
  "bytes",
  "crossterm",
  "foxhole-core",
+ "foxhole-cot",
  "foxhole-tui",
  "hex",
  "lxmf-core",
@@ -576,8 +577,13 @@ name = "foxhole-core"
 version = "0.1.0"
 dependencies = [
  "crossterm",
+ "foxhole-cot",
  "foxhole-micron",
 ]
+
+[[package]]
+name = "foxhole-cot"
+version = "0.1.0"
 
 [[package]]
 name = "foxhole-micron"

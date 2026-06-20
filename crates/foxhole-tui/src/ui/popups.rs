@@ -7,7 +7,10 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
-use crate::app::{BURN_TOKEN, BurnConfirm, MnemonicView, NewConv, NewConvField};
+use crate::app::{
+    App, AuthorField, AuthorForm, AuthorKind, BURN_TOKEN, BurnConfirm, IntelReview, MnemonicView,
+    NewConv, NewConvField, ShareZone,
+};
 
 use super::style::{base_style, tag_style};
 use super::widgets::{FRAME_BORDER, centered_rect};
@@ -136,6 +139,236 @@ pub(super) fn render_mnemonic_popup(frame: &mut Frame, m: &MnemonicView) {
         Line::raw(""),
         Line::raw("  read aloud to share/verify    [any key] close"),
     ];
+    let para = Paragraph::new(lines)
+        .block(block)
+        .wrap(Wrap { trim: false });
+    frame.render_widget(para, area);
+}
+
+/// The incoming-intel review modal (`i` on the World Map): the CoT events staged
+/// from Unknown/Untrusted peers, which the operator accepts onto the map or
+/// discards. Reads the staged list straight off `App`, highlighting the selected
+/// row (design note §6 — trust gating / staging).
+pub(super) fn render_intel_review_popup(frame: &mut Frame, app: &App, review: &IntelReview) {
+    let area = centered_rect(70, 16, frame.area());
+    frame.render_widget(Clear, area);
+    let wrn = tag_style("WRN");
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_set(FRAME_BORDER)
+        .style(base_style())
+        .border_style(wrn)
+        .title(Span::styled(
+            " INCOMING INTEL ",
+            wrn.add_modifier(Modifier::BOLD),
+        ));
+
+    let mut lines = vec![
+        Line::styled(
+            "  Unvetted CoT from unknown/untrusted peers — review before applying.",
+            base_style(),
+        ),
+        Line::raw(""),
+    ];
+    if app.intel_staged.is_empty() {
+        lines.push(Line::styled("  (nothing staged)", base_style()));
+    } else {
+        for (i, r) in app.intel_staged.iter().enumerate() {
+            let sel = i == review.selected;
+            let lead = if sel { "\u{25b6} " } else { "  " }; // ▶
+            let source = r.source.get(..8).unwrap_or(&r.source);
+            let mut style = Style::default();
+            if sel {
+                style = style.add_modifier(Modifier::REVERSED);
+            }
+            lines.push(Line::styled(
+                format!(
+                    "{lead}{} {:<14.14} {:<10.10} {} {}",
+                    r.affiliation().glyph(),
+                    r.label(),
+                    r.affiliation().label(),
+                    source,
+                    r.event.cot_type,
+                ),
+                style,
+            ));
+        }
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::styled(
+        "  [\u{2191}\u{2193}] select   [a]/[Enter] accept   [x]/[d] discard   [Esc] close",
+        base_style(),
+    ));
+
+    let para = Paragraph::new(lines)
+        .block(block)
+        .wrap(Wrap { trim: false });
+    frame.render_widget(para, area);
+}
+
+/// The share-zone picker (Ctrl+G in Conversations): choose a local hazard zone
+/// to send to the active peer as CoT intel. Reads the zone list off `App`,
+/// highlighting the selected row; the header names the recipient.
+pub(super) fn render_share_zone_popup(frame: &mut Frame, app: &App, share: &ShareZone) {
+    let area = centered_rect(64, 14, frame.area());
+    frame.render_widget(Clear, area);
+    let cfg = tag_style("CFG");
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_set(FRAME_BORDER)
+        .style(base_style())
+        .border_style(cfg)
+        .title(Span::styled(
+            " SHARE INTEL ",
+            cfg.add_modifier(Modifier::BOLD),
+        ));
+
+    let mut lines = vec![
+        Line::styled(
+            format!("  Send a hazard zone to {} as CoT:", share.peer_label),
+            base_style(),
+        ),
+        Line::raw(""),
+    ];
+    if app.zones.is_empty() {
+        lines.push(Line::styled(
+            "  (no local zones — add to zones.conf)",
+            base_style(),
+        ));
+    } else {
+        for (i, z) in app.zones.iter().enumerate() {
+            let sel = i == share.selected;
+            let lead = if sel { "\u{25b6} " } else { "  " }; // ▶
+            let mut style = Style::default();
+            if sel {
+                style = style.add_modifier(Modifier::REVERSED);
+            }
+            lines.push(Line::styled(
+                format!(
+                    "{lead}\u{26a0} {:<18.18} {:>7.2},{:>7.2}  r{:.0}km",
+                    z.label, z.center.lat, z.center.lon, z.radius_km
+                ),
+                style,
+            ));
+        }
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::styled(
+        "  [\u{2191}\u{2193}] select   [Enter]/[s] share   [r] revoke   [Esc] cancel",
+        base_style(),
+    ));
+
+    let para = Paragraph::new(lines)
+        .block(block)
+        .wrap(Wrap { trim: false });
+    frame.render_widget(para, area);
+}
+
+/// The intel authoring form (`a`/`e` on the World Map): place or edit a marker
+/// or zone of any affiliation, committed to the live intel layer. The focused
+/// field is chevroned; text fields carry a synthetic caret.
+pub(super) fn render_author_popup(frame: &mut Frame, form: &AuthorForm) {
+    let area = centered_rect(60, 14, frame.area());
+    frame.render_widget(Clear, area);
+    let cfg = tag_style("CFG");
+    let title = if form.edit_key.is_some() {
+        " EDIT INTEL "
+    } else {
+        " AUTHOR INTEL "
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_set(FRAME_BORDER)
+        .style(base_style())
+        .border_style(cfg)
+        .title(Span::styled(title, cfg.add_modifier(Modifier::BOLD)));
+
+    let caret = Span::styled(" ", Style::default().add_modifier(Modifier::REVERSED));
+    // One row: `▶ Label   value`, with the chevron on the focused field and a
+    // caret after a focused text value.
+    let row = |label: &str, value: String, focused: bool, is_text: bool| -> Line<'static> {
+        let lead = if focused { "\u{25b6} " } else { "  " };
+        let lstyle = if focused {
+            cfg.add_modifier(Modifier::BOLD)
+        } else {
+            base_style()
+        };
+        let mut spans = vec![
+            Span::styled(format!("{lead}{label:<11}"), lstyle),
+            Span::raw(value),
+        ];
+        if focused && is_text {
+            spans.push(caret.clone());
+        }
+        Line::from(spans)
+    };
+
+    let kind_str = match form.kind {
+        AuthorKind::Marker => "Marker",
+        AuthorKind::Zone => "Zone",
+    };
+    let mut lines = vec![
+        row(
+            "Kind",
+            format!("< {kind_str} >"),
+            form.field == AuthorField::Kind,
+            false,
+        ),
+        row(
+            "Affil",
+            format!("< {} >", form.affiliation.label()),
+            form.field == AuthorField::Affiliation,
+            false,
+        ),
+        row(
+            "Callsign",
+            form.callsign.clone(),
+            form.field == AuthorField::Callsign,
+            true,
+        ),
+        row(
+            "Lat",
+            form.lat.clone(),
+            form.field == AuthorField::Lat,
+            true,
+        ),
+        row(
+            "Lon",
+            form.lon.clone(),
+            form.field == AuthorField::Lon,
+            true,
+        ),
+    ];
+    // Radius only matters for a zone; show it dimmed for a marker.
+    if form.kind == AuthorKind::Zone {
+        lines.push(row(
+            "Radius km",
+            form.radius_km.clone(),
+            form.field == AuthorField::Radius,
+            true,
+        ));
+    } else {
+        lines.push(Line::styled(
+            "  Radius km  (zone only)",
+            Style::default().add_modifier(Modifier::DIM),
+        ));
+    }
+    lines.push(row(
+        "Remarks",
+        form.remarks.clone(),
+        form.field == AuthorField::Remarks,
+        true,
+    ));
+    lines.push(Line::raw(""));
+    if let Some(err) = form.error {
+        lines.push(Line::styled(format!("  {err}"), tag_style("ERR")));
+    } else {
+        lines.push(Line::styled(
+            "  [\u{2191}\u{2193}] field  [\u{2190}\u{2192}] toggle  [Enter] commit  [Esc] cancel",
+            base_style(),
+        ));
+    }
+
     let para = Paragraph::new(lines)
         .block(block)
         .wrap(Wrap { trim: false });

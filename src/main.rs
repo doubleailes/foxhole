@@ -19,6 +19,8 @@ pub use foxhole_core::{app, burn, config, notes, zones};
 use foxhole_tui::ui;
 
 #[cfg(feature = "net")]
+mod intel_store;
+#[cfg(feature = "net")]
 mod net;
 #[cfg(feature = "net")]
 mod store;
@@ -135,6 +137,10 @@ async fn run(
     let mut splash_tick = tokio::time::interval(std::time::Duration::from_millis(120));
 
     while !app.should_quit {
+        // Expire received intel past its validity window before drawing. The
+        // render also hides expired entries, but this reclaims them so the map and
+        // INTEL panel can't accrete stale markers (design note §6 periodic sweep).
+        app.sweep_intel(now_secs());
         terminal.draw(|frame| ui::render(frame, app))?;
 
         tokio::select! {
@@ -194,6 +200,18 @@ async fn run(
                                 "[SYS] loaded {n} conversation(s), {skipped} skipped"
                             ));
                         }
+                        // Restore the persisted intel layer (live + staged).
+                        let (live, staged) = intel_store::load(key);
+                        let (nl, ns) = (live.len(), staged.len());
+                        app.intel = live;
+                        app.intel_staged = staged;
+                        // Drop anything that expired while we were down, and don't
+                        // treat the freshly-loaded state as needing a re-save.
+                        app.sweep_intel(now_secs());
+                        app.intel_dirty = false;
+                        if nl > 0 || ns > 0 {
+                            app.push_log(format!("[SYS] loaded {nl} intel, {ns} staged"));
+                        }
                     }
                     apply_net_event(app, ev);
                 }
@@ -220,13 +238,31 @@ async fn run(
                     app.push_log(format!("[SYS] store save failed: {e}"));
                 }
             }
+            // Persist the intel layer when it changed this iteration.
+            if std::mem::take(&mut app.intel_dirty)
+                && let Err(e) = intel_store::save(key, &app.intel, &app.intel_staged)
+            {
+                app.push_log(format!("[SYS] intel store save failed: {e}"));
+            }
         }
-        // Offline build never persists; keep the dirty list from growing.
+        // Offline build never persists; keep the dirty flags from growing.
         #[cfg(not(feature = "net"))]
-        app.dirty.clear();
+        {
+            app.dirty.clear();
+            app.intel_dirty = false;
+        }
     }
 
     Ok(())
+}
+
+/// Current Unix time in whole seconds (UTC); `0` if the clock predates the
+/// epoch. The clock the intel stale-sweep counts against.
+fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 /// Fold a single network event into UI state.
@@ -257,6 +293,7 @@ fn apply_net_event(app: &mut App, ev: NetEvent) {
         NetEvent::Telemetry { source, lat, lon } => {
             app.set_location(&source, app::GeoPos::new(lat, lon));
         }
+        NetEvent::Cot { source, event } => app.apply_cot(source, event),
         NetEvent::Sync(status) => app.sync_status = status,
         NetEvent::MsgStatus { id, status } => app.set_msg_status(id, status),
         NetEvent::Path { hash, hops, iface } => app.record_path(hash, hops, iface),

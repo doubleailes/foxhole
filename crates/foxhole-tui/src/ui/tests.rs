@@ -152,14 +152,130 @@ fn world_map_renders_world_markers_and_roster() {
     assert!(text.contains("POSITIONS"), "roster panel title");
     assert!(text.contains("base"), "operator marker label");
     assert!(text.contains("london"), "peer marker label");
-    // The seeded demo hazard zones overlay: panel title + an AO callsign.
-    assert!(text.contains("HAZARD AOs"), "hazard-zone panel title");
+    // The seeded demo hazard zones overlay in the generalized INTEL panel:
+    // panel title + an AO callsign (local zones are tagged LOCAL).
+    assert!(text.contains("INTEL"), "intel panel title");
     assert!(text.contains("AO ALPHA"), "demo hazard zone listed");
     // The braille world outline drew at least some land cells.
     assert!(
         text.chars().any(|c| ('\u{2801}'..='\u{28ff}').contains(&c)),
         "braille map cells were drawn"
     );
+}
+
+#[test]
+fn world_map_renders_received_intel_and_review_modal() {
+    use crate::app::{Affiliation, CotEvent, IntelReview, Trust};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let mut app = map_app();
+    // A trusted peer's hostile zone is applied (live); an unknown peer's marker is
+    // staged for review. Far-future stale so the sweep/render keeps them.
+    let stale = super_now() + 36_000;
+    app.conversations[0].peer = "aa11bb22cc33".to_string();
+    app.conversations[0].trust = Trust::Trusted;
+    app.apply_cot(
+        "aa11bb22cc33".to_string(),
+        CotEvent::zone("z1", "AO INTEL", 50.0, 10.0, 200_000.0, super_now(), stale),
+    );
+    app.conversations
+        .push(crate::app::Conversation::new("dead00beef11")); // Unknown
+    app.apply_cot(
+        "dead00beef11".to_string(),
+        CotEvent::marker(
+            "m1",
+            Affiliation::Friendly,
+            "SCOUT",
+            49.0,
+            9.0,
+            super_now(),
+            stale,
+        ),
+    );
+
+    let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    term.draw(|f| crate::ui::render(f, &app)).unwrap();
+    let text = term.backend().to_string();
+    // The applied zone shows in the INTEL panel; the staged marker is flagged.
+    assert!(
+        text.contains("AO INTEL"),
+        "received intel listed in INTEL panel"
+    );
+    assert!(text.contains("staged"), "staged-intel review hint shown");
+
+    // Opening the review modal lists the staged event with accept/discard keys.
+    app.intel_review = Some(IntelReview { selected: 0 });
+    term.draw(|f| crate::ui::render(f, &app)).unwrap();
+    let text = term.backend().to_string();
+    assert!(text.contains("INCOMING INTEL"), "review modal title");
+    assert!(text.contains("SCOUT"), "staged event shown in the modal");
+    assert!(text.contains("accept"), "accept/discard legend shown");
+}
+
+#[test]
+fn share_zone_modal_lists_local_zones_for_the_peer() {
+    use crate::app::{ShareZone, Tool};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let mut app = map_app();
+    app.active = Tool::Conversations;
+    app.conversations[0].display_name = Some("kilo".to_string());
+    app.share_zone = Some(ShareZone {
+        selected: 0,
+        peer: app.conversations[0].peer.clone(),
+        peer_label: "kilo".to_string(),
+    });
+
+    let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    term.draw(|f| crate::ui::render(f, &app)).unwrap();
+    let text = term.backend().to_string();
+    assert!(text.contains("SHARE INTEL"), "share modal title");
+    assert!(text.contains("kilo"), "recipient named in the header");
+    assert!(text.contains("AO ALPHA"), "a local zone is listed to share");
+    assert!(text.contains("share"), "share/cancel legend shown");
+}
+
+#[test]
+fn author_form_renders_fields_and_toggles() {
+    use crate::app::{Affiliation, AuthorField, AuthorForm, AuthorKind};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let mut app = map_app();
+    app.author = Some(AuthorForm {
+        kind: AuthorKind::Zone,
+        affiliation: Affiliation::Hostile,
+        callsign: "AO ZULU".to_string(),
+        lat: "50.0".to_string(),
+        lon: "30.0".to_string(),
+        radius_km: "200".to_string(),
+        remarks: String::new(),
+        field: AuthorField::Kind,
+        edit_key: None,
+        error: None,
+    });
+
+    let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    term.draw(|f| crate::ui::render(f, &app)).unwrap();
+    let text = term.backend().to_string();
+    assert!(text.contains("AUTHOR INTEL"), "author modal title");
+    assert!(text.contains("Kind"), "kind field");
+    assert!(text.contains("Zone"), "kind toggle shows Zone");
+    assert!(text.contains("Affil"), "affiliation field");
+    assert!(text.contains("Radius km"), "zone shows the radius field");
+    assert!(text.contains("AO ZULU"), "callsign value shown");
+    assert!(text.contains("commit"), "commit/cancel legend");
+}
+
+/// Wall-clock seconds — the test builds events relative to now so the live filter
+/// and stale sweep keep them.
+fn super_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 #[test]

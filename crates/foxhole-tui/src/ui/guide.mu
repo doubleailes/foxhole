@@ -45,6 +45,7 @@ The UI has two focus tiers, mirroring Nomad Network:
   `!Backspace`!         Delete a character from the draft
   `!Ctrl+T`!            Edit the message title (toggle title / body)
   `!Ctrl+S`!            Send the draft to the selected peer
+  `!Ctrl+G`!            Share / revoke a hazard zone to this peer (CoT intel)
   `!Ctrl+X`!            Purge the compose buffer (discard title + draft)
   `!Ctrl+R`!            Sync now from the propagation node (on demand)
 
@@ -67,6 +68,25 @@ The UI has two focus tiers, mirroring Nomad Network:
   `!r`!                 Reload the current page (when not editing a field)
   `!(type)`!            Edit the focused page input field
   `!Backspace`!         Delete in a field, else go back to the previous page
+
+>>World Map
+
+  `!Arrows`!            Pan the viewport
+  `!+ / -`!             Zoom in / out
+  `!Tab / [ / ]`!       Cycle plotted markers (centres on each)
+  `!Enter / c`!         Centre on the selected marker
+  `!r`!                 Reset the viewport to the whole globe
+  `!i`!                 Review incoming (staged) CoT intel: accept / discard
+  `!a`!                 Author a new marker / zone at the map centre
+  `!e`!                 Edit the selected intel object in place
+  `!x`!                 Remove the selected intel object (local only)
+
+  Received intel is tinted by affiliation (friendly / hostile / neutral /
+  unknown); local `*zones.conf`* hazard areas are tagged LOCAL. Unvetted intel
+  from unknown/untrusted peers is staged until you accept it (`!i`!). Author your
+  own markers/zones with `!a`! (edit `!e`!, remove `!x`! the selected one). Share a
+  local hazard zone to a peer with Ctrl+G in the Conversations tool (and `!r`! in
+  that picker revokes it — peers drop the object from their map).
 
 >>Message status
 

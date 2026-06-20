@@ -49,6 +49,10 @@ pub struct Outbound {
     pub title: String,
     /// The message text.
     pub body: String,
+    /// When `Some`, a CoT `<event>` (XML) to attach as the `cot/xml` intel custom
+    /// field (`FIELD_CUSTOM_TYPE`/`FIELD_CUSTOM_DATA`); `body` carries its
+    /// human-readable summary for graceful degradation. `None` for a plain message.
+    pub cot_xml: Option<String>,
 }
 
 /// Whether a discovered peer is a messaging endpoint or a propagation relay.
@@ -88,6 +92,14 @@ pub enum NetEvent {
     /// is the hex destination hash; `lat`/`lon` are WGS-84 decimal degrees. Fed
     /// to the World Map tool by setting the conversation's location.
     Telemetry { source: String, lat: f64, lon: f64 },
+    /// A peer shared CoT intel (marker/zone) carried in an LXMF custom field
+    /// (`cot/xml`), already decoded by the network task. `source` is the sender's
+    /// hex destination hash — the provenance the trust gating keys on. Applied to
+    /// the received-intel layer via [`crate::app::App::apply_cot`].
+    Cot {
+        source: String,
+        event: foxhole_cot::CotEvent,
+    },
     /// Propagation-sync progress: `Some(status)` shows the pop-up, `None` hides it.
     Sync(Option<String>),
     /// The derived 64-byte conversation-store key, handed up once at startup so

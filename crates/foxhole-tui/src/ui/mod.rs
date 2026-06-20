@@ -47,7 +47,10 @@ use ratatui::widgets::Block;
 use crate::app::App;
 
 use chrome::{render_status, render_tab_strip, render_tool};
-use popups::{render_burn_popup, render_mnemonic_popup, render_new_conv_popup, render_sync_popup};
+use popups::{
+    render_author_popup, render_burn_popup, render_intel_review_popup, render_mnemonic_popup,
+    render_new_conv_popup, render_share_zone_popup, render_sync_popup,
+};
 use style::base_style;
 
 /// Draw the whole interface: the tab strip, the active tool's body (fills all
@@ -84,6 +87,18 @@ pub fn render(frame: &mut Frame, app: &App) {
     // The New Conversation modal is on top of everything when open.
     if let Some(ref nc) = app.new_conv {
         render_new_conv_popup(frame, nc);
+    }
+    // The incoming-intel review modal.
+    if let Some(ref review) = app.intel_review {
+        render_intel_review_popup(frame, app, review);
+    }
+    // The share-zone picker.
+    if let Some(ref share) = app.share_zone {
+        render_share_zone_popup(frame, app, share);
+    }
+    // The intel authoring form.
+    if let Some(ref form) = app.author {
+        render_author_popup(frame, form);
     }
     // The read-only mnemonic phrase modal.
     if let Some(ref m) = app.mnemonic_view {

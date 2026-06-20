@@ -29,8 +29,21 @@ terminal, or networking. Fast to build, fully unit-tested.
   Interfaces / Guide, switched with Ctrl+N/Ctrl+P) and **panes** within a tool
   (PeerList / Thread / Transmit, cycled with Tab). The struct + program-global
   key routing + modals live in `mod.rs`; per-tool behaviour is split into
-  sibling `impl App` blocks (`conversations.rs`, `network.rs`, `browser.rs`) and
-  the cold-boot/scroll machinery into `boot.rs`. Free of I/O and rendering.
+  sibling `impl App` blocks (`conversations.rs`, `network.rs`, `browser.rs`,
+  `map.rs`, `intel.rs`) and the cold-boot/scroll machinery into `boot.rs`. Free
+  of I/O and rendering. `intel.rs` is the **received-intel layer** (P2 of the
+  intel-sharing plan): `apply_cot` folds a decoded `CotEvent` in with trust
+  gating (Trusted→live, Unknown/Untrusted→staged for review, Compromised→dropped),
+  newest-`(source,uid)`-wins upsert, revocation, and a `sweep_intel` stale sweep
+  (default TTL from config). The incoming-intel review modal accepts/discards
+  staged events; `share_zone` (P3) produces a `u-d-c-c` CoT event from a local
+  `zones.conf` zone and enqueues it (with a summary body) for a peer, and
+  `revoke_shared_zone` (P4) sends a `stale==time` revocation (same deterministic
+  uid) so the peer's `apply_cot` revoke path drops it. In-app authoring (P4,
+  `AuthorForm`) places/edits markers & zones of any affiliation into the live
+  intel layer (map keys `a`/`e`), and `remove_selected_intel` (`x`) drops the
+  selected object locally — so a received report can be cleared without a network
+  round-trip.
 - `src/config.rs` — persistent `key = value` settings (no serde/TOML);
   `config_dir()` (overridable via `FOXHOLE_CONFIG_DIR`).
 - `src/storage.rs` — `atomic_write` (write-temp → fsync → rename) for durable state.
@@ -50,6 +63,28 @@ focused element, filling text fields from `values`); `elements(&str)` lists the
 focusable `Element`s (links + text fields) the Browser navigates/submits. Unknown
 tags stripped, never fatal; unit-tested. Standalone (reusable by other NomadNet
 tooling).
+
+### `crates/foxhole-cot` — CoT (Cursor-on-Target) codec (dependency-free)
+
+Pure, `std`-only codec for foxhole's **intel-sharing** wire format: a subset of
+CoT, the open ATAK/TAK situational-awareness event model, carried inside LXMF
+messages (see `docs/intel-sharing.md`). `parse(&str) -> CotEvent` decodes one CoT
+`<event>` (markers + circular hazard zones) **leniently** (unknown
+tags/attributes ignored) and **safely** — a hand-rolled hardened XML subset
+reader rejects DOCTYPE/ENTITY (no XXE) and bounds size/depth/text; `CotEvent::{to_xml,
+summary}` generate the standard event + human one-liner, and `CotEvent::{marker,
+zone}` are the producer side (a `Zone` becomes a `u-d-c-c`). `Affiliation`/`Kind`
+read the `type` for the TUI tint/glyph + map layer. No XML/date crates (ISO-8601
+↔ epoch is in-house); fully unit-tested, standalone. This is **P1** of the
+intel-sharing plan; **P2** (ingest + render) is wired: `net.rs` decodes the
+`cot/xml` custom field → `NetEvent::Cot` → `foxhole-core`'s `app/intel.rs`
+applies it, and `foxhole-tui`'s map renders the affiliation-tinted layer + INTEL
+panel. **P3** (share) is wired too: Ctrl+G in Conversations shares a local zone
+as a `cot/xml` LXMF message (`net.rs` `build_message` attaches the custom
+fields). **P4** is under way: received intel now persists across restarts
+(`src/intel_store.rs`, encrypted); the protobuf transport (`cot/proto`) and a TAK
+gateway remain. `tools/cot_inject.py` is the reference injector (Appendix A) for
+live ingest + decoder fixtures.
 
 ### `crates/foxhole-tui` — rendering (ratatui), pure `&App` → frame
 
@@ -86,11 +121,18 @@ readiness events via `mark_boot`. `cfg(test)` and `FOXHOLE_NO_SPLASH` start in
 - `src/store.rs` — *(`net` feature)* encrypted, atomic, per-conversation history
   store: `FXC1` blob → `rns_crypto::token` (AES-256-CBC + HMAC) → `atomic_write`,
   key HKDF-derived from the identity. Corruption/foreign files are skipped on load.
+- `src/intel_store.rs` — *(`net` feature)* the same encrypted/atomic recipe for
+  the received-intel layer (P4 durability): one `FXI1` blob holding the live +
+  staged `IntelRecord`s (reusing the identity store key), loaded at boot and
+  re-saved when `app.intel_dirty` is set. `Option` timestamps are preserved so a
+  stale-less event reloads stale-less; a corrupt/foreign file loads empty.
 - `src/net.rs` — *(in progress, behind the `net` feature)* live LXMF/Reticulum
   stack: identity, `ReticulumHandle`, `LxmRouter`, announce/delivery tasks. Also
   Nomad Network node discovery (recent-announce-cache poll for
   `nomadnetwork.node`) and page fetching via `LinkClient::query` (spawned off the
-  select loop), reported as `NetEvent::{NomadNode,Page}`.
+  select loop), reported as `NetEvent::{NomadNode,Page}`. Inbound CoT intel is
+  decoded from the `FIELD_CUSTOM_TYPE=cot/xml` / `FIELD_CUSTOM_DATA` fields and
+  reported as `NetEvent::Cot` (malformed payloads logged + dropped, never fatal).
 
 ## Networking (the `net` feature)
 

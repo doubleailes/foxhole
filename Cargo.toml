@@ -5,7 +5,7 @@ edition = "2024"
 description = "FoxHole — off-grid, keyboard-only, monochrome LXMF comms terminal"
 
 [workspace]
-members = ["crates/foxhole-micron", "crates/foxhole-core", "crates/foxhole-tui"]
+members = ["crates/foxhole-micron", "crates/foxhole-cot", "crates/foxhole-core", "crates/foxhole-tui"]
 
 [dependencies]
 # --- FoxHole's own layers (workspace member crates) ---------------------------
@@ -13,6 +13,9 @@ members = ["crates/foxhole-micron", "crates/foxhole-core", "crates/foxhole-tui"]
 # The binary wires them to the runtime and, under `net`, the live protocol stack.
 foxhole-core = { path = "crates/foxhole-core" }
 foxhole-tui = { path = "crates/foxhole-tui" }
+# CoT codec for the intel-sharing layer; `net.rs` parses inbound `cot/xml`
+# payloads with it. Dependency-free, so it costs nothing in the offline build.
+foxhole-cot = { path = "crates/foxhole-cot" }
 
 # TUI framework. The crossterm backend is enabled by default.
 ratatui = "0.30"

@@ -7,7 +7,8 @@
 //! arriving over LXMF telemetry (stored on each [`Conversation`](super::Conversation)).
 
 use super::*;
-use crate::domain::{GeoPos, wrap_lon};
+use crate::domain::{GeoPos, now_secs, wrap_lon};
+use foxhole_cot::Affiliation;
 
 /// What a plotted marker represents — drives its glyph and colour in the UI.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -16,6 +17,8 @@ pub enum MarkerKind {
     Operator,
     /// A peer whose position we learned over LXMF telemetry.
     Peer,
+    /// A received CoT intel point marker, tinted by its affiliation.
+    Intel(Affiliation),
 }
 
 /// A single thing plotted on the world map: a label, where it is, and what it is.
@@ -28,6 +31,10 @@ pub struct MapMarker {
     pub pos: GeoPos,
     /// What it is (drives glyph/colour).
     pub kind: MarkerKind,
+    /// For an intel marker, its `(source, uid)` key — lets map actions (edit /
+    /// local remove) resolve the selected marker back to its [`IntelRecord`].
+    /// `None` for the operator/peer markers.
+    pub intel_key: Option<(String, String)>,
 }
 
 /// The map viewport: a centre point plus how many degrees of longitude span its
@@ -151,6 +158,7 @@ impl App {
                 label: self.config.display_name.clone(),
                 pos,
                 kind: MarkerKind::Operator,
+                intel_key: None,
             });
         }
         for c in &self.conversations {
@@ -159,8 +167,20 @@ impl App {
                     label: c.label(),
                     pos,
                     kind: MarkerKind::Peer,
+                    intel_key: None,
                 });
             }
+        }
+        // Live (non-expired) received/authored intel — markers and zones alike are
+        // selectable (a zone's centre is its handle; its ring is drawn separately
+        // by [`App::intel_zones`]). Selection cycling tours these with the peers.
+        for r in self.live_intel_at(now_secs() as i64) {
+            out.push(MapMarker {
+                label: r.label(),
+                pos: r.pos(),
+                kind: MarkerKind::Intel(r.affiliation()),
+                intel_key: Some((r.source.clone(), r.event.uid.clone())),
+            });
         }
         out
     }
@@ -182,6 +202,14 @@ impl App {
                 self.map = MapView::default();
                 self.map_selected = 0;
             }
+            // Open the incoming-intel review list (staged CoT from unvetted peers).
+            KeyCode::Char('i') => self.open_intel_review(),
+            // Author a new intel object (marker/zone) at the map centre.
+            KeyCode::Char('a') => self.open_author(false),
+            // Edit the selected intel object in place.
+            KeyCode::Char('e') => self.open_author(true),
+            // Remove the selected intel object from the local map.
+            KeyCode::Char('x') | KeyCode::Delete => self.remove_selected_intel(),
             _ => {}
         }
     }
