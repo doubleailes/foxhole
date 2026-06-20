@@ -1,8 +1,8 @@
-//! War-zone / area-of-operations overlay for the World Map.
+//! Hazard-area / area-of-operations overlay for the World Map: the [`Zone`]
+//! model plus the parser and demo set that feed it.
 //!
-//! A small, hand-editable `key = value`-style file under [`config_dir`] (no
-//! serde/TOML, matching [`crate::config`] and [`crate::notes`]), one hazard area
-//! per line:
+//! Zones come from a small, hand-editable `key = value`-style file under the
+//! config dir (no serde/TOML), one hazard area per line:
 //!
 //! ```text
 //! # label = lat, lon, radius_km
@@ -18,7 +18,42 @@
 //! This module stays free of I/O: [`parse`] and [`demo`] are pure functions, and
 //! the actual `zones.conf` read lives in the root binary (see `src/main.rs`).
 
-use crate::domain::Zone;
+use crate::geo::GeoPos;
+
+/// A hazard area overlaid on the World Map — a named region with a danger
+/// radius, drawn as a red circle. Sourced from the operator's hand-editable
+/// `zones.conf` (situational intel) or the offline demo set; e.g. an active
+/// conflict "area of operations" the operator wants kept in view.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Zone {
+    /// Short label (e.g. `AO ALPHA`), shown on the map and in the roster.
+    pub label: String,
+    /// Centre of the hazard area.
+    pub center: GeoPos,
+    /// Danger radius in kilometres.
+    pub radius_km: f64,
+}
+
+impl Zone {
+    /// A zone with its centre normalised and a non-negative radius.
+    pub fn new(label: impl Into<String>, lat: f64, lon: f64, radius_km: f64) -> Self {
+        Self {
+            label: label.into(),
+            center: GeoPos::new(lat, lon),
+            radius_km: if radius_km.is_finite() {
+                radius_km.max(0.0)
+            } else {
+                0.0
+            },
+        }
+    }
+
+    /// Radius in latitude degrees (~111 km per degree) for the canvas circle,
+    /// floored so a small zone still renders as a visible ring.
+    pub fn radius_deg(&self) -> f64 {
+        (self.radius_km / 111.0).max(0.3)
+    }
+}
 
 /// Parse the `label = lat, lon, radius_km` body. Rows missing the `=`, lacking
 /// three numeric fields, or carrying non-finite numbers are skipped.

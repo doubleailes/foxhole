@@ -8,6 +8,9 @@ description = "FoxHole terminal UI: pure &App -> frame rendering and cold-boot s
 ratatui = "0.30"
 foxhole-core = { path = "../foxhole-core" }
 foxhole-micron = { path = "../foxhole-micron" }
+# World Map domain types the map renderer draws (viewport, markers, zones,
+# cities). The App state it reads still comes from foxhole-core.
+foxhole-map = { path = "../foxhole-map" }
 
 [features]
 # Cold-boot splash renderer; pulls the matching state in core.

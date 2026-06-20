@@ -279,6 +279,32 @@ fn super_now() -> i64 {
 }
 
 #[test]
+fn world_map_draws_cities_and_g_hides_them() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    // Zoom in past the globe view (which is dots-only) so the megacity anchors
+    // label. The default viewport is centred on the origin, where Lagos is an
+    // in-view anchor clear of the operator/peer markers.
+    let mut app = map_app();
+    app.map.span = 120.0;
+    let mut term = Terminal::new(TestBackend::new(110, 30)).unwrap();
+    term.draw(|f| crate::ui::render(f, &app)).unwrap();
+    assert!(
+        term.backend().to_string().contains("Lagos"),
+        "a megacity anchor is labelled once zoomed in"
+    );
+
+    // Toggling the layer off (g) removes them.
+    app.map_cities = false;
+    term.draw(|f| crate::ui::render(f, &app)).unwrap();
+    assert!(
+        !term.backend().to_string().contains("Lagos"),
+        "the cities layer is hidden when toggled off"
+    );
+}
+
+#[test]
 fn world_map_empty_without_a_fix() {
     use crate::app::{App, AppState, Tool};
     use ratatui::Terminal;

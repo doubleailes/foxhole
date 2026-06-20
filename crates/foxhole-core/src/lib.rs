@@ -9,6 +9,12 @@
 // the Browser state (which store and parse micron page elements).
 pub use foxhole_micron as micron;
 
+// The World Map feature's logic and data live in their own dependency-free crate
+// (`foxhole-map`). Re-exported here so `crate::cities`/`crate::zones` keep
+// resolving internally and `foxhole_core::{cities,zones}` stays a stable public
+// path for the binary; the geo/view types are re-exported via `domain`/`app`.
+pub use foxhole_map::{cities, zones};
+
 pub mod app;
 pub mod burn;
 pub mod config;
@@ -16,4 +22,3 @@ pub mod domain;
 pub mod mnemonic;
 pub mod notes;
 pub mod storage;
-pub mod zones;

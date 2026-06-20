@@ -13,6 +13,9 @@ foxhole-micron = { path = "../foxhole-micron" }
 # The CoT codec for the intel-sharing layer (received-intel model + producers).
 # Dependency-free, so the core stays light.
 foxhole-cot = { path = "../foxhole-cot" }
+# The World Map domain (geo, viewport, markers, zones, cities). Pure logic/data;
+# the App here owns the field state and routes keys to its methods.
+foxhole-map = { path = "../foxhole-map" }
 
 [features]
 # Cold-boot splash state (App::boot, BootStep). Pure flag — no extra deps.

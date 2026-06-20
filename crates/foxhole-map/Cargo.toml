@@ -1,0 +1,13 @@
+[package]
+name = "foxhole-map"
+version = "0.1.0"
+edition = "2024"
+description = "FoxHole world-map domain: geo primitives, viewport, markers, hazard zones, and the embedded city gazetteer"
+
+[dependencies]
+# The CoT codec, for `Affiliation` — a received-intel marker is tinted by it
+# (`MarkerKind::Intel`). foxhole-cot is itself dependency-free (std only), so the
+# map crate stays light: this is its *only* dependency. Rendering (ratatui) lives
+# in foxhole-tui; the App integration (key routing, marker building from peer and
+# intel state) in foxhole-core.
+foxhole-cot = { path = "../foxhole-cot" }
