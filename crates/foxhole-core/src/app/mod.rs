@@ -48,6 +48,7 @@ pub use boot::{Boot, BootStep};
 pub use intel::{
     AuthorField, AuthorForm, AuthorKind, IntelRecord, IntelReview, IntelZone, ShareZone,
 };
+pub use map::GotoMgrs;
 
 // Re-exported so the renderer (and the binary) reach the CoT model through
 // `crate::app::…` without each crate depending on `foxhole-cot` directly.
@@ -314,6 +315,9 @@ pub struct App {
     pub share_zone: Option<ShareZone>,
     /// When `Some`, the intel authoring form is open (captures input).
     pub author: Option<AuthorForm>,
+    /// When `Some`, the "go to MGRS" modal is open (captures input) — reframes
+    /// the World Map onto a typed grid reference.
+    pub goto_mgrs: Option<GotoMgrs>,
     /// Set when the live/staged intel layer changed this iteration; `main` drains
     /// it and persists the encrypted intel store. Keeps `App` free of I/O.
     pub intel_dirty: bool,
@@ -420,6 +424,7 @@ impl App {
             intel_review: None,
             share_zone: None,
             author: None,
+            goto_mgrs: None,
             intel_dirty: false,
             path_probes: HashMap::new(),
             interfaces: Vec::new(),
@@ -514,6 +519,12 @@ impl App {
         // The intel authoring form, when open, captures all input.
         if self.author.is_some() {
             self.handle_author_key(key);
+            return;
+        }
+
+        // The "go to MGRS" modal, when open, captures all input.
+        if self.goto_mgrs.is_some() {
+            self.handle_goto_mgrs_key(key);
             return;
         }
 

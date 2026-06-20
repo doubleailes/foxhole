@@ -10,6 +10,16 @@
 use super::*;
 use crate::domain::now_secs;
 
+/// Modal state for "go to MGRS" (`/` on the World Map): the operator types a
+/// grid reference and the map reframes onto it. `error` flags an unparseable
+/// entry so the modal can keep itself open with a hint.
+pub struct GotoMgrs {
+    /// The grid reference being typed (upper-cased as entered).
+    pub input: String,
+    /// Set when the last commit couldn't parse the reference.
+    pub error: bool,
+}
+
 impl App {
     /// The markers to plot, in selection order: the operator's own fix first (if
     /// configured), then every peer carrying a telemetry location, in roster
@@ -63,6 +73,8 @@ impl App {
             KeyCode::BackTab | KeyCode::Char('[') => self.select_map_marker(-1),
             KeyCode::Enter | KeyCode::Char('c') => self.center_selected_marker(),
             KeyCode::Char('g') => self.map_cities = !self.map_cities,
+            // Reframe the map onto a typed MGRS grid reference.
+            KeyCode::Char('/') => self.open_goto_mgrs(),
             KeyCode::Char('r') => {
                 self.map = MapView::default();
                 self.map_selected = 0;
@@ -99,6 +111,60 @@ impl App {
         let markers = self.map_markers();
         if let Some(m) = markers.get(self.map_selected) {
             self.map.frame_on(m.pos);
+        }
+    }
+
+    /// Open the "go to MGRS" modal, prefilled with the current viewport centre as
+    /// a grid reference so the operator can nudge to a nearby square.
+    pub(super) fn open_goto_mgrs(&mut self) {
+        let input = foxhole_map::mgrs::format(self.map.center, foxhole_map::mgrs::DEFAULT_DIGITS)
+            .unwrap_or_default();
+        self.goto_mgrs = Some(GotoMgrs {
+            input,
+            error: false,
+        });
+    }
+
+    /// Key handling while the goto-MGRS modal is open: type the reference, Enter
+    /// reframes, Backspace edits, Esc cancels.
+    pub(super) fn handle_goto_mgrs_key(&mut self, key: KeyEvent) {
+        let Some(g) = self.goto_mgrs.as_mut() else {
+            return;
+        };
+        match key.code {
+            KeyCode::Esc => self.goto_mgrs = None,
+            KeyCode::Enter => self.commit_goto_mgrs(),
+            KeyCode::Backspace => {
+                g.error = false;
+                g.input.pop();
+            }
+            // Grid references are upper-case; fold input so lower-case typing works.
+            KeyCode::Char(c) => {
+                g.error = false;
+                g.input.push(c.to_ascii_uppercase());
+            }
+            _ => {}
+        }
+    }
+
+    /// Parse the typed reference and frame the map on it, or flag an error and
+    /// keep the modal open.
+    fn commit_goto_mgrs(&mut self) {
+        let Some(g) = self.goto_mgrs.as_ref() else {
+            return;
+        };
+        match foxhole_map::mgrs::parse(&g.input) {
+            Some(pos) => {
+                let label = g.input.clone();
+                self.map.frame_on(pos);
+                self.goto_mgrs = None;
+                self.push_log(format!("[SYS] map: framed on {label}"));
+            }
+            None => {
+                if let Some(g) = self.goto_mgrs.as_mut() {
+                    g.error = true;
+                }
+            }
         }
     }
 }
@@ -235,6 +301,34 @@ mod tests {
         app.map_cities = false;
         app.handle_map_key(false, KeyEvent::from(KeyCode::Char('r')));
         assert!(!app.map_cities, "reset only touches the viewport");
+    }
+
+    #[test]
+    fn goto_mgrs_reframes_on_the_grid_reference() {
+        let mut app = App::new();
+        // Opening prefills the modal with the current centre as a reference.
+        app.open_goto_mgrs();
+        assert!(app.goto_mgrs.is_some());
+        assert!(!app.goto_mgrs.as_ref().unwrap().input.is_empty());
+
+        // Type a known reference (origin of zone 31N) and commit: the view jumps.
+        app.goto_mgrs.as_mut().unwrap().input = "31NAA6602100000".to_string();
+        app.handle_goto_mgrs_key(KeyEvent::from(KeyCode::Enter));
+        assert!(app.goto_mgrs.is_none(), "modal closes on a good reference");
+        assert!(app.map.center.lat.abs() < 0.01 && app.map.center.lon.abs() < 0.01);
+
+        // A bad reference keeps the modal open with an error flagged.
+        app.open_goto_mgrs();
+        app.goto_mgrs.as_mut().unwrap().input = "not-a-grid".to_string();
+        app.handle_goto_mgrs_key(KeyEvent::from(KeyCode::Enter));
+        assert!(
+            app.goto_mgrs.as_ref().unwrap().error,
+            "bad input flags error"
+        );
+
+        // Esc cancels without moving the view.
+        app.handle_goto_mgrs_key(KeyEvent::from(KeyCode::Esc));
+        assert!(app.goto_mgrs.is_none());
     }
 
     #[test]

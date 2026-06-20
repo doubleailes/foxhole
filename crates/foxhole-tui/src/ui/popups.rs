@@ -8,8 +8,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
 use crate::app::{
-    App, AuthorField, AuthorForm, AuthorKind, BURN_TOKEN, BurnConfirm, IntelReview, MnemonicView,
-    NewConv, NewConvField, ShareZone,
+    App, AuthorField, AuthorForm, AuthorKind, BURN_TOKEN, BurnConfirm, GotoMgrs, IntelReview,
+    MnemonicView, NewConv, NewConvField, ShareZone,
 };
 
 use super::style::{base_style, tag_style};
@@ -268,7 +268,7 @@ pub(super) fn render_share_zone_popup(frame: &mut Frame, app: &App, share: &Shar
 /// or zone of any affiliation, committed to the live intel layer. The focused
 /// field is chevroned; text fields carry a synthetic caret.
 pub(super) fn render_author_popup(frame: &mut Frame, form: &AuthorForm) {
-    let area = centered_rect(60, 14, frame.area());
+    let area = centered_rect(60, 15, frame.area());
     frame.render_widget(Clear, area);
     let cfg = tag_style("CFG");
     let title = if form.edit_key.is_some() {
@@ -338,6 +338,13 @@ pub(super) fn render_author_popup(frame: &mut Frame, form: &AuthorForm) {
             form.field == AuthorField::Lon,
             true,
         ),
+        // MGRS mirrors Lat/Lon — edit either and the other follows.
+        row(
+            "MGRS",
+            form.mgrs.clone(),
+            form.field == AuthorField::Mgrs,
+            true,
+        ),
     ];
     // Radius only matters for a zone; show it dimmed for a marker.
     if form.kind == AuthorKind::Zone {
@@ -368,6 +375,59 @@ pub(super) fn render_author_popup(frame: &mut Frame, form: &AuthorForm) {
             base_style(),
         ));
     }
+
+    let para = Paragraph::new(lines)
+        .block(block)
+        .wrap(Wrap { trim: false });
+    frame.render_widget(para, area);
+}
+
+/// The "go to MGRS" modal (`/` on the World Map): the operator types a grid
+/// reference and the map reframes onto it. Shows the live decode of what's typed
+/// so a designation can be eyeballed before committing, and flags a bad entry.
+pub(super) fn render_goto_mgrs_popup(frame: &mut Frame, goto: &GotoMgrs) {
+    let area = centered_rect(56, 9, frame.area());
+    frame.render_widget(Clear, area);
+    let cfg = tag_style("CFG");
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_set(FRAME_BORDER)
+        .style(base_style())
+        .border_style(cfg)
+        .title(Span::styled(
+            " GO TO MGRS ",
+            cfg.add_modifier(Modifier::BOLD),
+        ));
+
+    let caret = Span::styled(" ", Style::default().add_modifier(Modifier::REVERSED));
+    let mut lines = vec![
+        Line::styled("  Reframe the map onto a grid reference:", base_style()),
+        Line::raw(""),
+        Line::from(vec![
+            Span::raw("  MGRS:  "),
+            Span::raw(goto.input.clone()),
+            caret,
+        ]),
+        Line::raw(""),
+    ];
+    // Live feedback: the decoded lat/lon, or why it won't parse.
+    if goto.error {
+        lines.push(Line::styled(
+            "  unrecognised grid reference (e.g. 31U DQ 48251 11932)",
+            tag_style("ERR"),
+        ));
+    } else if let Some(p) = foxhole_map::mgrs::parse(&goto.input) {
+        lines.push(Line::styled(
+            format!("  \u{2192} {:.5}, {:.5}", p.lat, p.lon),
+            base_style(),
+        ));
+    } else {
+        lines.push(Line::styled(
+            "  zone + band + square + digits, e.g. 31U DQ 48251 11932",
+            base_style(),
+        ));
+    }
+    lines.push(Line::styled("  [Enter] go   [Esc] cancel", base_style()));
 
     let para = Paragraph::new(lines)
         .block(block)

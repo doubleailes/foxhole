@@ -17,6 +17,7 @@
 
 pub mod cities;
 pub mod geo;
+pub mod mgrs;
 pub mod view;
 pub mod zones;
 

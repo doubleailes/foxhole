@@ -48,8 +48,8 @@ use crate::app::App;
 
 use chrome::{render_status, render_tab_strip, render_tool};
 use popups::{
-    render_author_popup, render_burn_popup, render_intel_review_popup, render_mnemonic_popup,
-    render_new_conv_popup, render_share_zone_popup, render_sync_popup,
+    render_author_popup, render_burn_popup, render_goto_mgrs_popup, render_intel_review_popup,
+    render_mnemonic_popup, render_new_conv_popup, render_share_zone_popup, render_sync_popup,
 };
 use style::base_style;
 
@@ -99,6 +99,10 @@ pub fn render(frame: &mut Frame, app: &App) {
     // The intel authoring form.
     if let Some(ref form) = app.author {
         render_author_popup(frame, form);
+    }
+    // The "go to MGRS" reframe modal.
+    if let Some(ref goto) = app.goto_mgrs {
+        render_goto_mgrs_popup(frame, goto);
     }
     // The read-only mnemonic phrase modal.
     if let Some(ref m) = app.mnemonic_view {

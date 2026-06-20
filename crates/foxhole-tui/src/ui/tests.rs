@@ -250,6 +250,7 @@ fn author_form_renders_fields_and_toggles() {
         callsign: "AO ZULU".to_string(),
         lat: "50.0".to_string(),
         lon: "30.0".to_string(),
+        mgrs: "36UUA0000000000".to_string(),
         radius_km: "200".to_string(),
         remarks: String::new(),
         field: AuthorField::Kind,
