@@ -3,6 +3,7 @@ name = "foxhole-tui"
 version = "0.1.0"
 edition = "2024"
 description = "FoxHole terminal UI: pure &App -> frame rendering and cold-boot splash"
+license = "AGPL-3.0-or-later"
 
 [dependencies]
 ratatui = "0.30"
