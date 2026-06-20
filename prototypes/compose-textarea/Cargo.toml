@@ -1,0 +1,15 @@
+[package]
+name = "compose-textarea"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Evaluation prototype: foxhole's TRANSMIT pane backed by tui-textarea"
+
+# NOTE: pinned one minor behind the main workspace. tui-textarea 0.7 (latest)
+# only supports ratatui ^0.29 / crossterm ^0.28, whereas foxhole runs ratatui
+# 0.30 / crossterm 0.29. Keeping this crate outside the workspace lets it
+# resolve the older stack without disturbing the real build.
+[dependencies]
+ratatui = "0.29"
+crossterm = "0.28"
+tui-textarea = "0.7"

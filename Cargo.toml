@@ -6,6 +6,10 @@ description = "FoxHole — off-grid, keyboard-only, monochrome LXMF comms termin
 
 [workspace]
 members = ["crates/foxhole-micron", "crates/foxhole-core", "crates/foxhole-tui"]
+# Throwaway evaluation crate. Excluded from the workspace because `tui-textarea`
+# still pins ratatui 0.29 / crossterm 0.28 (the workspace is on 0.30 / 0.29), so
+# it must resolve its own dependency graph. See prototypes/compose-textarea.
+exclude = ["prototypes/compose-textarea"]
 
 [dependencies]
 # --- FoxHole's own layers (workspace member crates) ---------------------------
