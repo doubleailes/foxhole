@@ -3,6 +3,7 @@ name = "foxhole-micron"
 version = "0.1.0"
 edition = "2024"
 description = "Nomad Network micron page markup renderer (ratatui), used by FoxHole"
+license = "AGPL-3.0-or-later"
 
 [dependencies]
 # Renders micron markup into styled ratatui lines/spans.

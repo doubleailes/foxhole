@@ -3,6 +3,7 @@ name = "foxhole"
 version = "0.1.0"
 edition = "2024"
 description = "FoxHole — off-grid, keyboard-only, monochrome LXMF comms terminal"
+license = "AGPL-3.0-or-later"
 
 [workspace]
 members = ["crates/foxhole-micron", "crates/foxhole-cot", "crates/foxhole-map", "crates/foxhole-core", "crates/foxhole-tui"]

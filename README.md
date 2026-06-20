@@ -106,9 +106,11 @@ cargo run                # boot the operator console (seeded demo contacts)
 cargo build --features net
 cargo run   --features net
 ```
-The `net` compartment links the **Reticulum** + **LXMF** stack as path
-dependencies from sibling checkouts `../rsReticulum` and `../rsLXMF` — both
-must sit adjacent to this directory. (Both are AGPL-3.0; see Section ██.)
+The `net` compartment links the **Reticulum** + **LXMF** stack as **git
+dependencies pinned by commit** (`rns-*` from `rsReticulum`, `lxmf-core` from
+`rsLXMF`); `cargo` fetches them on first `--features net` build — no sibling
+checkouts required. Bump the stack by editing the `rev`s in `Cargo.toml`. (Both
+upstreams are AGPL-3.0-or-later; see Section 7.)
 
 | Directive            | Command                                          |
 |----------------------|--------------------------------------------------|
@@ -213,10 +215,10 @@ the full annex, classification ████████████, not include
 
 ## 7. PROVENANCE & LICENSE
 
-Linking the `net` compartment incorporates **AGPL-3.0-or-later** components
-(the `rns-*` and `lxmf-core` crates). A distributed binary is therefore a
-combined AGPL work — including the network-use clause. Govern ████████
-accordingly.
+FoxHole is licensed **AGPL-3.0-or-later** — see [`LICENSE`](LICENSE). Linking the
+`net` compartment additionally incorporates **AGPL-3.0-or-later** components (the
+`rns-*` and `lxmf-core` crates), so a distributed binary is a combined AGPL work —
+including the network-use clause (§13). Govern ████████ accordingly.
 
 Architecture, build matrix, and the mesh binding are documented for cleared
 maintainers in `CLAUDE.md` and `docs/lxmf-integration.md`.
