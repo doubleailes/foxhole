@@ -98,11 +98,17 @@ isolation. `geo` (`GeoPos` + `wrap_lon`), `view` (the `MapView` pan/zoom
 viewport — all geometry/limits/antimeridian projection behind intent-named
 methods like `pan_east`/`zoom_in`/`frame_on` — plus `MapMarker`/`MarkerKind`,
 including the intel-tinted `MarkerKind::Intel`), `zones` (`Zone` + the
-`parse`/`demo` hazard-area overlay), and `cities` (the embedded `CITIES`
-capitals/major-cities gazetteer with zoom-staged `label_span`s). Knows nothing of
-`App`, the terminal, or networking: `foxhole-core` owns the field state, routes
-keys to `MapView`'s methods, and builds the marker list from peer telemetry and
-the intel layer; `foxhole-tui` draws it.
+`parse`/`demo` hazard-area overlay), `cities` (the embedded `CITIES`
+capitals/major-cities gazetteer with zoom-staged `label_span`s), and `mgrs` (a
+dependency-free Military Grid Reference System codec — `format(GeoPos, digits)` ↔
+`parse(&str) -> GeoPos`, via WGS-84 UTM, so the operator can reframe the map onto
+or designate a position by a grid reference). Knows nothing of `App`, the
+terminal, or networking: `foxhole-core` owns the field state, routes keys to
+`MapView`'s methods, and builds the marker list from peer telemetry and the intel
+layer; `foxhole-tui` draws it. The Map binds MGRS in two ways: a "go to MGRS"
+modal (`/`, `app/map.rs`'s `GotoMgrs`) reframes the view on a typed reference, and
+the intel author form carries an MGRS field two-way synced with its lat/lon; the
+canvas HUD reads the viewport centre out as MGRS.
 
 ### `crates/foxhole-tui` — rendering (ratatui), pure `&App` → frame
 

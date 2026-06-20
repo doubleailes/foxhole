@@ -59,6 +59,23 @@ fn fmt_ttl(secs: i64) -> String {
     }
 }
 
+/// Space out a packed MGRS reference for readability: `31UDQ4825111932` →
+/// `31U DQ 48251 11932` (zone+band, 100 km square, easting, northing). Returns
+/// the input unchanged if it doesn't look like a grid reference.
+fn group_mgrs(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i == 0 || i + 3 > bytes.len() {
+        return s.to_string();
+    }
+    let (zone, band, square, rest) = (&s[..i], &s[i..i + 1], &s[i + 1..i + 3], &s[i + 3..]);
+    let half = rest.len() / 2;
+    format!("{zone}{band} {square} {} {}", &rest[..half], &rest[half..])
+}
+
 /// Current Unix time in whole seconds (UTC) — the clock the TTL readouts count
 /// down against. `0` if the system clock predates the epoch.
 fn now_secs() -> i64 {
@@ -98,7 +115,7 @@ pub(super) fn render_map(frame: &mut Frame, app: &App, area: Rect) {
     // Footer: the key legend. Keys are named plainly so none of the separators
     // read as bindings (the bracket keys cycle markers). `i` reviews staged intel.
     let legend = Line::styled(
-        "[\u{2190}\u{2191}\u{2193}\u{2192}] pan  [+/-] zoom  [Tab] cycle  [c] center  [g] cities  [a] author  [e] edit  [x] remove  [i] intel  [r] reset",
+        "[\u{2190}\u{2191}\u{2193}\u{2192}] pan  [+/-] zoom  [Tab] cycle  [c] center  [/] goto MGRS  [g] cities  [a] author  [e] edit  [x] remove  [i] intel  [r] reset",
         ts_style(),
     );
     frame.render_widget(Paragraph::new(legend).style(base_style()), rows[1]);
@@ -130,14 +147,13 @@ fn render_canvas(frame: &mut Frame, app: &App, area: Rect) {
         .filter_map(|m| Some((view.project_lon(m.pos.lon)?, m.pos.lat)))
         .collect();
 
-    // HUD readout: viewport centre + zoom span, in the top-right corner.
-    let hud = Span::styled(
-        format!(
-            " {:.1},{:.1} z{:.0}\u{00b0} ",
-            view.center.lat, view.center.lon, view.span
-        ),
-        ts_style(),
-    );
+    // HUD readout: the viewport centre as an MGRS grid reference (the headline
+    // for designating/reading off a position) plus the zoom span, top-right.
+    // Falls back to lat/lon at polar latitudes outside MGRS's UTM band.
+    let center = foxhole_map::mgrs::format(view.center, foxhole_map::mgrs::DEFAULT_DIGITS)
+        .map(|s| group_mgrs(&s))
+        .unwrap_or_else(|| format!("{:.1},{:.1}", view.center.lat, view.center.lon));
+    let hud = Span::styled(format!(" {center}  z{:.0}\u{00b0} ", view.span), ts_style());
 
     let canvas = Canvas::default()
         .block(tactical_block("WORLD MAP", Some(hud), true))

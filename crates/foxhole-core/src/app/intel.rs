@@ -143,18 +143,22 @@ pub enum AuthorField {
     Callsign,
     Lat,
     Lon,
+    /// The position as an MGRS grid reference — two-way synced with Lat/Lon so the
+    /// operator can designate a point either way.
+    Mgrs,
     Radius,
     Remarks,
 }
 
 impl AuthorField {
     /// Field order for Up/Down / Tab cycling.
-    const ORDER: [AuthorField; 7] = [
+    const ORDER: [AuthorField; 8] = [
         AuthorField::Kind,
         AuthorField::Affiliation,
         AuthorField::Callsign,
         AuthorField::Lat,
         AuthorField::Lon,
+        AuthorField::Mgrs,
         AuthorField::Radius,
         AuthorField::Remarks,
     ];
@@ -175,6 +179,8 @@ pub struct AuthorForm {
     pub callsign: String,
     pub lat: String,
     pub lon: String,
+    /// MGRS mirror of `lat`/`lon`; kept in sync as either side is edited.
+    pub mgrs: String,
     pub radius_km: String,
     pub remarks: String,
     /// Which field is focused.
@@ -580,6 +586,7 @@ impl App {
                 callsign: r.event.callsign.clone().unwrap_or_default(),
                 lat: fmt_coord(r.event.point.lat),
                 lon: fmt_coord(r.event.point.lon),
+                mgrs: mgrs_for(r.event.point.lat, r.event.point.lon),
                 radius_km: r.radius_km().map(fmt_coord).unwrap_or_else(|| "10".into()),
                 remarks: r.event.remarks.clone().unwrap_or_default(),
                 field: AuthorField::Kind,
@@ -593,6 +600,7 @@ impl App {
                 callsign: String::new(),
                 lat: fmt_coord(self.map.center.lat),
                 lon: fmt_coord(self.map.center.lon),
+                mgrs: mgrs_for(self.map.center.lat, self.map.center.lon),
                 radius_km: "10".to_string(),
                 remarks: String::new(),
                 field: AuthorField::Kind,
@@ -619,17 +627,23 @@ impl App {
             KeyCode::Right => cycle_field(form, 1),
             KeyCode::Backspace => {
                 form.error = None;
+                let changed = form.field;
                 if let Some(buf) = text_field(form) {
                     buf.pop();
                 }
+                sync_author_coords(form, changed);
             }
             KeyCode::Char(c) => {
                 form.error = None;
                 // On the toggle fields, Space cycles instead of typing.
                 if c == ' ' && matches!(form.field, AuthorField::Kind | AuthorField::Affiliation) {
                     cycle_field(form, 1);
-                } else if let Some(buf) = text_field(form) {
-                    buf.push(c);
+                } else {
+                    let changed = form.field;
+                    if let Some(buf) = text_field(form) {
+                        buf.push(c);
+                    }
+                    sync_author_coords(form, changed);
                 }
             }
             _ => {}
@@ -777,10 +791,47 @@ fn text_field(form: &mut AuthorForm) -> Option<&mut String> {
         AuthorField::Callsign => Some(&mut form.callsign),
         AuthorField::Lat => Some(&mut form.lat),
         AuthorField::Lon => Some(&mut form.lon),
+        AuthorField::Mgrs => Some(&mut form.mgrs),
         AuthorField::Radius => Some(&mut form.radius_km),
         AuthorField::Remarks => Some(&mut form.remarks),
         AuthorField::Kind | AuthorField::Affiliation => None,
     }
+}
+
+/// Keep the Lat/Lon and MGRS representations of the position in step after one
+/// side is edited: typing MGRS rewrites Lat/Lon (when it parses), and typing
+/// either coordinate rewrites the MGRS mirror. Unparseable partial input is left
+/// alone so the operator can keep typing.
+fn sync_author_coords(form: &mut AuthorForm, changed: AuthorField) {
+    match changed {
+        AuthorField::Mgrs => {
+            if let Some(p) = foxhole_map::mgrs::parse(&form.mgrs) {
+                form.lat = fmt_coord(p.lat);
+                form.lon = fmt_coord(p.lon);
+            }
+        }
+        AuthorField::Lat | AuthorField::Lon => {
+            if let (Ok(lat), Ok(lon)) = (
+                form.lat.trim().parse::<f64>(),
+                form.lon.trim().parse::<f64>(),
+            ) && let Some(s) = mgrs_for_opt(lat, lon)
+            {
+                form.mgrs = s;
+            }
+        }
+        _ => {}
+    }
+}
+
+/// MGRS for a lat/lon at the default precision, or empty for an out-of-band
+/// (polar) position — for prefilling the author form's mirror.
+fn mgrs_for(lat: f64, lon: f64) -> String {
+    mgrs_for_opt(lat, lon).unwrap_or_default()
+}
+
+/// MGRS for a lat/lon at the default precision, `None` outside UTM's band.
+fn mgrs_for_opt(lat: f64, lon: f64) -> Option<String> {
+    foxhole_map::mgrs::format(GeoPos::new(lat, lon), foxhole_map::mgrs::DEFAULT_DIGITS)
 }
 
 /// Cycle through the four affiliations in a stable order.
@@ -1100,6 +1151,44 @@ mod tests {
         assert_eq!(e.kind(), Kind::Zone);
         assert_eq!(e.radius_m, Some(250_000.0));
         assert_eq!(e.affiliation(), Affiliation::Hostile);
+    }
+
+    #[test]
+    fn author_form_syncs_mgrs_and_latlon_both_ways() {
+        let mut app = App::new();
+        app.open_author(false);
+        // Editing the MGRS field rewrites Lat/Lon. Drive it through the key path
+        // by replacing the buffer then nudging it so the sync fires.
+        {
+            let f = app.author.as_mut().unwrap();
+            f.field = AuthorField::Mgrs;
+            f.mgrs = "31NAA660210000".to_string();
+        }
+        // Type the final digit so handle_author_key runs the sync.
+        app.handle_author_key(KeyEvent::from(KeyCode::Char('0')));
+        let f = app.author.as_ref().unwrap();
+        assert_eq!(f.mgrs, "31NAA6602100000");
+        assert!(
+            f.lat.parse::<f64>().unwrap().abs() < 0.01,
+            "lat synced: {}",
+            f.lat
+        );
+        assert!(
+            f.lon.parse::<f64>().unwrap().abs() < 0.01,
+            "lon synced: {}",
+            f.lon
+        );
+
+        // Editing a coordinate rewrites the MGRS mirror.
+        {
+            let f = app.author.as_mut().unwrap();
+            f.field = AuthorField::Lat;
+            f.lat = "48.8583".to_string();
+            f.lon = "2.2944".to_string();
+        }
+        app.handle_author_key(KeyEvent::from(KeyCode::Backspace)); // edits lat
+        let f = app.author.as_ref().unwrap();
+        assert!(f.mgrs.starts_with("31U"), "mgrs mirror updated: {}", f.mgrs);
     }
 
     #[test]
