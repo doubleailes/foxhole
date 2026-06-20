@@ -20,6 +20,8 @@ The UI has two focus tiers, mirroring Nomad Network:
                    compose box.
   `!Network`!         Discovered peers and propagation nodes; set the active
                    propagation node, probe paths.
+  `!Map`!             World map: operator/peer positions, capitals, and shared
+                   CoT intel; MGRS grid, hazard zones, in-app authoring.
   `!Browser`!         Read Nomad Network pages written in micron markup; follow
                    links and submit form fields.
   `!Log`!             Timestamped (UTC) system and diagnostic scrollback.
@@ -75,11 +77,19 @@ The UI has two focus tiers, mirroring Nomad Network:
   `!+ / -`!             Zoom in / out
   `!Tab / [ / ]`!       Cycle plotted markers (centres on each)
   `!Enter / c`!         Centre on the selected marker
+  `!g`!                 Toggle the capitals / major-cities reference layer
+  `!/`!                 Go to an MGRS grid reference (reframe the view)
   `!r`!                 Reset the viewport to the whole globe
   `!i`!                 Review incoming (staged) CoT intel: accept / discard
   `!a`!                 Author a new marker / zone at the map centre
   `!e`!                 Edit the selected intel object in place
   `!x`!                 Remove the selected intel object (local only)
+
+  The map plots the operator's own fix, peers carrying location telemetry
+  (Sideband-style LXMF position reports), capital/major cities, and shared
+  intel. The HUD reads the viewport centre out as an MGRS grid reference; press
+  `!/`! to reframe onto a typed reference, and the intel author form carries an
+  MGRS field two-way synced with its lat/lon so you can designate by grid.
 
   Received intel is tinted by affiliation (friendly / hostile / neutral /
   unknown); local `*zones.conf`* hazard areas are tagged LOCAL. Unvetted intel
