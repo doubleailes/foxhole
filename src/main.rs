@@ -19,6 +19,8 @@ pub use foxhole_core::{app, burn, config, notes, zones};
 use foxhole_tui::ui;
 
 #[cfg(feature = "net")]
+mod intel_store;
+#[cfg(feature = "net")]
 mod net;
 #[cfg(feature = "net")]
 mod store;
@@ -198,6 +200,18 @@ async fn run(
                                 "[SYS] loaded {n} conversation(s), {skipped} skipped"
                             ));
                         }
+                        // Restore the persisted intel layer (live + staged).
+                        let (live, staged) = intel_store::load(key);
+                        let (nl, ns) = (live.len(), staged.len());
+                        app.intel = live;
+                        app.intel_staged = staged;
+                        // Drop anything that expired while we were down, and don't
+                        // treat the freshly-loaded state as needing a re-save.
+                        app.sweep_intel(now_secs());
+                        app.intel_dirty = false;
+                        if nl > 0 || ns > 0 {
+                            app.push_log(format!("[SYS] loaded {nl} intel, {ns} staged"));
+                        }
                     }
                     apply_net_event(app, ev);
                 }
@@ -224,10 +238,19 @@ async fn run(
                     app.push_log(format!("[SYS] store save failed: {e}"));
                 }
             }
+            // Persist the intel layer when it changed this iteration.
+            if std::mem::take(&mut app.intel_dirty)
+                && let Err(e) = intel_store::save(key, &app.intel, &app.intel_staged)
+            {
+                app.push_log(format!("[SYS] intel store save failed: {e}"));
+            }
         }
-        // Offline build never persists; keep the dirty list from growing.
+        // Offline build never persists; keep the dirty flags from growing.
         #[cfg(not(feature = "net"))]
-        app.dirty.clear();
+        {
+            app.dirty.clear();
+            app.intel_dirty = false;
+        }
     }
 
     Ok(())

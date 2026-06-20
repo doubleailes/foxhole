@@ -305,6 +305,9 @@ pub struct App {
     pub intel_review: Option<IntelReview>,
     /// When `Some`, the share-zone picker is open (captures input).
     pub share_zone: Option<ShareZone>,
+    /// Set when the live/staged intel layer changed this iteration; `main` drains
+    /// it and persists the encrypted intel store. Keeps `App` free of I/O.
+    pub intel_dirty: bool,
     /// Latest rnpath-style path probe per hex destination hash (Network tab).
     pub path_probes: HashMap<String, PathProbe>,
     /// Live interface status (Interfaces tab); empty until the stack reports.
@@ -406,6 +409,7 @@ impl App {
             intel_staged: Vec::new(),
             intel_review: None,
             share_zone: None,
+            intel_dirty: false,
             path_probes: HashMap::new(),
             interfaces: Vec::new(),
             link_count: 0,

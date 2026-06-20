@@ -140,6 +140,7 @@ impl App {
         if event.is_revocation() {
             let removed = self.revoke_intel(&source, &event.uid);
             if removed {
+                self.intel_dirty = true;
                 self.push_log(format!("[SYS] intel: {who} revoked {}", event.uid));
             }
             return;
@@ -160,6 +161,7 @@ impl App {
             Trust::Trusted => {
                 let label = record.label();
                 if upsert(&mut self.intel, record) {
+                    self.intel_dirty = true;
                     self.push_log(format!("[SYS] intel: applied {label} from {who}"));
                 }
             }
@@ -169,11 +171,13 @@ impl App {
                 if self.config.intel_auto_apply {
                     let label = record.label();
                     if upsert(&mut self.intel, record) {
+                        self.intel_dirty = true;
                         self.push_log(format!("[SYS] intel: auto-applied {label} from {who}"));
                     }
                 } else {
                     let label = record.label();
                     if upsert(&mut self.intel_staged, record) {
+                        self.intel_dirty = true;
                         self.push_log(format!("[SYS] intel: staged {label} from {who} (review)"));
                     }
                 }
@@ -212,7 +216,11 @@ impl App {
         self.intel.retain(|r| !r.is_expired(now, ttl));
         self.intel_staged.retain(|r| !r.is_expired(now, ttl));
         self.clamp_intel_review();
-        before - (self.intel.len() + self.intel_staged.len())
+        let removed = before - (self.intel.len() + self.intel_staged.len());
+        if removed > 0 {
+            self.intel_dirty = true;
+        }
+        removed
     }
 
     /// Live (applied, non-expired) intel at `now` — what the map layer plots.
@@ -300,6 +308,7 @@ impl App {
             crate::domain::short_hash(&record.source).to_string(),
         );
         upsert(&mut self.intel, record);
+        self.intel_dirty = true;
         self.push_log(format!("[SYS] intel: accepted {label} from {who}"));
         self.clamp_intel_review();
     }
@@ -314,6 +323,7 @@ impl App {
             record.label(),
             crate::domain::short_hash(&record.source).to_string(),
         );
+        self.intel_dirty = true;
         self.push_log(format!("[SYS] intel: discarded {label} from {who}"));
         self.clamp_intel_review();
     }

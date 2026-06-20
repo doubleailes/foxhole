@@ -75,9 +75,10 @@ intel-sharing plan; **P2** (ingest + render) is wired: `net.rs` decodes the
 applies it, and `foxhole-tui`'s map renders the affiliation-tinted layer + INTEL
 panel. **P3** (share) is wired too: Ctrl+G in Conversations shares a local zone
 as a `cot/xml` LXMF message (`net.rs` `build_message` attaches the custom
-fields). Durability/reach (P4: persistence, protobuf, TAK gateway) remain.
-`tools/cot_inject.py` is the reference injector (Appendix A) for live ingest +
-decoder fixtures.
+fields). **P4** is under way: received intel now persists across restarts
+(`src/intel_store.rs`, encrypted); the protobuf transport (`cot/proto`) and a TAK
+gateway remain. `tools/cot_inject.py` is the reference injector (Appendix A) for
+live ingest + decoder fixtures.
 
 ### `crates/foxhole-tui` — rendering (ratatui), pure `&App` → frame
 
@@ -114,6 +115,11 @@ readiness events via `mark_boot`. `cfg(test)` and `FOXHOLE_NO_SPLASH` start in
 - `src/store.rs` — *(`net` feature)* encrypted, atomic, per-conversation history
   store: `FXC1` blob → `rns_crypto::token` (AES-256-CBC + HMAC) → `atomic_write`,
   key HKDF-derived from the identity. Corruption/foreign files are skipped on load.
+- `src/intel_store.rs` — *(`net` feature)* the same encrypted/atomic recipe for
+  the received-intel layer (P4 durability): one `FXI1` blob holding the live +
+  staged `IntelRecord`s (reusing the identity store key), loaded at boot and
+  re-saved when `app.intel_dirty` is set. `Option` timestamps are preserved so a
+  stale-less event reloads stale-less; a corrupt/foreign file loads empty.
 - `src/net.rs` — *(in progress, behind the `net` feature)* live LXMF/Reticulum
   stack: identity, `ReticulumHandle`, `LxmRouter`, announce/delivery tasks. Also
   Nomad Network node discovery (recent-announce-cache poll for
