@@ -1,0 +1,63 @@
+name: CI
+
+# Build, lint, format-check and test FoxHole on every push and PR. The matrix
+# covers both shipping configurations: the dependency-light offline default and
+# the `net` compartment (which fetches the pinned rsReticulum/rsLXMF git revs).
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  check:
+    name: ${{ matrix.name }} (clippy + test)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: offline (default)
+            flags: ""
+          - name: net
+            flags: "--features net"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: clippy
+        run: cargo clippy --workspace --all-targets ${{ matrix.flags }} -- -D warnings
+      - name: test
+        run: cargo test --workspace ${{ matrix.flags }}
+
+  msrv:
+    name: MSRV (1.88, offline build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Pin to the declared minimum supported Rust version. Offline build only —
+      # the net stack's upstreams may require a newer toolchain, and the MSRV
+      # guarantee covers FoxHole's own dependency-light configuration.
+      - uses: dtolnay/rust-toolchain@1.88
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --workspace

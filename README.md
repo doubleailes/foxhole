@@ -95,22 +95,32 @@ Capabilities ██ through ██ are withheld. ██████████�
 > WARNING: Handling instructions for ███████████ hardware appear in Annex ██,
 > not reproduced here.
 
+**Prerequisites.** A Rust toolchain ≥ **1.88** (edition 2024). The offline
+build needs nothing else; the `net` build fetches its mesh stack from git on
+first compile, so that one build needs network reachability to GitHub.
+
 **Standalone (offline / bench):**
 ```sh
+git clone https://github.com/doubleailes/foxhole && cd foxhole
 cargo build              # arm the terminal, dependency-light, fully offline
 cargo run                # boot the operator console (seeded demo contacts)
 ```
+The offline console boots with a small set of **seeded demo contacts and
+zones** so the UI is explorable on the bench — no live traffic moves until the
+`net` compartment is armed.
 
 **Live mesh (the `net` compartment):**
 ```sh
 cargo build --features net
 cargo run   --features net
 ```
-The `net` compartment links the **Reticulum** + **LXMF** stack as **git
-dependencies pinned by commit** (`rns-*` from `rsReticulum`, `lxmf-core` from
-`rsLXMF`); `cargo` fetches them on first `--features net` build — no sibling
-checkouts required. Bump the stack by editing the `rev`s in `Cargo.toml`. (Both
-upstreams are AGPL-3.0-or-later; see Section 7.)
+The `net` compartment links the **Reticulum** + **LXMF** stack (the `rns-*` and
+`lxmf-core` crates) directly from their upstream repositories, **pinned by
+commit** in `Cargo.toml` for a reproducible build — cargo fetches them on the
+first `--features net` build; no sibling checkout is required. Bump the stack by
+editing the `rev`s in `Cargo.toml`. (Both upstreams are AGPL-3.0-or-later, which
+is why a distributed `net` binary is a combined AGPL work — see Section 7 and
+`LICENSE`.)
 
 | Directive            | Command                                          |
 |----------------------|--------------------------------------------------|
@@ -210,16 +220,28 @@ the full annex, classification ████████████, not include
 - Status is **experimental**. Sections ██–██ describe known ████████.
 - Tied to your identity: lose the identity file, lose access to sealed history.
 - No telemetry, no analytics, no ████████. By design.
+- **DIRECT delivery is not acknowledged** on the currently pinned mesh stack:
+  with `rsReticulum` rev `3b91b36`, a link-delivered message's proof is signed
+  with the wrong key and rejected by the sender, so it never reaches
+  `[delivered]` (it may retry or fall back to propagation). A *deliverability*
+  gap, not a confidentiality one — tracked in
+  `docs/rsreticulum-delivery-proof-issue.md`, resolved by pinning a patched
+  revision. See `SECURITY.md` for the full threat model.
 
 ---
 
 ## 7. PROVENANCE & LICENSE
 
-FoxHole is licensed **AGPL-3.0-or-later** — see [`LICENSE`](LICENSE). Linking the
-`net` compartment additionally incorporates **AGPL-3.0-or-later** components (the
-`rns-*` and `lxmf-core` crates), so a distributed binary is a combined AGPL work —
-including the network-use clause (§13). Govern ████████ accordingly.
+FoxHole's own source — every workspace crate and the binary — is licensed
+**AGPL-3.0-or-later**; the full text is in [`LICENSE`](LICENSE). Linking the
+`net` compartment additionally incorporates AGPL-3.0-or-later upstream
+components (the `rns-*` and `lxmf-core` crates), so a distributed `net` binary
+is a combined AGPL work — including the **network-use clause** (§13): operators
+who let others interact with a running instance over a network must offer those
+users the corresponding source. Govern distribution accordingly.
 
+Security posture, threat model, and responsible-disclosure contact are in
+[`SECURITY.md`](SECURITY.md); release history in [`CHANGELOG.md`](CHANGELOG.md).
 Architecture, build matrix, and the mesh binding are documented for cleared
 maintainers in `CLAUDE.md` and `docs/lxmf-integration.md`.
 

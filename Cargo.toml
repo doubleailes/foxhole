@@ -1,12 +1,32 @@
 [package]
 name = "foxhole"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
 description = "FoxHole — off-grid, keyboard-only, monochrome LXMF comms terminal"
-license = "AGPL-3.0-or-later"
+readme = "README.md"
+keywords = ["lxmf", "reticulum", "tui", "mesh", "off-grid"]
+categories = ["command-line-utilities"]
 
 [workspace]
 members = ["crates/foxhole-micron", "crates/foxhole-cot", "crates/foxhole-map", "crates/foxhole-core", "crates/foxhole-tui"]
+
+# Shared metadata inherited by every member crate via `field.workspace = true`.
+# The whole workspace ships under AGPL-3.0-or-later: the `net` build links the
+# AGPL `rns-*`/`lxmf-core` stack, so a distributed combined work is AGPL anyway —
+# see LICENSE and README §7. Edition 2024 needs Rust ≥ 1.85 and our own code uses
+# `is_multiple_of` (stable 1.87), but the dependency tree (ratatui 0.30, time)
+# raises the effective floor, so the declared MSRV is 1.88.
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "AGPL-3.0-or-later"
+authors = ["Philippe Llerena <charlesbrenten@hotmail.com>"]
+repository = "https://github.com/doubleailes/foxhole"
 
 [dependencies]
 # --- FoxHole's own layers (workspace member crates) ---------------------------

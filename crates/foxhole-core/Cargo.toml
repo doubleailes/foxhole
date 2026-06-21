@@ -1,9 +1,12 @@
 [package]
 name = "foxhole-core"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
 description = "FoxHole core: domain model, state machine, config, durable storage"
-license = "AGPL-3.0-or-later"
 
 [dependencies]
 # Keyboard event types routed through the state machine. (No event-stream here —
