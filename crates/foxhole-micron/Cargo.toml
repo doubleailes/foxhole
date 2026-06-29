@@ -10,4 +10,4 @@ description = "Nomad Network micron page markup renderer (ratatui), used by FoxH
 
 [dependencies]
 # Renders micron markup into styled ratatui lines/spans.
-ratatui = "0.30"
+ratatui = { workspace = true }

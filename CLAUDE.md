@@ -178,8 +178,10 @@ peers). `--features net` pulls the `rns-*` (Reticulum) and `lxmf-core` crates as
 **git deps pinned by commit** from `github.com/doubleailes/rsReticulum` and
 `…/rsLXMF` (both AGPL-3.0-or-later). `rsLXMF`'s own `rns-*` deps use sibling-path
 references, so a root `[patch."…/rsLXMF"]` redirects them to the same pinned
-`rsReticulum` revision (cargo unifies the stack on one source). Bump by editing
-the `rev`s (and the matching `[patch]` revs) in `Cargo.toml`. The integration
+`rsReticulum` revision (cargo unifies the stack on one source). The pinned
+`rev`s live once in the root `[workspace.dependencies]` (member crates inherit
+them with `dep.workspace = true`); bump by editing those (and the matching
+`[patch]` revs, which can't inherit) in the root `Cargo.toml`. The integration
 mirrors the Ratspeak reference client — see `docs/lxmf-integration.md` for the
 full binding.
 

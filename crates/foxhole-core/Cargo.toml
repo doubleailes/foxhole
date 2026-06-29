@@ -11,15 +11,15 @@ description = "FoxHole core: domain model, state machine, config, durable storag
 [dependencies]
 # Keyboard event types routed through the state machine. (No event-stream here —
 # that's the binary's concern; core only needs the key enums.)
-crossterm = "0.29"
+crossterm = { workspace = true }
 # The micron page model/parser the Browser state and page elements depend on.
-foxhole-micron = { path = "../foxhole-micron" }
+foxhole-micron = { workspace = true }
 # The CoT codec for the intel-sharing layer (received-intel model + producers).
 # Dependency-free, so the core stays light.
-foxhole-cot = { path = "../foxhole-cot" }
+foxhole-cot = { workspace = true }
 # The World Map domain (geo, viewport, markers, zones, cities). Pure logic/data;
 # the App here owns the field state and routes keys to its methods.
-foxhole-map = { path = "../foxhole-map" }
+foxhole-map = { workspace = true }
 
 [features]
 # Cold-boot splash state (App::boot, BootStep). Pure flag — no extra deps.
