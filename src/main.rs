@@ -11,19 +11,17 @@
 //!   3. Multiplex keyboard input and inbound messages in one `select!` loop.
 
 // The logic and rendering layers now live in workspace crates; re-export them
-// under the same module paths so the networking modules below (and `main`) keep
-// referring to `crate::app`, `crate::config`, etc. unchanged.
-#[cfg(feature = "net")]
-pub use foxhole_core::storage;
+// under the same module paths so `main` keeps referring to `crate::app`,
+// `crate::config`, etc. unchanged.
 pub use foxhole_core::{app, burn, config, notes, zones};
 use foxhole_tui::ui;
 
+// The live networking layer (LXMF/Reticulum stack + encrypted stores) lives in
+// the `foxhole-net` crate; import its modules so `main`'s call sites
+// (`net::run`, `store::{load_all,save}`, `intel_store::{load,save}`) read
+// unchanged.
 #[cfg(feature = "net")]
-mod intel_store;
-#[cfg(feature = "net")]
-mod net;
-#[cfg(feature = "net")]
-mod store;
+use foxhole_net::{intel_store, net, store};
 
 use std::io::{self, Stdout, Write};
 

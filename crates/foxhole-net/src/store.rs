@@ -2,7 +2,7 @@
 //!
 //! Each conversation is serialized to a small versioned binary blob,
 //! authenticated-encrypted with `rns_crypto::token` (AES-256-CBC + HMAC-SHA256,
-//! random IV), and written to its own file via [`crate::storage::atomic_write`]
+//! random IV), and written to its own file via [`foxhole_core::storage::atomic_write`]
 //! (write-temp → fsync → rename). Properties:
 //!   * **Atomic** — a crash mid-write leaves the previous file intact.
 //!   * **Authenticated** — corruption or tampering fails the HMAC, so a bad file
@@ -20,8 +20,8 @@ use std::path::{Path, PathBuf};
 use rns_crypto::{hkdf, sha, token};
 use rns_identity::identity::Identity;
 
-use crate::app::{Conversation, Entry, MsgStatus, Trust};
-use crate::config::config_dir;
+use foxhole_core::app::{Conversation, Entry, MsgStatus, Trust};
+use foxhole_core::config::config_dir;
 
 /// File-format magic + version. v2 adds a per-message status byte; v3 adds a
 /// per-conversation trust byte. Older files still load: a missing status
@@ -68,7 +68,7 @@ fn save_to(dir: &Path, key: &[u8; 64], conv: &Conversation) -> io::Result<()> {
     let blob = serialize(conv);
     let token =
         token::encrypt(&blob, key).map_err(|e| io::Error::other(format!("encrypt: {e}")))?;
-    crate::storage::atomic_write(&file_for(dir, &conv.peer), &token)
+    foxhole_core::storage::atomic_write(&file_for(dir, &conv.peer), &token)
 }
 
 fn load_all_from(dir: &Path, key: &[u8; 64]) -> (Vec<Conversation>, usize) {

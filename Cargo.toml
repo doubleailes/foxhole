@@ -12,7 +12,7 @@ keywords = ["lxmf", "reticulum", "tui", "mesh", "off-grid"]
 categories = ["command-line-utilities"]
 
 [workspace]
-members = ["crates/foxhole-micron", "crates/foxhole-cot", "crates/foxhole-map", "crates/foxhole-core", "crates/foxhole-tui"]
+members = ["crates/foxhole-micron", "crates/foxhole-cot", "crates/foxhole-map", "crates/foxhole-core", "crates/foxhole-tui", "crates/foxhole-net"]
 
 # Shared metadata inherited by every member crate via `field.workspace = true`.
 # The whole workspace ships under AGPL-3.0-or-later: the `net` build links the
@@ -38,6 +38,11 @@ foxhole-tui = { path = "crates/foxhole-tui" }
 # payloads with it. Dependency-free, so it costs nothing in the offline build.
 foxhole-cot = { path = "crates/foxhole-cot" }
 
+# Live networking layer (LXMF/Reticulum stack + encrypted stores). Optional so
+# the default build stays dependency-light and offline; `--features net` pulls
+# it (and, transitively, the heavy `rns-*`/`lxmf-core` git deps) in.
+foxhole-net = { path = "crates/foxhole-net", optional = true }
+
 # TUI framework. The crossterm backend is enabled by default.
 ratatui = "0.30"
 
@@ -53,31 +58,10 @@ tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
 
 # --- Protocol layer (live, behind the `net` feature) ---------------------------
-# LXMF messaging over Reticulum. Both upstreams are Cargo *workspaces* of path
-# crates (no `rslxmf`/`rsreticulum` package exists), so we depend on the member
-# crates directly from their git repos, pinned by commit for reproducibility
-# (an AGPL combined work — see docs/lxmf-integration.md). `rsLXMF` itself depends
-# on the `rsReticulum` crates, so cargo unifies both on the same pinned revisions.
-#
-# Optional so the default build stays dependency-light and offline; `--features net`
-# pulls the whole stack and arms `src/net.rs`.
-rns-crypto    = { git = "https://github.com/doubleailes/rsReticulum", rev = "3b91b36f3ec7b3769327e0dd06003875953e81ee", optional = true }
-rns-wire      = { git = "https://github.com/doubleailes/rsReticulum", rev = "3b91b36f3ec7b3769327e0dd06003875953e81ee", optional = true }
-rns-identity  = { git = "https://github.com/doubleailes/rsReticulum", rev = "3b91b36f3ec7b3769327e0dd06003875953e81ee", optional = true }
-rns-transport = { git = "https://github.com/doubleailes/rsReticulum", rev = "3b91b36f3ec7b3769327e0dd06003875953e81ee", optional = true }
-rns-interface = { git = "https://github.com/doubleailes/rsReticulum", rev = "3b91b36f3ec7b3769327e0dd06003875953e81ee", optional = true }
-rns-runtime   = { git = "https://github.com/doubleailes/rsReticulum", rev = "3b91b36f3ec7b3769327e0dd06003875953e81ee", optional = true }
-lxmf-core     = { git = "https://github.com/doubleailes/rsLXMF",      rev = "90e44916a403cfea2446aa945275f42233fd0169", optional = true }
-
-# `bytes::Bytes` is the wire-buffer type the transport's `OutboundRequest` takes.
-bytes = { version = "1", optional = true }
-
-# Hex-encode 16-byte destination hashes for display and conversation keys.
-hex = { version = "0.4", optional = true }
-
-# Encode Nomad Network form submissions as the msgpack request map. Already in
-# the lockfile transitively via the `rns-*`/`lxmf` stack.
-rmpv = { version = "1.3", optional = true }
+# The LXMF/Reticulum stack and its encrypted stores now live in the
+# `foxhole-net` member crate (optional dep above); it owns the heavy `rns-*` /
+# `lxmf-core` git deps. The `[patch]` block at the bottom still belongs here
+# because patches are only honoured in the workspace-root manifest.
 
 [features]
 default = ["splash"]
@@ -90,16 +74,7 @@ splash = ["foxhole-core/splash", "foxhole-tui/splash"]
 # the real transport + LXMF router in `src/net.rs` (see docs/lxmf-integration.md).
 # Also enables the matching net-only cfg gating in the core/tui crates.
 net = [
-    "dep:rns-crypto",
-    "dep:rns-wire",
-    "dep:rns-identity",
-    "dep:rns-transport",
-    "dep:rns-interface",
-    "dep:rns-runtime",
-    "dep:lxmf-core",
-    "dep:bytes",
-    "dep:hex",
-    "dep:rmpv",
+    "dep:foxhole-net",
     "foxhole-core/net",
     "foxhole-tui/net",
 ]

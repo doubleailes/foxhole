@@ -4,7 +4,7 @@
 //! The live and staged CoT intel ([`App::intel`]/[`App::intel_staged`]) is
 //! serialized to one versioned binary blob, authenticated-encrypted with
 //! `rns_crypto::token` (AES-256-CBC + HMAC-SHA256, random IV), and written via
-//! [`crate::storage::atomic_write`]. It reuses the identity-derived store key (so
+//! [`foxhole_core::storage::atomic_write`]. It reuses the identity-derived store key (so
 //! intel is readable only with that identity present) and lives under
 //! [`config_dir`], so a BURN wipes it with everything else.
 //!
@@ -20,8 +20,8 @@ use std::path::{Path, PathBuf};
 use foxhole_cot::{CotEvent, Point};
 use rns_crypto::token;
 
-use crate::app::IntelRecord;
-use crate::config::config_dir;
+use foxhole_core::app::IntelRecord;
+use foxhole_core::config::config_dir;
 
 /// File-format magic + version.
 const MAGIC: &[u8; 4] = b"FXI1";
@@ -59,7 +59,7 @@ fn save_to(
     let blob = serialize(live, staged);
     let token =
         token::encrypt(&blob, key).map_err(|e| io::Error::other(format!("encrypt: {e}")))?;
-    crate::storage::atomic_write(path, &token)
+    foxhole_core::storage::atomic_write(path, &token)
 }
 
 /// Returns `((live, staged), skipped)` where `skipped` is true if a present file
