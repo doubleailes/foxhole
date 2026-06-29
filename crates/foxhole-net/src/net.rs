@@ -42,8 +42,8 @@ use rns_transport::messages::{
     AnnounceHandlerEvent, OutboundRequest, TransportMessage, TransportQuery, TransportQueryResponse,
 };
 
-use crate::app::{Interface, MsgStatus, NetCommand, NetEvent, Outbound, PeerKind};
-use crate::config::{Config, config_dir};
+use foxhole_core::app::{Interface, MsgStatus, NetCommand, NetEvent, Outbound, PeerKind};
+use foxhole_core::config::{Config, config_dir};
 
 /// Tracks outbound messages in flight so delivery outcomes can be reported back
 /// to the UI by the message's correlation id. Keyed by the LXMF message hash
@@ -1368,7 +1368,7 @@ fn save_known(path: &Path, known: &KnownKeys) -> std::io::Result<()> {
     for (dest, pk) in known {
         s.push_str(&format!("{dest} {}\n", hex::encode(pk)));
     }
-    crate::storage::atomic_write(path, s.as_bytes())
+    foxhole_core::storage::atomic_write(path, s.as_bytes())
 }
 
 /// Drain the router's outbound queue and act on each decision. Direct messages

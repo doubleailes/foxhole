@@ -1,0 +1,41 @@
+[package]
+name = "foxhole-net"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "FoxHole live networking layer — LXMF/Reticulum protocol stack + encrypted stores"
+
+# This crate is only ever built when the root binary's `net` feature pulls it
+# in, so its dependencies are unconditional here (no per-dep `optional`): the
+# gating lives one level up. The git revs mirror the root manifest and are
+# unified onto a single `rsReticulum` source by the workspace-root `[patch]`.
+[dependencies]
+# FoxHole's own layers. `foxhole-core` supplies the domain model (App, Config,
+# storage, the net-only fields behind its `net` feature); `foxhole-cot` decodes
+# inbound intel payloads.
+foxhole-core = { path = "../foxhole-core", features = ["net"] }
+foxhole-cot = { path = "../foxhole-cot" }
+
+# Async runtime: keeps network packet processing off the render path.
+tokio = { version = "1", features = ["full"] }
+
+# LXMF messaging over Reticulum, and the Reticulum crates it builds on, pinned
+# by commit for reproducibility (an AGPL combined work).
+lxmf-core     = { git = "https://github.com/doubleailes/rsLXMF",      rev = "90e44916a403cfea2446aa945275f42233fd0169" }
+rns-crypto    = { git = "https://github.com/doubleailes/rsReticulum", rev = "3b91b36f3ec7b3769327e0dd06003875953e81ee" }
+rns-wire      = { git = "https://github.com/doubleailes/rsReticulum", rev = "3b91b36f3ec7b3769327e0dd06003875953e81ee" }
+rns-identity  = { git = "https://github.com/doubleailes/rsReticulum", rev = "3b91b36f3ec7b3769327e0dd06003875953e81ee" }
+rns-transport = { git = "https://github.com/doubleailes/rsReticulum", rev = "3b91b36f3ec7b3769327e0dd06003875953e81ee" }
+rns-runtime   = { git = "https://github.com/doubleailes/rsReticulum", rev = "3b91b36f3ec7b3769327e0dd06003875953e81ee" }
+
+# `bytes::Bytes` is the wire-buffer type the transport's `OutboundRequest` takes.
+bytes = "1"
+
+# Hex-encode 16-byte destination hashes for display and conversation keys.
+hex = "0.4"
+
+# Encode Nomad Network form submissions as the msgpack request map.
+rmpv = "1.3"

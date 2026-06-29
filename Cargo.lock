@@ -553,21 +553,12 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 name = "foxhole"
 version = "0.1.0"
 dependencies = [
- "bytes",
  "crossterm",
  "foxhole-core",
  "foxhole-cot",
+ "foxhole-net",
  "foxhole-tui",
- "hex",
- "lxmf-core",
  "ratatui",
- "rmpv",
- "rns-crypto",
- "rns-identity",
- "rns-interface",
- "rns-runtime",
- "rns-transport",
- "rns-wire",
  "tokio",
  "tokio-stream",
 ]
@@ -598,6 +589,24 @@ name = "foxhole-micron"
 version = "0.1.0"
 dependencies = [
  "ratatui",
+]
+
+[[package]]
+name = "foxhole-net"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "foxhole-core",
+ "foxhole-cot",
+ "hex",
+ "lxmf-core",
+ "rmpv",
+ "rns-crypto",
+ "rns-identity",
+ "rns-runtime",
+ "rns-transport",
+ "rns-wire",
+ "tokio",
 ]
 
 [[package]]

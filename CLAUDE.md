@@ -10,10 +10,11 @@ Rust edition 2024. The UI shell is built; live networking is being wired in.
 ## Architecture
 
 A Cargo **workspace** splits the program into layers by dependency weight: the
-logic and rendering are dependency-light member crates under `crates/`, while the
-async runtime and the live protocol stack stay in the root binary. The boundary
-is compiler-enforced — `foxhole-core` *cannot* reach for tokio/ratatui/reticulum
-because they aren't in its manifest.
+logic and rendering are dependency-light member crates under `crates/`, the heavy
+async/live-protocol stack is the optional `foxhole-net` crate, and the root binary
+only wires them to the tokio runtime. The boundary is compiler-enforced —
+`foxhole-core` *cannot* reach for tokio/ratatui/reticulum because they aren't in
+its manifest.
 
 ### `crates/foxhole-core` — domain model + state machine (logic only)
 
@@ -85,8 +86,8 @@ applies it, and `foxhole-tui`'s map renders the affiliation-tinted layer + INTEL
 panel. **P3** (share) is wired too: Ctrl+G in Conversations shares a local zone
 as a `cot/xml` LXMF message (`net.rs` `build_message` attaches the custom
 fields). **P4** is under way: received intel now persists across restarts
-(`src/intel_store.rs`, encrypted); the protobuf transport (`cot/proto`) and a TAK
-gateway remain. `tools/cot_inject.py` is the reference injector (Appendix A) for
+(`foxhole-net/src/intel_store.rs`, encrypted); the protobuf transport
+(`cot/proto`) and a TAK gateway remain. `tools/cot_inject.py` is the reference injector (Appendix A) for
 live ingest + decoder fixtures.
 
 ### `crates/foxhole-map` — World Map domain (pure logic + data)
@@ -136,28 +137,39 @@ monitor; state lives in core's `App` (`AppState::{Splash,Running}`,
 readiness events via `mark_boot`. `cfg(test)` and `FOXHOLE_NO_SPLASH` start in
 `Running`.
 
-### `foxhole` (root binary) — runtime + protocol wiring
+### `crates/foxhole-net` — live networking layer (`net` feature)
+
+The whole live-protocol layer, extracted into a member crate so the heavy async
+stack (tokio + the `rns-*` Reticulum crates + `lxmf-core`) stays off the
+dependency-light logic/rendering crates. Built **only** when the binary's `net`
+feature pulls it in (an optional dep), so the default build stays offline. Depends
+on `foxhole-core` (domain model + `storage::atomic_write`, with its `net` feature)
+and `foxhole-cot` (inbound intel decode). Three modules:
+
+- `src/net.rs` — *(in progress)* live LXMF/Reticulum stack: identity,
+  `ReticulumHandle`, `LxmRouter`, announce/delivery tasks. Also Nomad Network node
+  discovery (recent-announce-cache poll for `nomadnetwork.node`) and page fetching
+  via `LinkClient::query` (spawned off the select loop), reported as
+  `NetEvent::{NomadNode,Page}`. Inbound CoT intel is decoded from the
+  `FIELD_CUSTOM_TYPE=cot/xml` / `FIELD_CUSTOM_DATA` fields and reported as
+  `NetEvent::Cot` (malformed payloads logged + dropped, never fatal).
+- `src/store.rs` — encrypted, atomic, per-conversation history store: `FXC1` blob
+  → `rns_crypto::token` (AES-256-CBC + HMAC) → `atomic_write`, key HKDF-derived
+  from the identity (`derive_key`, also used by `net`). Corruption/foreign files
+  are skipped on load.
+- `src/intel_store.rs` — the same encrypted/atomic recipe for the received-intel
+  layer (P4 durability): one `FXI1` blob holding the live + staged `IntelRecord`s
+  (reusing the identity store key), loaded at boot and re-saved when
+  `app.intel_dirty` is set. `Option` timestamps are preserved so a stale-less
+  event reloads stale-less; a corrupt/foreign file loads empty.
+
+### `foxhole` (root binary) — runtime wiring
 
 - `src/main.rs` — terminal lifecycle (raw mode, alt screen, panic-safe restore)
   and the single async `select!` event loop multiplexing keyboard input and
-  inbound network events. Holds no UI or state rules. Re-exports the member
-  crates under `crate::app`/`crate::config`/`crate::storage`/`crate::burn` so the
-  networking modules below read unchanged.
-- `src/store.rs` — *(`net` feature)* encrypted, atomic, per-conversation history
-  store: `FXC1` blob → `rns_crypto::token` (AES-256-CBC + HMAC) → `atomic_write`,
-  key HKDF-derived from the identity. Corruption/foreign files are skipped on load.
-- `src/intel_store.rs` — *(`net` feature)* the same encrypted/atomic recipe for
-  the received-intel layer (P4 durability): one `FXI1` blob holding the live +
-  staged `IntelRecord`s (reusing the identity store key), loaded at boot and
-  re-saved when `app.intel_dirty` is set. `Option` timestamps are preserved so a
-  stale-less event reloads stale-less; a corrupt/foreign file loads empty.
-- `src/net.rs` — *(in progress, behind the `net` feature)* live LXMF/Reticulum
-  stack: identity, `ReticulumHandle`, `LxmRouter`, announce/delivery tasks. Also
-  Nomad Network node discovery (recent-announce-cache poll for
-  `nomadnetwork.node`) and page fetching via `LinkClient::query` (spawned off the
-  select loop), reported as `NetEvent::{NomadNode,Page}`. Inbound CoT intel is
-  decoded from the `FIELD_CUSTOM_TYPE=cot/xml` / `FIELD_CUSTOM_DATA` fields and
-  reported as `NetEvent::Cot` (malformed payloads logged + dropped, never fatal).
+  inbound network events. Holds no UI or state rules. Re-exports the member crates
+  under `crate::app`/`crate::config`/`crate::burn` and, under `net`, imports
+  `foxhole_net::{net, store, intel_store}` so its call sites read unchanged.
 
 ## Networking (the `net` feature)
 
