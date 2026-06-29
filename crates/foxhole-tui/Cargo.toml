@@ -9,12 +9,12 @@ repository.workspace = true
 description = "FoxHole terminal UI: pure &App -> frame rendering and cold-boot splash"
 
 [dependencies]
-ratatui = "0.30"
-foxhole-core = { path = "../foxhole-core" }
-foxhole-micron = { path = "../foxhole-micron" }
+ratatui = { workspace = true }
+foxhole-core = { workspace = true }
+foxhole-micron = { workspace = true }
 # World Map domain types the map renderer draws (viewport, markers, zones,
 # cities). The App state it reads still comes from foxhole-core.
-foxhole-map = { path = "../foxhole-map" }
+foxhole-map = { workspace = true }
 
 [features]
 # Cold-boot splash renderer; pulls the matching state in core.

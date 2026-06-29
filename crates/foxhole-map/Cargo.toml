@@ -14,4 +14,4 @@ description = "FoxHole world-map domain: geo primitives, viewport, markers, haza
 # map crate stays light: this is its *only* dependency. Rendering (ratatui) lives
 # in foxhole-tui; the App integration (key routing, marker building from peer and
 # intel state) in foxhole-core.
-foxhole-cot = { path = "../foxhole-cot" }
+foxhole-cot = { workspace = true }
