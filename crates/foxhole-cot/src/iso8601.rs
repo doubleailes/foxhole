@@ -24,6 +24,18 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     era * 146097 + doe - 719468
 }
 
+/// Days in `m` of year `y` (proleptic Gregorian), for day-of-month validation.
+fn days_in_month(y: i64, m: i64) -> i64 {
+    match m {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        _ => {
+            let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+            if leap { 29 } else { 28 }
+        }
+    }
+}
+
 /// Inverse of [`days_from_civil`]: civil `(year, month, day)` for a day count
 /// since 1970-01-01.
 fn civil_from_days(z: i64) -> (i64, i64, i64) {
@@ -54,7 +66,14 @@ pub fn parse(s: &str) -> Option<i64> {
     let y: i64 = dp.next()?.trim().parse().ok()?;
     let mo: i64 = dp.next()?.parse().ok()?;
     let d: i64 = dp.next()?.parse().ok()?;
-    if dp.next().is_some() || !(1..=12).contains(&mo) || !(1..=31).contains(&d) {
+    // Bounding the year keeps the calendar arithmetic overflow-free (CoT stamps
+    // are 4-digit years anyway); the day must exist in that month/year, so
+    // 2023-02-30 is rejected rather than rolled over into March.
+    if dp.next().is_some()
+        || !(0..=9999).contains(&y)
+        || !(1..=12).contains(&mo)
+        || !(1..=days_in_month(y, mo)).contains(&d)
+    {
         return None;
     }
 
@@ -80,8 +99,8 @@ pub fn parse(s: &str) -> Option<i64> {
 }
 
 /// Split a `hh:mm:ss[.fff][zone]` string into `(time, offset_seconds)` where
-/// `offset_seconds` is what must be **subtracted** to reach UTC. `None` only if
-/// a present numeric offset is malformed.
+/// `offset_seconds` is what must be **subtracted** to reach UTC. `None` if a
+/// present numeric offset is malformed or outside `±23:59`.
 fn split_offset(t: &str) -> Option<(&str, i64)> {
     let t = t.trim();
     if let Some(rest) = t.strip_suffix(['Z', 'z']) {
@@ -94,11 +113,19 @@ fn split_offset(t: &str) -> Option<(&str, i64)> {
         let off = &off[1..];
         let (oh, om) = match off.split_once(':') {
             Some((a, b)) => (a, b),
-            None if off.len() >= 4 => off.split_at(2), // ±hhmm
-            None => (off, "0"),                        // ±hh
+            // `±hhmm` — only byte-split all-ASCII input, so a multi-byte char
+            // in the offset (`+€1`) fails the parse below instead of panicking
+            // on a char boundary.
+            None if off.len() >= 4 && off.is_ascii() => off.split_at(2),
+            None => (off, "0"), // ±hh
         };
         let oh: i64 = oh.parse().ok()?;
         let om: i64 = om.parse().ok()?;
+        // No real zone lies outside ±23:59; the bound also keeps this (and the
+        // caller's epoch arithmetic) overflow-free on long digit strings.
+        if !(0..=23).contains(&oh) || !(0..=59).contains(&om) {
+            return None;
+        }
         return Some((hms, sign * (oh * 3_600 + om * 60)));
     }
     Some((t, 0)) // no designator → assume UTC
@@ -152,5 +179,38 @@ mod tests {
         assert_eq!(parse("2026-06-32T00:00:00Z"), None); // day 32
         assert_eq!(parse("2026-06-15T24:00:00Z"), None); // hour 24
         assert_eq!(parse("2026-06-15"), None); // no time
+    }
+
+    #[test]
+    fn malformed_offsets_fail_instead_of_panicking() {
+        // Multi-byte char where `±hhmm` would byte-split (the old code panicked
+        // on the char boundary — reachable from any peer's CoT `time`).
+        assert_eq!(parse("2026-06-15T00:00:00+€1"), None);
+        assert_eq!(parse("2026-06-15T00:00:00-€€€€"), None);
+        // Digit strings long enough to overflow the `* 3_600` epoch arithmetic.
+        assert_eq!(parse("2026-06-15T00:00:00+999999999999999999"), None);
+        assert_eq!(parse("2026-06-15T00:00:00+99:0000000000000000"), None);
+        // Out-of-range but well-formed offsets.
+        assert_eq!(parse("2026-06-15T00:00:00+24:00"), None);
+        assert_eq!(parse("2026-06-15T00:00:00+02:60"), None);
+    }
+
+    #[test]
+    fn rejects_out_of_range_years() {
+        // An 18-digit year parses as i64 but would overflow the calendar
+        // arithmetic (debug panic, silent wrap in release).
+        assert_eq!(parse("999999999999999999-01-01T00:00:00Z"), None);
+        assert_eq!(parse("10000-01-01T00:00:00Z"), None);
+        assert!(parse("9999-12-31T23:59:59Z").is_some());
+        assert!(parse("0000-01-01T00:00:00Z").is_some());
+    }
+
+    #[test]
+    fn rejects_days_that_do_not_exist_in_the_month() {
+        assert_eq!(parse("2023-02-30T00:00:00Z"), None); // used to roll into March
+        assert_eq!(parse("2023-02-29T00:00:00Z"), None); // not a leap year
+        assert_eq!(parse("2023-04-31T00:00:00Z"), None); // April has 30 days
+        assert_eq!(parse("2100-02-29T00:00:00Z"), None); // century non-leap
+        assert!(parse("2000-02-29T00:00:00Z").is_some()); // 400-year leap
     }
 }
