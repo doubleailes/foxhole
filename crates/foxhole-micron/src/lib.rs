@@ -17,7 +17,10 @@
 //! highlighted and text fields render their live value (masked → `*`). Checkbox/
 //! radio inputs render read-only and remote partials show a placeholder.
 //! Anything unrecognised is dropped — never fatal, never leaks the control byte.
+//! Every source line is scrubbed of C0/C1 control characters before spans are
+//! built, so a hostile page can't smuggle terminal escape sequences past ratatui.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use ratatui::layout::Alignment;
@@ -48,6 +51,27 @@ pub enum Element {
 /// Body text style — the default grey, the base every line builds on.
 fn body_style() -> Style {
     Style::default().fg(DEFAULT_FG)
+}
+
+/// Strip C0/C1 control characters (and DEL) from one source line before any
+/// span is built. Pages come from untrusted remote nodes — a raw ESC/CSI in
+/// the markup must never reach the terminal, not even inside a literal block.
+/// Tabs become a single space so words stay apart; there is no other
+/// legitimate use of a control char in micron source. Clean lines (the normal
+/// case) borrow through untouched.
+fn sanitize(line: &str) -> Cow<'_, str> {
+    if !line.chars().any(char::is_control) {
+        return Cow::Borrowed(line);
+    }
+    Cow::Owned(
+        line.chars()
+            .filter_map(|c| match c {
+                '\t' => Some(' '),
+                c if c.is_control() => None,
+                c => Some(c),
+            })
+            .collect(),
+    )
 }
 
 /// `(bg, fg)` for a section heading at `depth`, shading darker with depth —
@@ -137,6 +161,9 @@ fn render_line(
     walk: &mut Walk<'_>,
     width: u16,
 ) -> Line<'static> {
+    // Remote markup: drop terminal control chars before anything is emitted.
+    let line = sanitize(line);
+    let line = line.as_ref();
     // `= toggles a literal block; `\`=` inside one is an escaped literal marker.
     if line == "`=" {
         *literal = !*literal;
@@ -713,6 +740,31 @@ mod tests {
         // Between `= markers, control chars are shown as-is.
         let out = render("`=\n`!not bold`!\n`=");
         assert_eq!(text_of(&out[1]), "`!not bold`!");
+    }
+
+    #[test]
+    fn control_chars_are_stripped_from_body_text() {
+        // A raw ESC (or C1 CSI) in remote markup must never reach a span.
+        assert_eq!(
+            text_of(&render("a\u{1b}[31mb\u{9b}2Jc\u{7}")[0]),
+            "a[31mb2Jc"
+        );
+        // Tabs collapse to a space; DEL and stray CR are dropped.
+        assert_eq!(text_of(&render("a\tb\u{7f}c\rd")[0]), "a bcd");
+    }
+
+    #[test]
+    fn control_chars_are_stripped_inside_literal_blocks() {
+        // `= passes markup through verbatim, but not terminal control bytes.
+        let out = render("`=\n\u{1b}]0;owned\u{7}text\n`=");
+        assert_eq!(text_of(&out[1]), "]0;ownedtext");
+    }
+
+    #[test]
+    fn control_chars_are_stripped_from_link_labels_and_field_defaults() {
+        assert_eq!(text_of(&render("`[Cli\u{1b}ck`:/page/x.mu]")[0]), "Click");
+        let t = text_of(&render("`<12|user`al\u{1b}[31mice>")[0]);
+        assert!(t.contains("al[31mice") && !t.contains('\u{1b}'));
     }
 
     #[test]

@@ -113,7 +113,9 @@ fn lex_markup(
         }
         if b[pos..].starts_with(b"<![CDATA[") {
             let end = find(b, pos + 9, b"]]>").ok_or(XmlError::Malformed)?;
-            push(out, Token::Text(input[pos + 9..end].to_string()))?;
+            // CDATA skips entity expansion but not the control-char strip —
+            // it must not be a side door for raw escape bytes.
+            push(out, Token::Text(sanitize(&input[pos + 9..end])))?;
             return Ok(end + 3);
         }
         // DOCTYPE / ENTITY / anything else `<!…` — the XXE surface. Refuse it.
@@ -231,9 +233,11 @@ fn find(b: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
 /// entity is ever resolved** — an `&foo;` that is not one of the five recognised
 /// names is passed through literally rather than looked up, so a DTD-defined
 /// entity (the XXE vector) has nothing to expand even if one slipped through.
+/// The expanded result is [`sanitize`]d, so `&#27;`-style references cannot
+/// smuggle terminal escape bytes into remarks/callsigns.
 fn unescape(s: &str) -> Result<String, XmlError> {
     if !s.contains('&') {
-        return Ok(s.to_string());
+        return Ok(sanitize(s));
     }
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
@@ -267,7 +271,25 @@ fn unescape(s: &str) -> Result<String, XmlError> {
         rest = &tail[semi + 1..];
     }
     out.push_str(rest);
-    Ok(out)
+    Ok(sanitize(&out))
+}
+
+/// Strip C0/C1 control characters (and DEL) from decoded character data —
+/// applied *after* entity expansion, so neither a raw ESC byte nor a `&#27;`
+/// reference can smuggle a terminal escape sequence into text the TUI will
+/// draw (remarks, callsigns…). Whitespace controls become a plain space so
+/// multi-line remarks keep their word breaks.
+fn sanitize(s: &str) -> String {
+    if !s.chars().any(char::is_control) {
+        return s.to_string();
+    }
+    s.chars()
+        .filter_map(|c| match c {
+            '\t' | '\n' | '\r' => Some(' '),
+            c if c.is_control() => None,
+            c => Some(c),
+        })
+        .collect()
 }
 
 /// Resolve a numeric character reference body (`#NN` decimal or `#xHH` hex) to a
@@ -348,6 +370,29 @@ mod tests {
             Token::Empty { attrs, .. } => assert_eq!(attrs[0].1, "<>&\"'AB"),
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn strips_control_chars_from_text_and_attributes() {
+        // `&#27;`/`&#x1b;` (ESC) must never survive entity expansion — a CoT
+        // remark or callsign is drawn straight into the operator's terminal.
+        let toks = tokenize("<remarks>&#27;[31mownd&#x9b;X</remarks>").unwrap();
+        assert_eq!(toks[1], Token::Text("[31mowndX".into()));
+        let toks = tokenize("<contact callsign=\"A\u{1b}[2JB&#0;C\"/>").unwrap();
+        match &toks[0] {
+            Token::Empty { attrs, .. } => assert_eq!(attrs[0].1, "A[2JBC"),
+            other => panic!("{other:?}"),
+        }
+        // Raw C0/C1 bytes in plain text are stripped too; whitespace controls
+        // collapse to a space.
+        let toks = tokenize("<remarks>line one\nline\ttwo\u{7f}\u{85}</remarks>").unwrap();
+        assert_eq!(toks[1], Token::Text("line one line two".into()));
+    }
+
+    #[test]
+    fn cdata_is_not_a_control_char_side_door() {
+        let toks = tokenize("<remarks><![CDATA[a\u{1b}]0;title\u{7}b]]></remarks>").unwrap();
+        assert_eq!(toks[1], Token::Text("a]0;titleb".into()));
     }
 
     #[test]
