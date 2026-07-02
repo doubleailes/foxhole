@@ -115,7 +115,7 @@ fn lex_markup(
             let end = find(b, pos + 9, b"]]>").ok_or(XmlError::Malformed)?;
             // CDATA skips entity expansion but not the control-char strip —
             // it must not be a side door for raw escape bytes.
-            push(out, Token::Text(sanitize(&input[pos + 9..end])))?;
+            push(out, Token::Text(sanitize(input[pos + 9..end].to_string())))?;
             return Ok(end + 3);
         }
         // DOCTYPE / ENTITY / anything else `<!…` — the XXE surface. Refuse it.
@@ -237,7 +237,7 @@ fn find(b: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
 /// smuggle terminal escape bytes into remarks/callsigns.
 fn unescape(s: &str) -> Result<String, XmlError> {
     if !s.contains('&') {
-        return Ok(sanitize(s));
+        return Ok(sanitize(s.to_string()));
     }
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
@@ -271,17 +271,18 @@ fn unescape(s: &str) -> Result<String, XmlError> {
         rest = &tail[semi + 1..];
     }
     out.push_str(rest);
-    Ok(sanitize(&out))
+    Ok(sanitize(out))
 }
 
 /// Strip C0/C1 control characters (and DEL) from decoded character data —
 /// applied *after* entity expansion, so neither a raw ESC byte nor a `&#27;`
 /// reference can smuggle a terminal escape sequence into text the TUI will
 /// draw (remarks, callsigns…). Whitespace controls become a plain space so
-/// multi-line remarks keep their word breaks.
-fn sanitize(s: &str) -> String {
+/// multi-line remarks keep their word breaks. Takes the `String` by value so
+/// clean input (the normal case) passes through without another allocation.
+fn sanitize(s: String) -> String {
     if !s.chars().any(char::is_control) {
-        return s.to_string();
+        return s;
     }
     s.chars()
         .filter_map(|c| match c {
