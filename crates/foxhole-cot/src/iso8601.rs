@@ -10,6 +10,11 @@
 //! The civil-date arithmetic is Howard Hinnant's well-known
 //! `days_from_civil`/`civil_from_days` algorithms (public domain), which are
 //! exact for the proleptic Gregorian calendar and need no leap-table.
+//!
+//! The supported calendar range is years **0000..=9999** (CoT stamps carry
+//! 4-digit years): [`parse`] rejects anything outside it, and [`format`]
+//! saturates out-of-range epochs to the boundary — so `parse(&format(s))`
+//! always succeeds, and the calendar arithmetic can never overflow.
 
 /// Days from 1970-01-01 to the given civil date (Gregorian). Month is 1..=12,
 /// day 1..=31; out-of-range inputs are the caller's responsibility (validated in
@@ -131,9 +136,18 @@ fn split_offset(t: &str) -> Option<(&str, i64)> {
     Some((t, 0)) // no designator → assume UTC
 }
 
+/// Epoch-second bounds of the supported calendar range:
+/// `0000-01-01T00:00:00Z ..= 9999-12-31T23:59:59Z` (pinned by a unit test).
+const MIN_EPOCH: i64 = -62_167_219_200;
+const MAX_EPOCH: i64 = 253_402_300_799;
+
 /// Render Unix epoch seconds as a canonical CoT Zulu timestamp
 /// (`YYYY-MM-DDThh:mm:ss.000Z`). The `.000` keeps the shape ATAK emits.
+///
+/// Input is saturated to the year-0000..=9999 range [`parse`] accepts, so the
+/// result always round-trips (and never prints a 5-digit year).
 pub fn format(secs: i64) -> String {
+    let secs = secs.clamp(MIN_EPOCH, MAX_EPOCH);
     let days = secs.div_euclid(86_400);
     let tod = secs.rem_euclid(86_400);
     let (y, m, d) = civil_from_days(days);
@@ -203,6 +217,26 @@ mod tests {
         assert_eq!(parse("10000-01-01T00:00:00Z"), None);
         assert!(parse("9999-12-31T23:59:59Z").is_some());
         assert!(parse("0000-01-01T00:00:00Z").is_some());
+    }
+
+    #[test]
+    fn epoch_bounds_match_the_calendar_arithmetic() {
+        assert_eq!(MIN_EPOCH, days_from_civil(0, 1, 1) * 86_400);
+        assert_eq!(MAX_EPOCH, days_from_civil(9999, 12, 31) * 86_400 + 86_399);
+    }
+
+    #[test]
+    fn format_saturates_out_of_range_epochs_and_round_trips() {
+        // Extreme epochs clamp to the boundary instead of printing a 5-digit
+        // year that `parse` would then reject (or overflowing the arithmetic).
+        assert_eq!(format(i64::MAX), "9999-12-31T23:59:59.000Z");
+        assert_eq!(format(i64::MIN), "0000-01-01T00:00:00.000Z");
+        // Everything `format` emits must parse back.
+        assert_eq!(parse(&format(i64::MAX)), Some(MAX_EPOCH));
+        assert_eq!(parse(&format(i64::MIN)), Some(MIN_EPOCH));
+        // In-range values (including pre-1970 negatives) are untouched.
+        assert_eq!(format(-1), "1969-12-31T23:59:59.000Z");
+        assert_eq!(parse(&format(-1)), Some(-1));
     }
 
     #[test]
