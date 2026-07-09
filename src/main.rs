@@ -142,6 +142,12 @@ async fn run(
         terminal.draw(|frame| ui::render(frame, app))?;
 
         tokio::select! {
+            // `biased` makes branch order deterministic instead of pseudo-random:
+            // keyboard input is checked first every iteration, so operator
+            // keystrokes (emergency exit, flash messages) always win tactical
+            // precedence over a net_rx channel flooded with telemetry/CoT traffic.
+            biased;
+
             // --- Keyboard input -------------------------------------------------
             maybe_event = events.next() => match maybe_event {
                 Some(Ok(Event::Key(key))) => {
