@@ -153,9 +153,27 @@ async fn run(
                 Some(Ok(Event::Key(key))) => {
                     app.handle_key(key);
                     // Hand off anything the keystroke queued for transmission.
+                    // A bounded channel means `try_send` can fail if the network
+                    // task is jammed; never swallow that — a silently dropped
+                    // sitrep is worse than none, so tell the operator the pipe is
+                    // choked (or the task is gone) instead of vaporising the send.
                     if let Some(tx) = &outbound_tx {
                         while let Some(out) = app.outbound.pop_front() {
-                            let _ = tx.try_send(out);
+                            match tx.try_send(out) {
+                                Ok(()) => {}
+                                Err(mpsc::error::TrySendError::Full(out)) => {
+                                    app.push_log(format!(
+                                        "[SYS] [WRN] comms pipe choked — message #{} to {} NOT sent (queue full); retry",
+                                        out.id, out.peer
+                                    ));
+                                }
+                                Err(mpsc::error::TrySendError::Closed(out)) => {
+                                    app.push_log(format!(
+                                        "[SYS] [WRN] network task down — message #{} to {} NOT sent",
+                                        out.id, out.peer
+                                    ));
+                                }
+                            }
                         }
                     }
                     // Drain UI commands: persist a node change, then forward.
