@@ -44,6 +44,8 @@ The remainder of Section 1 is withheld under exemption (b)(█).
 
 ## 2. CAPABILITIES  ▓ APPROVED FOR RELEASE ▓
 
+[conversation interface](./images/conversation.png)
+
 - **Encrypted text traffic over Reticulum/LXMF** — peer-to-peer, no central
   ████████, no operator account, no ███████████.
 - **Tiered delivery doctrine:** `DIRECT → PROPAGATED → OPPORTUNISTIC`. The
@@ -87,6 +89,9 @@ The remainder of Section 1 is withheld under exemption (b)(█).
   by a BURN with everything else.
 
 Capabilities ██ through ██ are withheld. ████████████████████████████████████
+
+[map](./images/map.png)
+
 
 ---
 
