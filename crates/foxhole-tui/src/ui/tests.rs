@@ -64,8 +64,23 @@ fn system_lines_classified_by_keyword() {
     assert_eq!(sys_category("[SYS] inbound link established"), "LNK");
     assert_eq!(sys_category("[SYS] using existing RNS config"), "CFG");
     assert_eq!(sys_category("[SYS] something else entirely"), "SYS");
+    // An explicit secondary tag wins over the keyword heuristics — including the
+    // regression where a "NOT sent" warning would otherwise be demoted to OPS by
+    // the "sent" keyword.
+    assert_eq!(
+        sys_category("[SYS] [WRN] comms pipe choked — msg #2 to alpha held, retrying (queue full)"),
+        "WRN"
+    );
+    assert_eq!(
+        sys_category("[SYS] [ERR] network task down — msg #2 to alpha failed to send"),
+        "ERR"
+    );
     // `[SYS]` lines route through sys_category.
     assert_eq!(line_style("[SYS] delivered (direct)"), tag_style("DLV"));
+    assert_eq!(
+        line_style("[SYS] [WRN] comms pipe choked"),
+        tag_style("WRN")
+    );
 }
 
 #[test]
