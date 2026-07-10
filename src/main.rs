@@ -184,6 +184,14 @@ async fn run(
                 None => app.should_quit = true,
             },
 
+            // --- Cold-boot splash clock (only while the splash is up) -----------
+            // Ranked above net_rx so sustained inbound traffic (telemetry/CoT
+            // floods) can't perpetually starve it under `biased` and strand the
+            // UI on the splash screen; the `if` guard keeps it inert once running.
+            _ = splash_tick.tick(), if app.state == app::AppState::Splash => {
+                app.tick_splash();
+            },
+
             // --- Events from the network task -----------------------------------
             maybe_event = net_rx.recv() => {
                 // `None` => the sender was dropped (task ended); fall through
@@ -219,11 +227,6 @@ async fn run(
                     }
                     apply_net_event(app, ev);
                 }
-            },
-
-            // --- Cold-boot splash clock (only while the splash is up) -----------
-            _ = splash_tick.tick(), if app.state == app::AppState::Splash => {
-                app.tick_splash();
             },
         }
 

@@ -29,8 +29,8 @@ pub const DEFAULT_DIGITS: usize = 5;
 
 // 100 km square lettering: the column/row origin letter for each of the six
 // zone-cycle sets, and the ASCII bounds the I/O-skipping arithmetic clamps to.
-const SET_ORIGIN_COLUMN: [u8; 6] = [b'A', b'J', b'S', b'A', b'J', b'S'];
-const SET_ORIGIN_ROW: [u8; 6] = [b'A', b'F', b'A', b'F', b'A', b'F'];
+const SET_ORIGIN_COLUMN: [u8; 6] = *b"AJSAJS";
+const SET_ORIGIN_ROW: [u8; 6] = *b"AFAFAF";
 const LETTER_A: i32 = b'A' as i32;
 const LETTER_I: i32 = b'I' as i32;
 const LETTER_O: i32 = b'O' as i32;
