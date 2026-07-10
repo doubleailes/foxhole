@@ -283,6 +283,34 @@ impl App {
         }
     }
 
+    /// The transport pipe to the network task is full, so this queued message
+    /// couldn't be handed off. Return it to the *front* of the queue (keeping
+    /// its place and order) so the next drain retries it, and warn the operator
+    /// that comms are choked. The `[WRN]` tag marks a transient condition — the
+    /// message is held, not lost; the thread entry stays `Sending`, which is
+    /// accurate. A full pipe means everything behind it is stuck too, so the
+    /// caller should stop draining for now.
+    pub fn requeue_choked(&mut self, out: Outbound) {
+        self.push_log(format!(
+            "[SYS] [WRN] comms pipe choked — msg #{} to {} held, retrying (queue full)",
+            out.id, out.peer
+        ));
+        self.outbound.push_front(out);
+    }
+
+    /// The transport pipe is closed: the network task is gone, so this message
+    /// can never be delivered. Mark its thread entry `Failed` — otherwise it
+    /// sits in `Sending` forever, since only a `NetEvent::MsgStatus` (which the
+    /// dead task can no longer emit) would advance it — and tell the operator.
+    /// The `[ERR]` tag marks a hard failure; the message is dropped, not retried.
+    pub fn fail_dropped(&mut self, out: Outbound) {
+        self.push_log(format!(
+            "[SYS] [ERR] network task down — msg #{} to {} failed to send",
+            out.id, out.peer
+        ));
+        self.set_msg_status(out.id, MsgStatus::Failed);
+    }
+
     /// Discard the selected conversation's draft (title and body) without
     /// transmitting (Ctrl+X).
     pub fn purge(&mut self) {

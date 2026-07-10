@@ -1092,6 +1092,71 @@ fn set_msg_status_updates_matching_entry_and_marks_dirty() {
 }
 
 #[test]
+fn requeue_choked_returns_message_to_front_and_warns() {
+    let mut app = App::new();
+    // A message already waiting behind the choked one, to prove ordering.
+    let queued = Outbound {
+        id: 1,
+        peer: "later".to_string(),
+        title: String::new(),
+        body: "b".to_string(),
+        cot_xml: None,
+    };
+    app.outbound.push_back(queued.clone());
+    let choked = Outbound {
+        id: 2,
+        peer: "alpha".to_string(),
+        title: String::new(),
+        body: "a".to_string(),
+        cot_xml: None,
+    };
+
+    app.requeue_choked(choked.clone());
+
+    // Held, not lost: back at the front so it retries first, ahead of `queued`.
+    assert_eq!(app.outbound.front(), Some(&choked));
+    assert_eq!(app.outbound.back(), Some(&queued));
+    // Operator warned, tagged so the TUI styles it as a warning (not OPS).
+    assert!(
+        app.syslog
+            .last()
+            .is_some_and(|e| e.text.contains("[WRN]") && e.text.contains("choked")),
+        "expected a [WRN] choked line, got {:?}",
+        app.syslog.last().map(|e| &e.text)
+    );
+}
+
+#[test]
+fn fail_dropped_marks_entry_failed_and_errors() {
+    let mut app = App::new();
+    app.conversations[0].draft = "sitrep".to_string();
+    app.handle_key(ctrl('s')); // echoes the entry (Sending) + queues the Outbound
+    let out = app
+        .outbound
+        .pop_front()
+        .expect("transmit queues an outbound");
+    assert_eq!(
+        app.conversations[0].messages.last().unwrap().status,
+        MsgStatus::Sending
+    );
+
+    app.fail_dropped(out);
+
+    // No longer stuck in Sending — the dead task can't advance it, so we do.
+    assert_eq!(
+        app.conversations[0].messages.last().unwrap().status,
+        MsgStatus::Failed
+    );
+    assert!(
+        app.syslog
+            .last()
+            .is_some_and(|e| e.text.contains("[ERR]") && e.text.contains("network task down")),
+        "expected an [ERR] network-down line, got {:?}",
+        app.syslog.last().map(|e| &e.text)
+    );
+}
+
+#[test]
 fn trust_next_cycles_and_wraps() {
     assert_eq!(Trust::Unknown.next(), Trust::Trusted);
     assert_eq!(Trust::Trusted.next(), Trust::Untrusted);

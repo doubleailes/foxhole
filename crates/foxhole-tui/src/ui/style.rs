@@ -149,8 +149,18 @@ pub(super) fn line_style(text: &str) -> Style {
     }
 }
 
-/// Classify a system log line into a tactical category by keyword.
+/// Classify a system log line into a tactical category. An explicit secondary
+/// tag (`[SYS] [WRN] …`, `[SYS] [ERR] …`) wins outright — the emitter has
+/// already stated the severity, so honour it rather than second-guessing from
+/// keywords (e.g. a "…NOT sent" warning must not be demoted to OPS by the
+/// "sent" heuristic below). Otherwise fall back to keyword classification.
 pub(super) fn sys_category(text: &str) -> &'static str {
+    if text.contains("[ERR]") {
+        return "ERR";
+    }
+    if text.contains("[WRN]") {
+        return "WRN";
+    }
     let t = text.to_ascii_lowercase();
     if t.contains("delivered") {
         "DLV"
