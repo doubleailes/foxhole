@@ -225,13 +225,14 @@ the full annex, classification ████████████, not include
 - Status is **experimental**. Sections ██–██ describe known ████████.
 - Tied to your identity: lose the identity file, lose access to sealed history.
 - No telemetry, no analytics, no ████████. By design.
-- **DIRECT delivery is not acknowledged** on the currently pinned mesh stack:
-  with `rsReticulum` rev `3b91b36`, a link-delivered message's proof is signed
-  with the wrong key and rejected by the sender, so it never reaches
-  `[delivered]` (it may retry or fall back to propagation). A *deliverability*
-  gap, not a confidentiality one — tracked in
-  `docs/rsreticulum-delivery-proof-issue.md`, resolved by pinning a patched
-  revision. See `SECURITY.md` for the full threat model.
+- **DIRECT delivery acknowledgement** was broken on every tagged `rsReticulum`
+  release up to and including v1.1.0: link-packet proofs were validated against
+  the peer's transient key regardless of that peer's role, so a responder's
+  correctly identity-signed proof was rejected and the message never reached
+  `[delivered]`. A *deliverability* gap, not a confidentiality one. Fixed
+  upstream in `rns-link` ("enforce role-safe packet proofs") and picked up by the
+  tag pinned here — history in `docs/rsreticulum-delivery-proof-issue.md`. See
+  `SECURITY.md` for the full threat model.
 
 ---
 
