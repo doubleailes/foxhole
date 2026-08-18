@@ -175,13 +175,18 @@ and `foxhole-cot` (inbound intel decode). Three modules:
 
 Off by default (the build stays dependency-light and offline, with seeded demo
 peers). `--features net` pulls the `rns-*` (Reticulum) and `lxmf-core` crates as
-**git deps pinned by commit** from `github.com/doubleailes/rsReticulum` and
-`…/rsLXMF` (both AGPL-3.0-or-later). `rsLXMF`'s own `rns-*` deps use sibling-path
-references, so a root `[patch."…/rsLXMF"]` redirects them to the same pinned
-`rsReticulum` revision (cargo unifies the stack on one source). The pinned
-`rev`s live once in the root `[workspace.dependencies]` (member crates inherit
+**git deps pinned by release tag** (currently `v1.2.0`, which is also the floor:
+it is the first release carrying the role-safe packet-proof fix DIRECT delivery
+needs — see the rationale block in the root `Cargo.toml` and
+`docs/rsreticulum-delivery-proof-issue.md`) from
+`github.com/ratspeak/rsReticulum` and `…/rsLXMF` (both AGPL-3.0-or-later).
+`rsLXMF`'s own `rns-*` deps use sibling-path references, so a root
+`[patch."…/rsLXMF"]` redirects them to the same pinned `rsReticulum` tag (cargo
+unifies the stack on one source) — note the patch key is the *rsLXMF* URL, the
+source cargo would otherwise search for those path deps. The pinned
+tags live once in the root `[workspace.dependencies]` (member crates inherit
 them with `dep.workspace = true`); bump by editing those (and the matching
-`[patch]` revs, which can't inherit) in the root `Cargo.toml`. The integration
+`[patch]` tags, which can't inherit) in the root `Cargo.toml`. The integration
 mirrors the Ratspeak reference client — see `docs/lxmf-integration.md` for the
 full binding.
 

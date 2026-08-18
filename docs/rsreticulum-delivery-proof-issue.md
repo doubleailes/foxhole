@@ -1,108 +1,75 @@
-# LXMF DIRECT delivery proof is signed with the identity key instead of the link key
+# LXMF DIRECT delivery proofs were rejected (fixed upstream)
 
-## Summary
+**Status: resolved.** Reported as
+[ratspeak/rsReticulum#23](https://github.com/ratspeak/rsReticulum/issues/23),
+fixed upstream in `f7ae0274c` ("link: enforce role-safe packet proofs") and
+released in `v1.2.0`, the tag this workspace pins. Kept as a record
+because the resolution corrects the model we had been working from.
 
-When application data arrives over an established link (the LXMF **DIRECT**
-delivery path), `LinkManager` replies with a delivery proof signed with the
-**identity** key. The initiating peer validates link-packet proofs against the
-**link's ephemeral key** advertised at handshake (`peer_ed25519_pub`), not the
-identity key, so the proof is rejected. The sender therefore **never confirms
-delivery** — the message stays unproven indefinitely.
+## Symptom
 
-`prove_packet_with_link_key` already exists and is used on every other proof
-path; only this one path was missed.
+A message delivered over an established link (the LXMF **DIRECT** path) never
+reached `[delivered]`. The payload arrived and was forwarded correctly — only the
+acknowledgement was unverifiable, so the sender kept the message unproven and
+either retried or fell back to propagation. A deliverability bug, not a
+confidentiality one.
 
-## Affected version
+Present on every tagged release up to and including `v1.1.0`.
 
-- Repo: `rsReticulum`
-- Commit: `3b91b36f3ec7b3769327e0dd06003875953e81ee` (`main`, v1.0.1)
-- File: `crates/rns-runtime/src/link_manager.rs`
+## Actual root cause
 
-## Impact
+Link packet proofs are **role-asymmetric**, mirroring upstream Python Reticulum:
 
-- **Direct (link) LXMF delivery is never acknowledged.** A sender that delivers
-  opportunistically/over a link gets no proof back, so the message never reaches
-  the `Delivered` state and senders may needlessly retry or fall back to
-  propagation.
-- Affects any embedder that relies on `LinkManager` to answer inbound link data
-  with a valid proof (e.g. a delivery-destination node receiving DIRECT LXMF).
+- an **initiator** signs with its transient `LINKREQUEST` key;
+- a **responder** signs with the destination **identity** key;
+- each side validates against the key that corresponds to its *peer's* role.
 
-## Steps to reproduce
+`Link::validate_packet_proof` ignored that distinction: it verified every proof
+against `peer_ed25519_pub` — the transient key — and returned `false` when that
+key was absent. So a responder's spec-correct identity-signed proof failed
+validation at the initiator, every time.
 
-1. Node A opens a link to node B's `lxmf.delivery` destination and sends an LXMF
-   message as link application data.
-2. B decrypts and forwards the payload (works), then emits a delivery proof.
-3. A receives the proof and validates it against B's **link** public key
-   (`Link::validate_packet_proof` → `peer_ed25519_pub`).
-4. **Observed:** validation fails (proof was signed with B's identity key); A
-   records no delivery proof.
-   **Expected:** the proof validates and A marks the message delivered.
+FoxHole is the **responder** when receiving inbound LXMF (a peer opens a link to
+our `lxmf.delivery` destination), and the initiator when sending. The failure was
+visible to us in the sending direction.
 
-## Root cause
+## What we got wrong
 
-In `LinkManager`, the inbound-link-data handler's `_ =>` arm ("Application data
-on a link (LXMF DIRECT)") signs the proof with the identity key
-(`prove_packet(&pkt_hash, &signing_key)`), with a fallible identity-sign
-fallback. Both sign with the identity key, which the peer does not check for link
-packets.
+Our original report blamed the *signing* side — `LinkManager`'s DIRECT arm
+(`crates/rns-runtime/src/link_manager.rs`) signing with the identity key — and
+proposed replacing it with `prove_packet_with_link_key`, since every other proof
+path in that file already used the link key.
 
-Every other proof emission in the same file already uses the link key
-(`prove_packet_with_link_key`), e.g. around lines `888`, `3551`, `3620`, `3738` —
-this DIRECT path (≈ line `1744`) is the outlier.
+That was the wrong side of the wire. The identity-key signing there was correct
+*for a responder*; the uniformity we observed in the rest of the file reflected
+those paths being initiator-side, not a convention the DIRECT arm was violating.
+Had the proposed patch landed, FoxHole would have signed responder proofs with the
+transient key and broken against spec-correct peers.
 
-## Proposed fix
+Lesson worth keeping: "this one call site disagrees with its neighbours" is a
+weaker signal than it looks when the call sites differ by *role*. The validating
+side is what defines correctness for a signature, and that is where we should
+have started reading.
 
-Sign the proof with the link's ephemeral key, like the other paths. The
-identity-key locals in this arm become unused and can be removed.
+## The upstream fix
 
-```diff
-             _ => {
-                 // Application data on a link (LXMF DIRECT).
--                let identity_key_bytes = self.identity_key.as_ref().map(|key| key.to_bytes());
--                let identity_for_signing = if identity_key_bytes.is_none() {
--                    self.identity.clone()
--                } else {
--                    None
--                };
-                 if let Some(active) = self.active_links.get_mut(&link_id) {
-                     active.link.record_inbound();
-                     active.link.record_rx(data.len());
-                     if let Ok(plaintext) = active.link.decrypt(data) {
-                         // …forward plaintext…
+Entirely within `crates/rns-link/src/link.rs` — `link_manager.rs`, the file our
+diff targeted, was not touched:
 
-                         // Link proofs are unencrypted (Packet.py:198-200).
-                         let pkt_hash =
-                             rns_wire::hash::packet_hash(raw, header.flags.header_type);
--                        let proof = if let Some(key_bytes) = identity_key_bytes {
--                            let signing_key = Ed25519PrivateKey::from_bytes(&key_bytes);
--                            active.link.prove_packet(&pkt_hash, &signing_key)
--                        } else if let Some(identity) = identity_for_signing.as_ref() {
--                            active
--                                .link
--                                .prove_packet_with_fallible(&pkt_hash, |hash| identity.sign(hash))
--                        } else {
--                            Err(rns_link::encryption::LinkCryptoError::EncryptionFailed)
--                        };
-+                        // Delivery proofs MUST be signed with the link's ephemeral
-+                        // key: the peer validates against the key advertised at
-+                        // handshake (`peer_ed25519_pub`, see
-+                        // `Link::validate_packet_proof`), not the identity key —
-+                        // otherwise the sender never confirms delivery.
-+                        let proof = active.link.prove_packet_with_link_key(&pkt_hash);
-                         match proof {
-                             Ok(proof_data) => { /* …pack + send LinkProof… */ }
-                             Err(_) => { /* …warn… */ }
-                         }
-                     }
-                 }
-             }
-```
+- a `LinkRole` enum (`Initiator` / `Responder`) with `Link::role()`;
+- `peer_ed25519_pub` replaced by `peer_packet_proof_key`, the role-dependent key
+  used to verify a peer's proofs, alongside a separate
+  `responder_identity_signing_key`;
+- `prove_packet_with_local_signer` signs with the one key the local role permits,
+  with no role-incompatible fallback, and `prove_responder_packet_with` rejects an
+  initiator caller with `PacketProofError::WrongRole`;
+- `validate_peer_packet_proof` verifies against the role-dependent peer key.
 
-## Notes
+## Consequences for this workspace
 
-- This is the v1.0.1 forward-port of a fix already validated on the 0.9.3 line
-  (branch `fix_deliver_packet`, commit `b6ec454` "fix delivery emission packet").
-  That branch predates the v1.0.1 API changes, so the fix is re-applied here
-  against current `main` rather than rebased.
-- No new API is required — `Link::prove_packet_with_link_key` already exists
-  (`crates/rns-link/src/link.rs`).
+- **`v1.2.0` is the pin floor.** It is the first `rsReticulum` release containing
+  `f7ae0274c`; anything at or below `v1.1.0` reintroduces the bug. There was a
+  brief window where the only tag carrying the fix was the `ratspeak-v1.0.26n`
+  app pre-release; `v1.2.0` superseded it, so a plain release tag is enough now.
+- Bumping to `v1.2.0` needed no changes on our side — the role handling is
+  internal to `rns-link`, and FoxHole never touched the proof API directly.

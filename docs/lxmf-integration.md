@@ -22,20 +22,20 @@ at `../rsReticulum` and `../rsLXMF`.
 Ratspeak is a Cargo workspace; **all** Reticulum/LXMF binding lives in one member
 crate, `ratspeak-runtime` (the others are UI/db/tauri). It path-depends the
 libraries as sibling checkouts. FoxHole binds the same library surface but pulls
-the crates from git, pinned by commit (behind the `net` feature):
+the crates from git, pinned by release tag (behind the `net` feature):
 
 ```toml
-# FoxHole Cargo.toml — net-only deps, pinned by rev
-rns-crypto    = { git = "https://github.com/doubleailes/rsReticulum", rev = "<rev>", optional = true }
-# …rns-wire / rns-identity / rns-transport / rns-interface / rns-runtime, same rev…
-lxmf-core     = { git = "https://github.com/doubleailes/rsLXMF",      rev = "<rev>", optional = true }
+# FoxHole Cargo.toml — net-only deps, pinned by tag
+rns-crypto    = { git = "https://github.com/ratspeak/rsReticulum", tag = "v1.2.0" }
+# …rns-wire / rns-identity / rns-transport / rns-interface / rns-runtime, same tag…
+lxmf-core     = { git = "https://github.com/ratspeak/rsLXMF",      tag = "v1.2.0" }
 ```
 
 All crates are **edition 2024, tokio-based, AGPL-3.0**. `rsLXMF` itself depends on
 `rsReticulum` via `[workspace.dependencies]` using sibling-checkout *paths*
 (`../rsReticulum/...`), which don't exist when `rsLXMF` is fetched from git — so
 FoxHole's root manifest carries a `[patch."…/rsLXMF"]` block redirecting those
-`rns-*` names to the same pinned `rsReticulum` rev, unifying the whole stack on
+`rns-*` names to the same pinned `rsReticulum` tag, unifying the whole stack on
 one source. (Ratspeak's sibling-path layout avoids the patch by keeping both
 repos side-by-side on disk.)
 

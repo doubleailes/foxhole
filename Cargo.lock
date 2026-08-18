@@ -978,13 +978,14 @@ dependencies = [
 
 [[package]]
 name = "lxmf-core"
-version = "1.0.1"
-source = "git+https://github.com/doubleailes/rsLXMF?rev=90e44916a403cfea2446aa945275f42233fd0169#90e44916a403cfea2446aa945275f42233fd0169"
+version = "1.2.0"
+source = "git+https://github.com/ratspeak/rsLXMF?tag=v1.2.0#d58ea180118c0cb5f92692bfd96337193ef8bb91"
 dependencies = [
  "base64",
  "bytes",
  "hex",
  "rand",
+ "rmp",
  "rmp-serde",
  "rmpv",
  "rns-crypto",
@@ -998,6 +999,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "unicode-normalization",
 ]
 
 [[package]]
@@ -1586,8 +1588,8 @@ dependencies = [
 
 [[package]]
 name = "rns-crypto"
-version = "1.0.1"
-source = "git+https://github.com/doubleailes/rsReticulum?rev=3b91b36f3ec7b3769327e0dd06003875953e81ee#3b91b36f3ec7b3769327e0dd06003875953e81ee"
+version = "1.2.0"
+source = "git+https://github.com/ratspeak/rsReticulum?tag=v1.2.0#dc6bc4ee82daf66b3b40386f9777dbe62b08fec2"
 dependencies = [
  "aes",
  "cbc",
@@ -1605,8 +1607,8 @@ dependencies = [
 
 [[package]]
 name = "rns-identity"
-version = "1.0.1"
-source = "git+https://github.com/doubleailes/rsReticulum?rev=3b91b36f3ec7b3769327e0dd06003875953e81ee#3b91b36f3ec7b3769327e0dd06003875953e81ee"
+version = "1.2.0"
+source = "git+https://github.com/ratspeak/rsReticulum?tag=v1.2.0#dc6bc4ee82daf66b3b40386f9777dbe62b08fec2"
 dependencies = [
  "hex",
  "rand",
@@ -1615,26 +1617,30 @@ dependencies = [
  "rns-crypto",
  "rns-wire",
  "serde",
+ "serde_bytes",
  "thiserror 2.0.18",
  "tracing",
+ "windows-sys 0.61.2",
  "zeroize",
 ]
 
 [[package]]
 name = "rns-interface"
-version = "1.0.1"
-source = "git+https://github.com/doubleailes/rsReticulum?rev=3b91b36f3ec7b3769327e0dd06003875953e81ee#3b91b36f3ec7b3769327e0dd06003875953e81ee"
+version = "1.2.0"
+source = "git+https://github.com/ratspeak/rsReticulum?tag=v1.2.0#dc6bc4ee82daf66b3b40386f9777dbe62b08fec2"
 dependencies = [
  "bytes",
  "hex",
  "if-addrs",
  "jni",
  "libc",
+ "md-5",
  "objc2",
  "objc2-core-bluetooth",
  "objc2-foundation",
  "rand",
  "rns-crypto",
+ "rns-identity",
  "rns-transport",
  "rns-wire",
  "serde",
@@ -1648,8 +1654,8 @@ dependencies = [
 
 [[package]]
 name = "rns-link"
-version = "1.0.1"
-source = "git+https://github.com/doubleailes/rsReticulum?rev=3b91b36f3ec7b3769327e0dd06003875953e81ee#3b91b36f3ec7b3769327e0dd06003875953e81ee"
+version = "1.2.0"
+source = "git+https://github.com/ratspeak/rsReticulum?tag=v1.2.0#dc6bc4ee82daf66b3b40386f9777dbe62b08fec2"
 dependencies = [
  "hex",
  "rand",
@@ -1664,8 +1670,8 @@ dependencies = [
 
 [[package]]
 name = "rns-protocol"
-version = "1.0.1"
-source = "git+https://github.com/doubleailes/rsReticulum?rev=3b91b36f3ec7b3769327e0dd06003875953e81ee#3b91b36f3ec7b3769327e0dd06003875953e81ee"
+version = "1.2.0"
+source = "git+https://github.com/ratspeak/rsReticulum?tag=v1.2.0#dc6bc4ee82daf66b3b40386f9777dbe62b08fec2"
 dependencies = [
  "bzip2",
  "hex",
@@ -1681,8 +1687,8 @@ dependencies = [
 
 [[package]]
 name = "rns-runtime"
-version = "1.0.1"
-source = "git+https://github.com/doubleailes/rsReticulum?rev=3b91b36f3ec7b3769327e0dd06003875953e81ee#3b91b36f3ec7b3769327e0dd06003875953e81ee"
+version = "1.2.0"
+source = "git+https://github.com/ratspeak/rsReticulum?tag=v1.2.0#dc6bc4ee82daf66b3b40386f9777dbe62b08fec2"
 dependencies = [
  "bytes",
  "hex",
@@ -1708,8 +1714,8 @@ dependencies = [
 
 [[package]]
 name = "rns-transport"
-version = "1.0.1"
-source = "git+https://github.com/doubleailes/rsReticulum?rev=3b91b36f3ec7b3769327e0dd06003875953e81ee#3b91b36f3ec7b3769327e0dd06003875953e81ee"
+version = "1.2.0"
+source = "git+https://github.com/ratspeak/rsReticulum?tag=v1.2.0#dc6bc4ee82daf66b3b40386f9777dbe62b08fec2"
 dependencies = [
  "bytes",
  "hex",
@@ -1728,8 +1734,8 @@ dependencies = [
 
 [[package]]
 name = "rns-wire"
-version = "1.0.1"
-source = "git+https://github.com/doubleailes/rsReticulum?rev=3b91b36f3ec7b3769327e0dd06003875953e81ee#3b91b36f3ec7b3769327e0dd06003875953e81ee"
+version = "1.2.0"
+source = "git+https://github.com/ratspeak/rsReticulum?tag=v1.2.0#dc6bc4ee82daf66b3b40386f9777dbe62b08fec2"
 dependencies = [
  "rns-crypto",
  "sha2",
@@ -2129,6 +2135,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e1c906769ad99c88eaa54e728060edef082f8e358ff32030cb7c7d315e81109"
 
 [[package]]
+name = "tinyvec"
+version = "1.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bb4ebadaa0af04fab11ae01eb5f9fdb5f9c5b875506e210e71c07873528baa7f"
+dependencies = [
+ "tinyvec_macros",
+]
+
+[[package]]
+name = "tinyvec_macros"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
+
+[[package]]
 name = "tokio"
 version = "1.52.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2215,6 +2236,15 @@ name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
+
+[[package]]
+name = "unicode-normalization"
+version = "0.1.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5fd4f6878c9cb28d874b009da9e8d183b5abc80117c40bbd187a1fde336be6e8"
+dependencies = [
+ "tinyvec",
+]
 
 [[package]]
 name = "unicode-segmentation"

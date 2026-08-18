@@ -29,9 +29,9 @@ authors = ["Philippe Llerena <charlesbrenten@hotmail.com>"]
 repository = "https://github.com/doubleailes/foxhole"
 
 # Single source of truth for every shared dependency: versions and the pinned
-# git revs live here, and member manifests inherit with `dep.workspace = true`
+# git tags live here, and member manifests inherit with `dep.workspace = true`
 # (adding `features`/`optional` locally only where needed). Bumping a version or
-# a Reticulum/LXMF rev is a one-file edit here (plus the matching `[patch]` revs
+# a Reticulum/LXMF tag is a one-file edit here (plus the matching `[patch]` tags
 # below — `[patch]` entries cannot inherit, a Cargo limitation).
 [workspace.dependencies]
 # --- FoxHole's own layers (member crates) -------------------------------------
@@ -64,14 +64,19 @@ rmpv = "1.3"
 
 # --- Live-protocol git deps (consumed only by foxhole-net, behind `net`) ------
 # LXMF messaging over Reticulum, and the Reticulum crates it builds on, pinned
-# by commit for reproducibility (an AGPL combined work). The `[patch]` block at
-# the bottom redirects rsLXMF's sibling-path `rns-*` deps to this same rev.
-lxmf-core     = { git = "https://github.com/doubleailes/rsLXMF",      rev = "90e44916a403cfea2446aa945275f42233fd0169" }
-rns-crypto    = { git = "https://github.com/doubleailes/rsReticulum", rev = "3b91b36f3ec7b3769327e0dd06003875953e81ee" }
-rns-wire      = { git = "https://github.com/doubleailes/rsReticulum", rev = "3b91b36f3ec7b3769327e0dd06003875953e81ee" }
-rns-identity  = { git = "https://github.com/doubleailes/rsReticulum", rev = "3b91b36f3ec7b3769327e0dd06003875953e81ee" }
-rns-transport = { git = "https://github.com/doubleailes/rsReticulum", rev = "3b91b36f3ec7b3769327e0dd06003875953e81ee" }
-rns-runtime   = { git = "https://github.com/doubleailes/rsReticulum", rev = "3b91b36f3ec7b3769327e0dd06003875953e81ee" }
+# by tag for reproducibility (an AGPL combined work). The `[patch]` block at the
+# bottom redirects rsLXMF's sibling-path `rns-*` deps to this same tag.
+#
+# Floor: v1.2.0 is the first rsReticulum *release* carrying the role-safe
+# packet-proof fix (`f7ae0274c`), without which DIRECT delivery is never
+# acknowledged — see docs/rsreticulum-delivery-proof-issue.md. Do not pin back
+# below it.
+lxmf-core     = { git = "https://github.com/ratspeak/rsLXMF",      tag = "v1.2.0" }
+rns-crypto    = { git = "https://github.com/ratspeak/rsReticulum", tag = "v1.2.0" }
+rns-wire      = { git = "https://github.com/ratspeak/rsReticulum", tag = "v1.2.0" }
+rns-identity  = { git = "https://github.com/ratspeak/rsReticulum", tag = "v1.2.0" }
+rns-transport = { git = "https://github.com/ratspeak/rsReticulum", tag = "v1.2.0" }
+rns-runtime   = { git = "https://github.com/ratspeak/rsReticulum", tag = "v1.2.0" }
 
 [dependencies]
 # --- FoxHole's own layers (workspace member crates) ---------------------------
@@ -126,14 +131,16 @@ net = [
 
 # `rsLXMF`'s crates depend on the `rns-*` libraries via sibling-checkout paths
 # (`../rsReticulum/...`), which don't exist when `rsLXMF` is fetched from git.
-# Redirect those to the same pinned `rsReticulum` revision so cargo can unify the
-# whole stack on one Reticulum source. (Only consulted under `--features net`.)
-[patch."https://github.com/doubleailes/rsLXMF"]
-rns-crypto    = { git = "https://github.com/doubleailes/rsReticulum", rev = "3b91b36f3ec7b3769327e0dd06003875953e81ee" }
-rns-wire      = { git = "https://github.com/doubleailes/rsReticulum", rev = "3b91b36f3ec7b3769327e0dd06003875953e81ee" }
-rns-identity  = { git = "https://github.com/doubleailes/rsReticulum", rev = "3b91b36f3ec7b3769327e0dd06003875953e81ee" }
-rns-link      = { git = "https://github.com/doubleailes/rsReticulum", rev = "3b91b36f3ec7b3769327e0dd06003875953e81ee" }
-rns-protocol  = { git = "https://github.com/doubleailes/rsReticulum", rev = "3b91b36f3ec7b3769327e0dd06003875953e81ee" }
-rns-transport = { git = "https://github.com/doubleailes/rsReticulum", rev = "3b91b36f3ec7b3769327e0dd06003875953e81ee" }
-rns-runtime   = { git = "https://github.com/doubleailes/rsReticulum", rev = "3b91b36f3ec7b3769327e0dd06003875953e81ee" }
-rns-interface = { git = "https://github.com/doubleailes/rsReticulum", rev = "3b91b36f3ec7b3769327e0dd06003875953e81ee" }
+# Redirect those to the same pinned `rsReticulum` tag so cargo can unify the
+# whole stack on one Reticulum source. The patch key must be the *source being
+# replaced* — the rsLXMF git URL, since that is where cargo looks for those
+# path deps. (Only consulted under `--features net`.)
+[patch."https://github.com/ratspeak/rsLXMF"]
+rns-crypto    = { git = "https://github.com/ratspeak/rsReticulum", tag = "v1.2.0" }
+rns-wire      = { git = "https://github.com/ratspeak/rsReticulum", tag = "v1.2.0" }
+rns-identity  = { git = "https://github.com/ratspeak/rsReticulum", tag = "v1.2.0" }
+rns-link      = { git = "https://github.com/ratspeak/rsReticulum", tag = "v1.2.0" }
+rns-protocol  = { git = "https://github.com/ratspeak/rsReticulum", tag = "v1.2.0" }
+rns-transport = { git = "https://github.com/ratspeak/rsReticulum", tag = "v1.2.0" }
+rns-runtime   = { git = "https://github.com/ratspeak/rsReticulum", tag = "v1.2.0" }
+rns-interface = { git = "https://github.com/ratspeak/rsReticulum", tag = "v1.2.0" }

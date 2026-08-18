@@ -334,7 +334,10 @@ async fn run_inner(
         Some(link_signing_key),
     );
     let (inbound_raw_tx, mut inbound_raw_rx) = mpsc::channel::<Vec<u8>>(256);
-    let (link_packet_tx, mut link_packet_rx) = mpsc::channel::<(Vec<u8>, [u8; 16])>(256);
+    // Unbounded because `set_link_packet_channel` demands it: the link manager
+    // pushes decrypted link data from inside its own select loop and cannot park
+    // on a full queue without stalling every other link.
+    let (link_packet_tx, mut link_packet_rx) = mpsc::unbounded_channel::<(Vec<u8>, [u8; 16])>();
     let (resource_tx, mut resource_rx) = mpsc::channel::<(Vec<u8>, [u8; 16])>(64);
     let (link_up_tx, mut link_up_rx) = mpsc::channel::<[u8; 16]>(64);
     let (link_ident_tx, mut link_ident_rx) = mpsc::channel::<([u8; 16], [u8; 16])>(64);
@@ -510,7 +513,7 @@ async fn run_inner(
                         if let Some(h) = msg.hash {
                             tracker.ids.insert(h, out.id);
                         }
-                        router.send(msg);
+                        route(&mut router, events, msg).await;
                         dispatch(&mut router, &mut link_delivery, &known, &hops, &mut last_path_request, &mut tracker, &transport, events).await;
                     }
                     Err(e) => {
@@ -537,7 +540,7 @@ async fn run_inner(
                     NetCommand::CancelSync => {
                         // Drop the pop-up at once and stop re-asserting it; the
                         // client finishes/aborts in the background (its own timeout).
-                        if syncing || sync_phase(prop_client.state).is_some() {
+                        if syncing || sync_phase(prop_client.state()).is_some() {
                             sync_suppressed = true;
                             syncing = false;
                             let _ = events.send(NetEvent::Sync(None)).await;
@@ -617,7 +620,7 @@ async fn run_inner(
                     deliver_inbound(events, "propagation", data.len(), decoded).await;
                 }
                 // Drive the sync-progress pop-up from the client's live state.
-                let phase = sync_phase(prop_client.state);
+                let phase = sync_phase(prop_client.state());
                 match phase {
                     // Operator dismissed this run: stay quiet until it winds down.
                     Some(_) if sync_suppressed => {}
@@ -1003,7 +1006,7 @@ async fn answer_telemetry_request(
     match build_telemetry_reply(identity, lxmf_hash, msg.source_hash, pos.lat, pos.lon) {
         Ok(reply) => {
             let dest = hex::encode(reply.destination_hash);
-            router.send(reply);
+            route(router, events, reply).await;
             dispatch(
                 router,
                 link_delivery,
@@ -1331,7 +1334,7 @@ async fn requeue_after_path_request(
             )))
             .await;
     }
-    router.send(message);
+    route(router, events, message).await;
 }
 
 /// Insert a learned identity, flagging the cache dirty only when it changed (so
@@ -1369,6 +1372,21 @@ fn save_known(path: &Path, known: &KnownKeys) -> std::io::Result<()> {
         s.push_str(&format!("{dest} {}\n", hex::encode(pk)));
     }
     foxhole_core::storage::atomic_write(path, s.as_bytes())
+}
+
+/// Queue a message on the router, reporting an immediate routing rejection.
+///
+/// `try_send` refuses a message it cannot route at all — currently a `Propagated`
+/// send with no propagation node configured, or a failed ticket preparation — and
+/// has already marked it failed and fired its callback before returning. So there
+/// is nothing to retry here; the operator just needs to see why it never left,
+/// instead of the silent drop the deprecated `send` gave us.
+async fn route(router: &mut LxmRouter, events: &mpsc::Sender<NetEvent>, message: LxMessage) {
+    if let Err(e) = router.try_send(message) {
+        let _ = events
+            .send(NetEvent::Sys(format!("[ERR] not routable: {e}")))
+            .await;
+    }
 }
 
 /// Drain the router's outbound queue and act on each decision. Direct messages
@@ -1613,7 +1631,7 @@ async fn handle_delivery_result(
                     )))
                     .await;
                 message.method = DeliveryMethod::Propagated;
-                router.send(message);
+                route(router, events, message).await;
             } else {
                 let _ = events
                     .send(NetEvent::Sys(format!(
@@ -1703,7 +1721,7 @@ async fn try_sync(
             .await;
         return;
     };
-    if prop_client.state != PropagationClientState::Idle {
+    if prop_client.state() != PropagationClientState::Idle {
         return; // a sync is already running
     }
     if known.contains_key(&hex::encode(node)) {
@@ -1761,7 +1779,7 @@ async fn send_opportunistic(
                     destination_hash: dest_hash,
                 })
                 .await;
-            router.send(message); // retried by a later tick once the key arrives
+            route(router, events, message).await; // retried by a later tick once the key arrives
             let _ = events
                 .send(NetEvent::Sys(format!(
                     "[SYS] no key for {} yet — requested path, will retry",
