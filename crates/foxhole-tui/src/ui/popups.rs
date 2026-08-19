@@ -170,10 +170,10 @@ pub(super) fn render_intel_review_popup(frame: &mut Frame, app: &App, review: &I
         ),
         Line::raw(""),
     ];
-    if app.intel_staged.is_empty() {
+    if app.intel.staged.is_empty() {
         lines.push(Line::styled("  (nothing staged)", base_style()));
     } else {
-        for (i, r) in app.intel_staged.iter().enumerate() {
+        for (i, r) in app.intel.staged.iter().enumerate() {
             let sel = i == review.selected;
             let lead = if sel { "\u{25b6} " } else { "  " }; // ▶
             let source = r.source.get(..8).unwrap_or(&r.source);

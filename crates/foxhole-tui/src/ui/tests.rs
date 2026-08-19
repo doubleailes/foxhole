@@ -220,7 +220,7 @@ fn world_map_renders_received_intel_and_review_modal() {
     assert!(text.contains("staged"), "staged-intel review hint shown");
 
     // Opening the review modal lists the staged event with accept/discard keys.
-    app.intel_review = Some(IntelReview { selected: 0 });
+    app.intel.review = Some(IntelReview { selected: 0 });
     term.draw(|f| crate::ui::render(f, &app)).unwrap();
     let text = term.backend().to_string();
     assert!(text.contains("INCOMING INTEL"), "review modal title");
@@ -237,7 +237,7 @@ fn share_zone_modal_lists_local_zones_for_the_peer() {
     let mut app = map_app();
     app.active = Tool::Conversations;
     app.conversations[0].display_name = Some("kilo".to_string());
-    app.share_zone = Some(ShareZone {
+    app.intel.share_zone = Some(ShareZone {
         selected: 0,
         peer: app.conversations[0].peer.clone(),
         peer_label: "kilo".to_string(),
@@ -259,7 +259,7 @@ fn author_form_renders_fields_and_toggles() {
     use ratatui::backend::TestBackend;
 
     let mut app = map_app();
-    app.author = Some(AuthorForm {
+    app.intel.author = Some(AuthorForm {
         kind: AuthorKind::Zone,
         affiliation: Affiliation::Hostile,
         callsign: "AO ZULU".to_string(),

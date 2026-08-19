@@ -51,7 +51,7 @@ pub use boot::{AppState, Scroll};
 #[cfg(feature = "splash")]
 pub use boot::{Boot, BootStep};
 pub use browser::BrowserState;
-pub use intel::IntelReview;
+pub use intel::{IntelReview, IntelState};
 pub use map::{GotoMgrs, MapState};
 pub use network::NetworkState;
 pub use share::ShareZone;
@@ -321,22 +321,9 @@ pub struct App {
     /// World Map tool state: viewport, marker selection, the local zone/city
     /// layers, and its "go to MGRS" modal. See [`MapState`].
     pub map: MapState,
-    /// Live received CoT intel applied to the map (from Trusted peers, or all
-    /// peers when `intel_auto_apply` is set, or operator-accepted). Keyed by
-    /// `(source, uid)`; expired entries are swept. See [`intel`].
-    pub intel: Vec<IntelRecord>,
-    /// Received CoT intel from Unknown/Untrusted peers, staged for operator
-    /// review (accept → `intel`, or discard). See the incoming-intel modal.
-    pub intel_staged: Vec<IntelRecord>,
-    /// When `Some`, the incoming-intel review modal is open (captures input).
-    pub intel_review: Option<IntelReview>,
-    /// When `Some`, the share-zone picker is open (captures input).
-    pub share_zone: Option<ShareZone>,
-    /// When `Some`, the intel authoring form is open (captures input).
-    pub author: Option<AuthorForm>,
-    /// Set when the live/staged intel layer changed this iteration; `main` drains
-    /// it and persists the encrypted intel store. Keeps `App` free of I/O.
-    pub intel_dirty: bool,
+    /// Received/authored intel: the live and staged layers, their dirty flag,
+    /// and the three modals that act on them. See [`IntelState`] and [`intel`].
+    pub intel: IntelState,
     /// Browser tool state: the node list, the focused pane, and the page being
     /// viewed. See [`BrowserState`].
     pub browser: BrowserState,
@@ -416,12 +403,7 @@ impl App {
             selected: 0,
             net: NetworkState::default(),
             map: MapState::default(),
-            intel: Vec::new(),
-            intel_staged: Vec::new(),
-            intel_review: None,
-            share_zone: None,
-            author: None,
-            intel_dirty: false,
+            intel: IntelState::default(),
             browser: BrowserState::default(),
             guide_scroll: Scroll::top(),
             log_scroll: Scroll::bottom(),
@@ -533,11 +515,11 @@ impl App {
             Some(Modal::Burn)
         } else if self.new_conv.is_some() {
             Some(Modal::NewConv)
-        } else if self.intel_review.is_some() {
+        } else if self.intel.review.is_some() {
             Some(Modal::IntelReview)
-        } else if self.share_zone.is_some() {
+        } else if self.intel.share_zone.is_some() {
             Some(Modal::ShareZone)
-        } else if self.author.is_some() {
+        } else if self.intel.author.is_some() {
             Some(Modal::Author)
         } else if self.map.goto_mgrs.is_some() {
             Some(Modal::GotoMgrs)

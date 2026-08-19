@@ -89,15 +89,15 @@ pub fn render(frame: &mut Frame, app: &App) {
         render_new_conv_popup(frame, nc);
     }
     // The incoming-intel review modal.
-    if let Some(ref review) = app.intel_review {
+    if let Some(ref review) = app.intel.review {
         render_intel_review_popup(frame, app, review);
     }
     // The share-zone picker.
-    if let Some(ref share) = app.share_zone {
+    if let Some(ref share) = app.intel.share_zone {
         render_share_zone_popup(frame, app, share);
     }
     // The intel authoring form.
-    if let Some(ref form) = app.author {
+    if let Some(ref form) = app.intel.author {
         render_author_popup(frame, form);
     }
     // The "go to MGRS" reframe modal.
