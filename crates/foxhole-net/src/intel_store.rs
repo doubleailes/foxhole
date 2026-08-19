@@ -1,7 +1,7 @@
 //! Durable, encrypted, atomic store for the received-intel layer (behind the
 //! `net` feature) — P4 of the intel-sharing plan.
 //!
-//! The live and staged CoT intel ([`App::intel`]/[`App::intel_staged`]) is
+//! The live and staged CoT intel (`IntelState::live`/`IntelState::staged`) is
 //! serialized to one versioned binary blob, authenticated-encrypted with
 //! `rns_crypto::token` (AES-256-CBC + HMAC-SHA256, random IV), and written via
 //! [`foxhole_core::storage::atomic_write`]. It reuses the identity-derived store key (so

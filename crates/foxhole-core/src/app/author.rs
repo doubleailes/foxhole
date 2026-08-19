@@ -96,6 +96,7 @@ impl App {
             };
             let Some(r) = self
                 .intel
+                .live
                 .iter()
                 .find(|r| r.key() == (key.0.as_str(), key.1.as_str()))
             else {
@@ -134,18 +135,18 @@ impl App {
                 error: None,
             }
         };
-        self.author = Some(form);
+        self.intel.author = Some(form);
     }
 
     /// Key handling while the authoring form is open: Up/Down move fields,
     /// Left/Right cycle the Kind/Affiliation toggles, typing edits text fields,
     /// Enter commits, Esc cancels.
     pub(super) fn handle_author_key(&mut self, key: KeyEvent) {
-        let Some(form) = self.author.as_mut() else {
+        let Some(form) = self.intel.author.as_mut() else {
             return;
         };
         match key.code {
-            KeyCode::Esc => self.author = None,
+            KeyCode::Esc => self.intel.author = None,
             KeyCode::Enter => self.commit_author(),
             KeyCode::Up | KeyCode::BackTab => form.field = form.field.step(-1),
             KeyCode::Down | KeyCode::Tab => form.field = form.field.step(1),
@@ -179,7 +180,7 @@ impl App {
     /// Validate the form and commit it to the live intel layer as a local-authored
     /// object (or update the edited one in place).
     fn commit_author(&mut self) {
-        let Some(form) = self.author.as_ref() else {
+        let Some(form) = self.intel.author.as_ref() else {
             return;
         };
         let lat = match form.lat.trim().parse::<f64>() {
@@ -254,15 +255,15 @@ impl App {
         let label = event.callsign.clone().unwrap_or_else(|| event.uid.clone());
 
         upsert(
-            &mut self.intel,
+            &mut self.intel.live,
             IntelRecord {
                 source,
                 event,
                 received_at: now as u64,
             },
         );
-        self.intel_dirty = true;
-        self.author = None;
+        self.intel.dirty = true;
+        self.intel.author = None;
         let verb = if edit_key.is_some() {
             "edited"
         } else {
@@ -273,7 +274,7 @@ impl App {
 
     /// Flag a validation error on the open form (keeps it open).
     fn author_error(&mut self, msg: &'static str) {
-        if let Some(form) = self.author.as_mut() {
+        if let Some(form) = self.intel.author.as_mut() {
             form.error = Some(msg);
         }
     }
@@ -285,11 +286,12 @@ impl App {
         let Some((source, uid)) = self.selected_intel_key() else {
             return;
         };
-        let before = self.intel.len();
+        let before = self.intel.live.len();
         self.intel
+            .live
             .retain(|r| !(r.source == source && r.event.uid == uid));
-        if self.intel.len() != before {
-            self.intel_dirty = true;
+        if self.intel.live.len() != before {
+            self.intel.dirty = true;
             self.map.selected = 0;
             self.push_log(format!("[SYS] intel: removed {uid} (local)"));
         }
@@ -387,31 +389,31 @@ mod tests {
     #[test]
     fn authoring_a_marker_adds_a_live_intel_record() {
         let mut app = App::new();
-        app.intel.clear();
+        app.intel.live.clear();
         app.open_author(false);
-        let form = app.author.as_mut().unwrap();
+        let form = app.intel.author.as_mut().unwrap();
         form.affiliation = Affiliation::Hostile;
         form.callsign = "SNIPER".to_string();
         form.lat = "50.5".to_string();
         form.lon = "30.1".to_string();
         app.commit_author();
 
-        assert!(app.author.is_none(), "form closes on commit");
-        assert_eq!(app.intel.len(), 1);
-        assert!(app.intel_dirty);
-        let e = &app.intel[0].event;
+        assert!(app.intel.author.is_none(), "form closes on commit");
+        assert_eq!(app.intel.live.len(), 1);
+        assert!(app.intel.dirty);
+        let e = &app.intel.live[0].event;
         assert_eq!(e.cot_type, "a-h-G");
         assert_eq!(e.affiliation(), Affiliation::Hostile);
         assert_eq!(e.callsign.as_deref(), Some("SNIPER"));
-        assert_eq!(app.intel[0].kind(), Kind::Marker);
+        assert_eq!(app.intel.live[0].kind(), Kind::Marker);
     }
 
     #[test]
     fn authoring_a_zone_tints_by_affiliation() {
         let mut app = App::new();
-        app.intel.clear();
+        app.intel.live.clear();
         app.open_author(false);
-        let form = app.author.as_mut().unwrap();
+        let form = app.intel.author.as_mut().unwrap();
         form.kind = AuthorKind::Zone;
         form.affiliation = Affiliation::Hostile;
         form.lat = "0".into();
@@ -419,7 +421,7 @@ mod tests {
         form.radius_km = "250".into();
         app.commit_author();
 
-        let e = &app.intel[0].event;
+        let e = &app.intel.live[0].event;
         assert_eq!(e.kind(), Kind::Zone);
         assert_eq!(e.radius_m, Some(250_000.0));
         assert_eq!(e.affiliation(), Affiliation::Hostile);
@@ -432,13 +434,13 @@ mod tests {
         // Editing the MGRS field rewrites Lat/Lon. Drive it through the key path
         // by replacing the buffer then nudging it so the sync fires.
         {
-            let f = app.author.as_mut().unwrap();
+            let f = app.intel.author.as_mut().unwrap();
             f.field = AuthorField::Mgrs;
             f.mgrs = "31NAA660210000".to_string();
         }
         // Type the final digit so handle_author_key runs the sync.
         app.handle_author_key(KeyEvent::from(KeyCode::Char('0')));
-        let f = app.author.as_ref().unwrap();
+        let f = app.intel.author.as_ref().unwrap();
         assert_eq!(f.mgrs, "31NAA6602100000");
         assert!(
             f.lat.parse::<f64>().unwrap().abs() < 0.01,
@@ -453,75 +455,85 @@ mod tests {
 
         // Editing a coordinate rewrites the MGRS mirror.
         {
-            let f = app.author.as_mut().unwrap();
+            let f = app.intel.author.as_mut().unwrap();
             f.field = AuthorField::Lat;
             f.lat = "48.8583".to_string();
             f.lon = "2.2944".to_string();
         }
         app.handle_author_key(KeyEvent::from(KeyCode::Backspace)); // edits lat
-        let f = app.author.as_ref().unwrap();
+        let f = app.intel.author.as_ref().unwrap();
         assert!(f.mgrs.starts_with("31U"), "mgrs mirror updated: {}", f.mgrs);
     }
 
     #[test]
     fn invalid_coordinates_keep_the_form_open_with_an_error() {
         let mut app = App::new();
-        app.intel.clear();
+        app.intel.live.clear();
         app.open_author(false);
-        app.author.as_mut().unwrap().lat = "north".to_string();
+        app.intel.author.as_mut().unwrap().lat = "north".to_string();
         app.commit_author();
-        assert!(app.author.is_some(), "form stays open on bad input");
-        assert!(app.author.as_ref().unwrap().error.is_some());
-        assert!(app.intel.is_empty());
+        assert!(app.intel.author.is_some(), "form stays open on bad input");
+        assert!(app.intel.author.as_ref().unwrap().error.is_some());
+        assert!(app.intel.live.is_empty());
     }
 
     #[test]
     fn editing_updates_in_place_via_selection() {
         let mut app = App::new();
         app.conversations.clear();
-        app.intel.clear();
+        app.intel.live.clear();
         app.config.lat = None; // no operator marker, so index 0 is the intel one
         app.config.lon = None;
         // Author one marker, then edit it in place.
         app.open_author(false);
         {
-            let f = app.author.as_mut().unwrap();
+            let f = app.intel.author.as_mut().unwrap();
             f.callsign = "OP".into();
             f.lat = "10".into();
             f.lon = "20".into();
         }
         app.commit_author();
-        let key = app.intel[0].key();
+        let key = app.intel.live[0].key();
         let key = (key.0.to_string(), key.1.to_string());
 
         app.map.selected = 0; // the sole marker
         app.open_author(true);
-        assert_eq!(app.author.as_ref().unwrap().edit_key, Some(key.clone()));
-        app.author.as_mut().unwrap().callsign = "OP-MOVED".into();
+        assert_eq!(
+            app.intel.author.as_ref().unwrap().edit_key,
+            Some(key.clone())
+        );
+        app.intel.author.as_mut().unwrap().callsign = "OP-MOVED".into();
         app.commit_author();
 
-        assert_eq!(app.intel.len(), 1, "edit updates in place, no duplicate");
-        assert_eq!(app.intel[0].event.uid, key.1, "same uid kept");
-        assert_eq!(app.intel[0].event.callsign.as_deref(), Some("OP-MOVED"));
+        assert_eq!(
+            app.intel.live.len(),
+            1,
+            "edit updates in place, no duplicate"
+        );
+        assert_eq!(app.intel.live[0].event.uid, key.1, "same uid kept");
+        assert_eq!(
+            app.intel.live[0].event.callsign.as_deref(),
+            Some("OP-MOVED")
+        );
     }
 
     #[test]
     fn remove_selected_intel_drops_it_locally() {
         let mut app = App::new();
         app.conversations.clear();
-        app.intel.clear();
+        app.intel.live.clear();
         app.config.lat = None;
         app.config.lon = None;
         app.open_author(false);
-        app.author.as_mut().unwrap().lat = "1".into();
-        app.author.as_mut().unwrap().lon = "2".into();
+        app.intel.author.as_mut().unwrap().lat = "1".into();
+        app.intel.author.as_mut().unwrap().lon = "2".into();
         app.commit_author();
-        assert_eq!(app.intel.len(), 1);
+        assert_eq!(app.intel.live.len(), 1);
 
         app.map.selected = 0;
-        app.intel_dirty = false;
+        app.intel.dirty = false;
         app.remove_selected_intel();
-        assert!(app.intel.is_empty());
-        assert!(app.intel_dirty, "removal flags persistence");
+        assert!(app.intel.live.is_empty());
+        assert!(app.intel.dirty, "removal flags persistence");
     }
 }

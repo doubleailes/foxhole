@@ -100,7 +100,7 @@ pub(super) fn render_map(frame: &mut Frame, app: &App, area: Rect) {
 
     // Right column stacks the positions roster over the INTEL roster (local
     // hazard zones + received CoT intel).
-    let staged_row = usize::from(!app.intel_staged.is_empty());
+    let staged_row = usize::from(!app.intel.staged.is_empty());
     let intel_rows = app.map.zones.len() + app.live_intel().len() + staged_row;
     let intel_h = (intel_rows as u16 + 2).clamp(3, 14);
     let right = Layout::default()
@@ -396,9 +396,9 @@ fn render_intel_list(frame: &mut Frame, app: &App, area: Rect) {
             r.seconds_to_stale(now, ttl),
         ));
     }
-    if !app.intel_staged.is_empty() {
+    if !app.intel.staged.is_empty() {
         lines.push(Line::styled(
-            format!("  \u{2691} {} staged — [i] review", app.intel_staged.len()),
+            format!("  \u{2691} {} staged — [i] review", app.intel.staged.len()),
             tag_style("WRN").add_modifier(Modifier::BOLD),
         ));
     }

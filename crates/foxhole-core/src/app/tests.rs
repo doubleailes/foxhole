@@ -23,8 +23,8 @@ pub(super) fn event(uid: &str, cot_type: &str, time: i64) -> CotEvent {
 pub(super) fn app_with_peer(hash: &str, trust: Trust) -> App {
     let mut app = App::new();
     app.conversations.clear();
-    app.intel.clear();
-    app.intel_staged.clear();
+    app.intel.live.clear();
+    app.intel.staged.clear();
     let mut c = Conversation::new(hash);
     c.trust = trust;
     app.conversations.push(c);
