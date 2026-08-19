@@ -51,6 +51,7 @@ pub use boot::{AppState, Scroll};
 #[cfg(feature = "splash")]
 pub use boot::{Boot, BootStep};
 pub use browser::{BrowserPane, BrowserState};
+pub use conversations::ConversationsState;
 pub use intel::{IntelReview, IntelState};
 pub use map::{GotoMgrs, MapState};
 pub use network::NetworkState;
@@ -347,16 +348,8 @@ enum Modal {
 pub struct App {
     /// Active top-level tool (drives the tab strip + key delegation).
     pub active: Tool,
-    /// Focused pane within the Conversations tool (drives the reversed
-    /// highlight + key routing there). Ignored by the read-only tools.
-    pub focus: Pane,
-    /// Which Transmit-pane field keystrokes edit (title vs body), toggled with
-    /// Ctrl+T. Only meaningful while the Transmit pane is focused.
-    pub transmit_field: TransmitField,
-    /// All conversations, in display order.
-    pub conversations: Vec<Conversation>,
-    /// Index of the selected conversation within `conversations`.
-    pub selected: usize,
+    /// Conversations tool state (the roster, its selection, focus, compose).
+    pub convs: ConversationsState,
     /// Network tool state (discovered nodes, probes, interface telemetry).
     pub net: NetworkState,
     /// World Map tool state (viewport, layers, and its modal).
@@ -368,7 +361,6 @@ pub struct App {
     /// Scroll positions for the overflowing text panes (PageUp/PageDown/Home/End).
     pub guide_scroll: Scroll,
     pub log_scroll: Scroll,
-    pub thread_scroll: Scroll,
     /// This node's own LXMF address (hex), once the network task reports it.
     pub local_address: Option<String>,
     /// When `Some`, a propagation sync is running and the pop-up shows this text.
@@ -424,17 +416,13 @@ impl App {
 
         Self {
             active: Tool::Conversations,
-            focus: Pane::Transmit,
-            transmit_field: TransmitField::Body,
-            conversations,
-            selected: 0,
+            convs: ConversationsState::new(conversations),
             net: NetworkState::new(),
             map: MapState::new(),
             intel: IntelState::new(),
             browser: BrowserState::new(),
             guide_scroll: Scroll::top(),
             log_scroll: Scroll::bottom(),
-            thread_scroll: Scroll::bottom(),
             local_address: None,
             sync_status: None,
             modals: Modals::new(),
@@ -571,7 +559,9 @@ impl App {
             Tool::Browser if self.browser.pane == BrowserPane::Page => Some(&self.browser.scroll),
             Tool::Log => Some(&self.log_scroll),
             Tool::Guide => Some(&self.guide_scroll),
-            Tool::Conversations if self.focus == Pane::Thread => Some(&self.thread_scroll),
+            Tool::Conversations if self.convs.focus == Pane::Thread => {
+                Some(&self.convs.thread_scroll)
+            }
             _ => None,
         }
     }
