@@ -15,15 +15,19 @@
 //!
 //! The struct lives here together with program-global key routing and the modal
 //! handlers; the per-tool behaviour is split into sibling modules
-//! ([`conversations`], [`network`], [`browser`]) as further `impl App` blocks,
-//! and the cold-boot/scroll machinery into [`boot`].
+//! ([`conversations`], [`network`], [`browser`], [`map`]) as further `impl App`
+//! blocks, the intel layer into [`intel`] (ingest + review), [`share`] (sending
+//! it out), and [`author`] (drawing it in), and the cold-boot/scroll machinery
+//! into [`boot`].
 
+mod author;
 mod boot;
 mod browser;
 mod conversations;
 mod intel;
 mod map;
 mod network;
+mod share;
 #[cfg(test)]
 mod tests;
 
@@ -33,22 +37,22 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use crate::config::Config;
 pub use crate::domain::{
-    Conversation, Entry, GeoPos, Interface, MsgStatus, NetCommand, NetEvent, Node, NomadNode,
-    Outbound, Page, PageStatus, PathProbe, PeerKind, Trust, Zone, fmt_bitrate, fmt_bytes,
-    path_summary,
+    Conversation, Entry, GeoPos, IntelRecord, IntelZone, Interface, MsgStatus, NetCommand,
+    NetEvent, Node, NomadNode, Outbound, Page, PageStatus, PathProbe, PeerKind, Trust, Zone,
+    fmt_bitrate, fmt_bytes, path_summary,
 };
 pub use crate::notes::Notes;
 // World Map domain types, surfaced through `app` so the UI and binary reach them
 // via the familiar `app::…` path (the logic itself lives in `foxhole-map`).
 pub use foxhole_map::{CITIES, City, CityKind, MapMarker, MapView, MarkerKind};
 
+pub use author::{AuthorField, AuthorForm, AuthorKind};
 pub use boot::{AppState, Scroll};
 #[cfg(feature = "splash")]
 pub use boot::{Boot, BootStep};
-pub use intel::{
-    AuthorField, AuthorForm, AuthorKind, IntelRecord, IntelReview, IntelZone, ShareZone,
-};
+pub use intel::IntelReview;
 pub use map::GotoMgrs;
+pub use share::ShareZone;
 
 // Re-exported so the renderer (and the binary) reach the CoT model through
 // `crate::app::…` without each crate depending on `foxhole-cot` directly.

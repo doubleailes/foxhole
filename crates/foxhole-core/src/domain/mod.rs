@@ -5,13 +5,17 @@
 //! [`MsgStatus`]), the events/commands crossing the UI↔network boundary
 //! ([`NetEvent`], [`NetCommand`], [`Outbound`], [`PeerKind`]), and the registries
 //! the Network/Browser tools display ([`Node`], [`PathProbe`], [`NomadNode`],
-//! [`Page`]).
+//! [`Page`]), plus the received-intel record ([`IntelRecord`], in [`intel`]).
 //!
 //! These carry no UI focus or navigation semantics (those live in
 //! [`crate::app`]); they are the model that `store`, `net`, `ui`, and the state
 //! machine all import, which is why they live apart from the controller.
 
+mod intel;
+
 use std::collections::HashMap;
+
+pub use intel::{IntelRecord, IntelZone};
 
 // The geographic position and hazard-zone types now live in the standalone
 // `foxhole-map` crate. Re-exported here so the conversation model (peer
