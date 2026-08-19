@@ -51,7 +51,7 @@ pub use boot::{AppState, Scroll};
 #[cfg(feature = "splash")]
 pub use boot::{Boot, BootStep};
 pub use intel::IntelReview;
-pub use map::GotoMgrs;
+pub use map::{GotoMgrs, MapState};
 pub use share::ShareZone;
 
 // Re-exported so the renderer (and the binary) reach the CoT model through
@@ -317,17 +317,9 @@ pub struct App {
     /// Which Network-tab column has focus (Peers reuses `selected`, Nodes
     /// reuses `node_selected` for the in-column cursor).
     pub net_col: NetColumn,
-    /// World Map viewport (pan/zoom state).
-    pub map: MapView,
-    /// Selected marker index within [`App::map_markers`] (World Map tab).
-    pub map_selected: usize,
-    /// Whether the embedded capitals/cities reference layer is drawn on the
-    /// World Map (toggled with `g`). On by default for orientation.
-    pub map_cities: bool,
-    /// Hazard areas overlaid on the World Map (war zones / areas of operations).
-    /// Seeded with a demo set; overridden from `zones.conf` when present. This is
-    /// *local* (operator-authored) intel — distinct from `intel` below.
-    pub zones: Vec<Zone>,
+    /// World Map tool state: viewport, marker selection, the local zone/city
+    /// layers, and its "go to MGRS" modal. See [`MapState`].
+    pub map: MapState,
     /// Live received CoT intel applied to the map (from Trusted peers, or all
     /// peers when `intel_auto_apply` is set, or operator-accepted). Keyed by
     /// `(source, uid)`; expired entries are swept. See [`intel`].
@@ -341,9 +333,6 @@ pub struct App {
     pub share_zone: Option<ShareZone>,
     /// When `Some`, the intel authoring form is open (captures input).
     pub author: Option<AuthorForm>,
-    /// When `Some`, the "go to MGRS" modal is open (captures input) — reframes
-    /// the World Map onto a typed grid reference.
-    pub goto_mgrs: Option<GotoMgrs>,
     /// Set when the live/staged intel layer changed this iteration; `main` drains
     /// it and persists the encrypted intel store. Keeps `App` free of I/O.
     pub intel_dirty: bool,
@@ -441,16 +430,12 @@ impl App {
             nodes: Vec::new(),
             node_selected: 0,
             net_col: NetColumn::Peers,
-            map: MapView::default(),
-            map_selected: 0,
-            map_cities: true,
-            zones: crate::zones::demo(),
+            map: MapState::default(),
             intel: Vec::new(),
             intel_staged: Vec::new(),
             intel_review: None,
             share_zone: None,
             author: None,
-            goto_mgrs: None,
             intel_dirty: false,
             path_probes: HashMap::new(),
             interfaces: Vec::new(),
@@ -577,7 +562,7 @@ impl App {
             Some(Modal::ShareZone)
         } else if self.author.is_some() {
             Some(Modal::Author)
-        } else if self.goto_mgrs.is_some() {
+        } else if self.map.goto_mgrs.is_some() {
             Some(Modal::GotoMgrs)
         } else {
             None

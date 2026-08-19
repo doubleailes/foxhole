@@ -101,7 +101,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         render_author_popup(frame, form);
     }
     // The "go to MGRS" reframe modal.
-    if let Some(ref goto) = app.goto_mgrs {
+    if let Some(ref goto) = app.map.goto_mgrs {
         render_goto_mgrs_popup(frame, goto);
     }
     // The read-only mnemonic phrase modal.
