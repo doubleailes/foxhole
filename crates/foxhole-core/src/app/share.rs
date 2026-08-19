@@ -98,7 +98,7 @@ impl App {
         let summary = event.summary();
         let xml = event.to_xml();
 
-        let id = self.next_id();
+        let id = self.outbox.next_id();
         // Echo into the recipient's thread so the operator sees what was shared.
         if let Some(conv) = self.conversations.iter_mut().find(|c| c.peer == peer) {
             let mut entry = Entry::now(format!("[TX] shared intel: {label}"));
@@ -106,7 +106,7 @@ impl App {
             entry.status = MsgStatus::Sending;
             conv.messages.push(entry);
         }
-        self.outbound.push_back(Outbound {
+        self.outbox.outbound.push_back(Outbound {
             id,
             peer: peer.to_string(),
             title: String::new(),
@@ -141,14 +141,14 @@ impl App {
         let event = CotEvent::zone(uid, &label, lat, lon, radius_km * 1000.0, now, now);
         let xml = event.to_xml();
 
-        let id = self.next_id();
+        let id = self.outbox.next_id();
         if let Some(conv) = self.conversations.iter_mut().find(|c| c.peer == peer) {
             let mut entry = Entry::now(format!("[TX] revoked intel: {label}"));
             entry.id = id;
             entry.status = MsgStatus::Sending;
             conv.messages.push(entry);
         }
-        self.outbound.push_back(Outbound {
+        self.outbox.outbound.push_back(Outbound {
             id,
             peer: peer.to_string(),
             title: String::new(),
@@ -191,8 +191,8 @@ mod tests {
         app.share_zone(0, "aa11");
 
         // One outbound carrying the CoT XML + a summary body, echoed in the thread.
-        assert_eq!(app.outbound.len(), 1);
-        let out = &app.outbound[0];
+        assert_eq!(app.outbox.outbound.len(), 1);
+        let out = &app.outbox.outbound[0];
         assert_eq!(out.peer, "aa11");
         assert!(out.body.contains("AO ALPHA"), "summary body");
         let xml = out.cot_xml.as_ref().expect("cot xml attached");
@@ -224,7 +224,7 @@ mod tests {
         sender.map.zones = vec![crate::domain::Zone::new("AO ALPHA", 50.4, 30.5, 400.0)];
         sender.revoke_shared_zone(0, "aa11");
 
-        let out = sender.outbound.front().expect("revocation enqueued");
+        let out = sender.outbox.outbound.front().expect("revocation enqueued");
         assert!(out.body.contains("REVOKE"), "human body marks a revoke");
         let xml = out.cot_xml.as_ref().expect("cot xml attached");
         let event = foxhole_cot::parse(xml).unwrap();

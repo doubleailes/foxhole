@@ -27,11 +27,10 @@ mod conversations;
 mod intel;
 mod map;
 mod network;
+mod outbox;
 mod share;
 #[cfg(test)]
 mod tests;
-
-use std::collections::{HashMap, VecDeque};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
@@ -54,6 +53,7 @@ pub use browser::BrowserState;
 pub use intel::{IntelReview, IntelState};
 pub use map::{GotoMgrs, MapState};
 pub use network::NetworkState;
+pub use outbox::Outbox;
 pub use share::ShareZone;
 
 // Re-exported so the renderer (and the binary) reach the CoT model through
@@ -352,16 +352,9 @@ pub struct App {
     pub note_selected: usize,
     /// Set when a note slot changed; `main` drains it and persists the buffer.
     pub notes_dirty: bool,
-    /// Commands queued for the network task; drained by `main` after key input.
-    pub commands: VecDeque<NetCommand>,
-    /// Monotonic id source for correlating outbound messages with their status.
-    pub next_msg_id: u64,
-    /// Peer keys whose on-disk copy is stale; `main` drains this and persists
-    /// each changed conversation. Keeps `App` itself free of I/O.
-    pub dirty: Vec<String>,
-    /// Messages accepted for transmission, awaiting handoff to the protocol
-    /// task. FIFO so ordering on the wire matches operator intent.
-    pub outbound: VecDeque<Outbound>,
+    /// Everything queued for `main` to hand off: outbound messages, network
+    /// commands, and the conversations awaiting a re-save. See [`Outbox`].
+    pub outbox: Outbox,
     /// System log scrollback shown by the Log tool (`[SYS]` lines, diagnostics),
     /// each timestamped (UTC). Bounded to the most recent [`SYSLOG_MAX`] entries
     /// (see [`App::push_log`]) so a chatty source — e.g. frequent location
@@ -418,10 +411,7 @@ impl App {
             notes: Notes::default(),
             note_selected: 0,
             notes_dirty: false,
-            commands: VecDeque::new(),
-            next_msg_id: 1,
-            dirty: Vec::new(),
-            outbound: VecDeque::new(),
+            outbox: Outbox::default(),
             syslog: Vec::new(),
             should_quit: false,
             // Cold-boot through the splash unless it's compiled out, suppressed,
@@ -468,7 +458,7 @@ impl App {
         // re-asserting the pop-up on the matching `CancelSync`.
         if self.sync_status.is_some() && key.code == KeyCode::Esc {
             self.sync_status = None;
-            self.commands.push_back(NetCommand::CancelSync);
+            self.outbox.commands.push_back(NetCommand::CancelSync);
             return;
         }
 

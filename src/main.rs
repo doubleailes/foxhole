@@ -194,7 +194,7 @@ impl NetLink {
     /// outcome: requeue-and-stop on a full pipe, mark-failed on a dead task.
     fn send_outbound(&self, app: &mut App) {
         let Some(tx) = &self.outbound else { return };
-        while let Some(out) = app.outbound.pop_front() {
+        while let Some(out) = app.outbox.outbound.pop_front() {
             match tx.try_send(out) {
                 Ok(()) => {}
                 Err(mpsc::error::TrySendError::Full(out)) => {
@@ -209,7 +209,7 @@ impl NetLink {
     /// Forward UI commands, persisting a propagation-node change on the way.
     /// Drained even with no network task so the setting still sticks offline.
     fn send_commands(&self, app: &mut App) {
-        while let Some(cmd) = app.commands.pop_front() {
+        while let Some(cmd) = app.outbox.commands.pop_front() {
             if matches!(cmd, NetCommand::SetPropagationNode(_))
                 && let Err(e) = app.config.save()
             {
@@ -327,7 +327,7 @@ impl Persistence {
         // No key yet: leave the dirty flags set so the first flush after it
         // arrives still writes everything that changed while we waited.
         let Some(key) = &self.key else { return };
-        for peer in std::mem::take(&mut app.dirty) {
+        for peer in std::mem::take(&mut app.outbox.dirty) {
             let result = app
                 .conversations
                 .iter()
@@ -348,7 +348,7 @@ impl Persistence {
     /// Offline builds never persist; just keep the dirty flags from growing.
     #[cfg(not(feature = "net"))]
     fn flush(&mut self, app: &mut App) {
-        app.dirty.clear();
+        app.outbox.dirty.clear();
         app.intel.dirty = false;
     }
 }

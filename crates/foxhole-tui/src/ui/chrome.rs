@@ -122,7 +122,7 @@ pub(super) fn render_status(frame: &mut Frame, app: &App, area: Rect) {
         },
         gap(),
         chip("Q"),
-        Span::raw(format!(" {}", app.outbound.len())),
+        Span::raw(format!(" {}", app.outbox.outbound.len())),
         gap(),
         chip("PEERS"),
         Span::raw(format!(" {}", app.conversations.len())),

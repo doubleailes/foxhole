@@ -1,6 +1,8 @@
 //! Network tool: the two-column peers/nodes view, propagation-node selection,
 //! and rnpath-style path probes.
 
+use std::collections::HashMap;
+
 use super::*;
 use crate::domain::{now_secs, short_hash};
 
@@ -58,7 +60,8 @@ impl App {
                     if let Some(node) = self.net.nodes.get(self.net.selected) {
                         let hash = node.hash.clone();
                         self.config.propagation_node = Some(hash.clone());
-                        self.commands
+                        self.outbox
+                            .commands
                             .push_back(NetCommand::SetPropagationNode(Some(hash)));
                     }
                 }
@@ -70,10 +73,12 @@ impl App {
                         "[RT] PATH {}.. requesting",
                         short_hash(&hash)
                     )));
-                    self.commands.push_back(NetCommand::RequestPath(hash));
+                    self.outbox
+                        .commands
+                        .push_back(NetCommand::RequestPath(hash));
                 }
             }
-            KeyCode::Char('s') => self.commands.push_back(NetCommand::SyncNow),
+            KeyCode::Char('s') => self.outbox.commands.push_back(NetCommand::SyncNow),
             // Show the focused selection's address as a mnemonic phrase.
             KeyCode::Char('m') => {
                 if let Some(hash) = self.focused_net_hash() {

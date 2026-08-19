@@ -2,6 +2,8 @@
 //! navigation, form-field editing, link following, history, and folding fetch
 //! results back into the view.
 
+use std::collections::HashMap;
+
 use super::*;
 
 /// The Browser tool's own state: the discovered Nomad Network nodes, which of
@@ -258,7 +260,7 @@ impl App {
             self.browser.history.push((p.node.clone(), p.path.clone()));
         }
         self.browser.scroll.to_top(); // each navigation opens at the top
-        self.commands.push_back(NetCommand::FetchPage {
+        self.outbox.commands.push_back(NetCommand::FetchPage {
             identity: identity.clone(),
             path: path.clone(),
             fields,

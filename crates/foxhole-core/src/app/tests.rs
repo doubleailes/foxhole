@@ -1,5 +1,7 @@
 //! Unit tests for the `App` state machine and key routing.
 
+use std::collections::HashMap;
+
 use super::*;
 use crossterm::event::KeyEventState;
 
@@ -237,8 +239,8 @@ fn transmit_targets_selected_peer() {
 
     app.handle_key(ctrl('s'));
 
-    assert_eq!(app.outbound.len(), 1);
-    let out = app.outbound.front().unwrap();
+    assert_eq!(app.outbox.outbound.len(), 1);
+    let out = app.outbox.outbound.front().unwrap();
     assert_eq!(out.peer, "bob");
     assert_eq!(out.body, "hello bob");
     assert_eq!(out.title, "", "no title set");
@@ -258,7 +260,7 @@ fn transmit_ignores_blank_draft() {
     let mut app = App::new();
     app.conversations[0].draft = "   ".to_string();
     app.handle_key(ctrl('s'));
-    assert!(app.outbound.is_empty());
+    assert!(app.outbox.outbound.is_empty());
 }
 
 #[test]
@@ -269,7 +271,7 @@ fn purge_clears_selected_draft_only() {
     app.handle_key(ctrl('x'));
     assert!(app.conversations[0].draft.is_empty());
     assert_eq!(app.conversations[1].draft, "keep");
-    assert!(app.outbound.is_empty());
+    assert!(app.outbox.outbound.is_empty());
 }
 
 #[test]
@@ -311,7 +313,7 @@ fn transmit_sends_title_and_resets_field() {
 
     app.handle_key(ctrl('s'));
 
-    let out = app.outbound.front().unwrap();
+    let out = app.outbox.outbound.front().unwrap();
     assert_eq!(out.title, "report", "title trimmed and carried");
     assert_eq!(out.body, "all clear");
     assert_eq!(
@@ -452,13 +454,13 @@ fn network_tab_selects_and_sets_propagation_node() {
     app.handle_key(press(KeyCode::Enter));
     assert_eq!(app.config.propagation_node.as_deref(), Some(n0.as_str()));
     assert_eq!(
-        app.commands.pop_front(),
+        app.outbox.commands.pop_front(),
         Some(NetCommand::SetPropagationNode(Some(n0)))
     );
 
     // `s` queues a sync.
     app.handle_key(press(KeyCode::Char('s')));
-    assert_eq!(app.commands.pop_front(), Some(NetCommand::SyncNow));
+    assert_eq!(app.outbox.commands.pop_front(), Some(NetCommand::SyncNow));
 }
 
 #[test]
@@ -470,11 +472,14 @@ fn esc_cancels_a_running_sync_popup() {
     // Esc dismisses the pop-up and tells the network task to abandon the sync.
     app.handle_key(press(KeyCode::Esc));
     assert!(app.sync_status.is_none(), "pop-up dismissed");
-    assert_eq!(app.commands.pop_front(), Some(NetCommand::CancelSync));
+    assert_eq!(
+        app.outbox.commands.pop_front(),
+        Some(NetCommand::CancelSync)
+    );
 
     // With no sync running, Esc is not swallowed as a cancel.
     app.handle_key(press(KeyCode::Esc));
-    assert!(app.commands.is_empty(), "no spurious CancelSync");
+    assert!(app.outbox.commands.is_empty(), "no spurious CancelSync");
 }
 
 #[test]
@@ -487,7 +492,7 @@ fn network_node_column_inert_with_no_nodes() {
     assert_eq!(app.net.selected, 0);
     assert!(app.config.propagation_node.is_none());
     assert!(
-        app.commands.is_empty(),
+        app.outbox.commands.is_empty(),
         "Enter on an empty node list does nothing"
     );
 }
@@ -542,14 +547,17 @@ fn p_queues_path_probe_for_focused_selection() {
     let peer = app.conversations[0].peer.clone();
     app.handle_key(press(KeyCode::Char('p')));
     assert_eq!(
-        app.commands.pop_front(),
+        app.outbox.commands.pop_front(),
         Some(NetCommand::RequestPath(peer))
     );
 
     // On the Nodes column: probes the selected node's hash.
     app.net.col = NetColumn::Nodes;
     app.handle_key(press(KeyCode::Char('p')));
-    assert_eq!(app.commands.pop_front(), Some(NetCommand::RequestPath(n0)));
+    assert_eq!(
+        app.outbox.commands.pop_front(),
+        Some(NetCommand::RequestPath(n0))
+    );
 }
 
 #[test]
@@ -645,7 +653,7 @@ fn browser_enter_queues_index_fetch() {
     app.browser.selected = 0;
     app.handle_key(press(KeyCode::Enter));
     assert_eq!(
-        app.commands.pop_front(),
+        app.outbox.commands.pop_front(),
         Some(NetCommand::FetchPage {
             identity: id.clone(),
             path: "/page/index.mu".to_string(),
@@ -791,7 +799,7 @@ fn relative_link_follows_on_current_node() {
     let mut app = browsing(&node, "/page/index.mu", vec![":/page/about.mu".to_string()]);
     app.handle_key(press(KeyCode::Enter)); // follow link 0
     assert_eq!(
-        app.commands.pop_front(),
+        app.outbox.commands.pop_front(),
         Some(NetCommand::FetchPage {
             identity: node.clone(),
             path: "/page/about.mu".to_string(),
@@ -812,7 +820,7 @@ fn absolute_link_resolves_known_dest_to_identity() {
     app.upsert_nomad(other_id.clone(), other_dest.clone(), None, 1);
     app.handle_key(press(KeyCode::Enter));
     assert_eq!(
-        app.commands.pop_front(),
+        app.outbox.commands.pop_front(),
         Some(NetCommand::FetchPage {
             identity: other_id,
             path: "/page/index.mu".to_string(),
@@ -827,7 +835,10 @@ fn link_to_unknown_dest_errors_without_fetching() {
     let url = format!("{}:/page/x.mu", "bc".repeat(16)); // never discovered
     let mut app = browsing(&here, "/page/index.mu", vec![url]);
     app.handle_key(press(KeyCode::Enter));
-    assert!(app.commands.is_empty(), "no fetch for an unknown node");
+    assert!(
+        app.outbox.commands.is_empty(),
+        "no fetch for an unknown node"
+    );
     assert!(matches!(
         app.browser.page.as_ref().unwrap().status,
         PageStatus::Error(_)
@@ -843,7 +854,7 @@ fn backspace_pops_history_and_refetches() {
         .push((node.clone(), "/page/one.mu".to_string()));
     app.handle_key(press(KeyCode::Backspace));
     assert_eq!(
-        app.commands.pop_front(),
+        app.outbox.commands.pop_front(),
         Some(NetCommand::FetchPage {
             identity: node,
             path: "/page/one.mu".to_string(),
@@ -925,7 +936,7 @@ fn submit_link_collects_field_and_var_values() {
     app.handle_key(press(KeyCode::Char('x'))); // type into the field
     app.handle_key(press(KeyCode::Down)); // move to the submit link
     app.handle_key(press(KeyCode::Enter));
-    let cmd = app.commands.pop_front().expect("a fetch was queued");
+    let cmd = app.outbox.commands.pop_front().expect("a fetch was queued");
     match cmd {
         NetCommand::FetchPage {
             identity,
@@ -1029,7 +1040,7 @@ fn start_conversation_validates_and_normalizes() {
     assert_eq!(app.selected, app.conversations.len() - 1);
     assert_eq!(app.active, Tool::Conversations);
     assert_eq!(app.focus, Pane::Transmit);
-    assert!(app.dirty.iter().any(|p| p == &conv.peer));
+    assert!(app.outbox.dirty.iter().any(|p| p == &conv.peer));
 }
 
 #[test]
@@ -1101,7 +1112,7 @@ fn transmit_stamps_id_and_sending_status() {
     assert!(entry.id > 0);
     assert_eq!(entry.status, MsgStatus::Sending);
     assert_eq!(
-        app.outbound.back().unwrap().id,
+        app.outbox.outbound.back().unwrap().id,
         entry.id,
         "Outbound shares the id"
     );
@@ -1113,7 +1124,7 @@ fn set_msg_status_updates_matching_entry_and_marks_dirty() {
     app.conversations[0].draft = "yo".to_string();
     app.handle_key(ctrl('s'));
     let id = app.conversations[0].messages.last().unwrap().id;
-    app.dirty.clear();
+    app.outbox.dirty.clear();
 
     app.set_msg_status(id, MsgStatus::Delivered);
     assert_eq!(
@@ -1121,7 +1132,7 @@ fn set_msg_status_updates_matching_entry_and_marks_dirty() {
         MsgStatus::Delivered
     );
     let peer = app.conversations[0].peer.clone();
-    assert!(app.dirty.iter().any(|p| p == &peer));
+    assert!(app.outbox.dirty.iter().any(|p| p == &peer));
 
     app.set_msg_status(999_999, MsgStatus::Failed); // unknown id: no-op
 }
@@ -1137,7 +1148,7 @@ fn requeue_choked_returns_message_to_front_and_warns() {
         body: "b".to_string(),
         cot_xml: None,
     };
-    app.outbound.push_back(queued.clone());
+    app.outbox.outbound.push_back(queued.clone());
     let choked = Outbound {
         id: 2,
         peer: "alpha".to_string(),
@@ -1149,8 +1160,8 @@ fn requeue_choked_returns_message_to_front_and_warns() {
     app.requeue_choked(choked.clone());
 
     // Held, not lost: back at the front so it retries first, ahead of `queued`.
-    assert_eq!(app.outbound.front(), Some(&choked));
-    assert_eq!(app.outbound.back(), Some(&queued));
+    assert_eq!(app.outbox.outbound.front(), Some(&choked));
+    assert_eq!(app.outbox.outbound.back(), Some(&queued));
     // Operator warned, tagged so the TUI styles it as a warning (not OPS).
     assert!(
         app.syslog
@@ -1167,6 +1178,7 @@ fn fail_dropped_marks_entry_failed_and_errors() {
     app.conversations[0].draft = "sitrep".to_string();
     app.handle_key(ctrl('s')); // echoes the entry (Sending) + queues the Outbound
     let out = app
+        .outbox
         .outbound
         .pop_front()
         .expect("transmit queues an outbound");
@@ -1203,14 +1215,14 @@ fn trust_next_cycles_and_wraps() {
 fn t_key_cycles_trust_and_marks_dirty() {
     let mut app = App::new();
     app.focus = Pane::PeerList; // the `t` binding is peer-list-only
-    app.dirty.clear();
+    app.outbox.dirty.clear();
     assert_eq!(app.conversations[0].trust, Trust::Unknown);
 
     app.handle_key(press(KeyCode::Char('t')));
     assert_eq!(app.conversations[0].trust, Trust::Trusted);
     let peer = app.conversations[0].peer.clone();
     assert!(
-        app.dirty.iter().any(|p| p == &peer),
+        app.outbox.dirty.iter().any(|p| p == &peer),
         "trust change persists"
     );
     assert!(
