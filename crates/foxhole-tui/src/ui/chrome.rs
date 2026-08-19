@@ -80,7 +80,7 @@ pub(super) fn render_tool(frame: &mut Frame, app: &App, area: Rect) {
 /// value, led by a brass tool chip and a lit/hollow NET pip. The keybinding
 /// legend rides the block's right-corner so the gauges read first. Never focusable.
 pub(super) fn render_status(frame: &mut Frame, app: &App, area: Rect) {
-    let pane = match app.focus {
+    let pane = match app.convs.focus {
         Pane::PeerList => "PEERS",
         Pane::Thread => "THREAD",
         Pane::Transmit => "TRANSMIT",
@@ -125,7 +125,7 @@ pub(super) fn render_status(frame: &mut Frame, app: &App, area: Rect) {
         Span::raw(format!(" {}", app.outbox.outbound.len())),
         gap(),
         chip("PEERS"),
-        Span::raw(format!(" {}", app.conversations.len())),
+        Span::raw(format!(" {}", app.convs.list.len())),
     ];
 
     // Short form of our own address (full one lives in the Network tab).

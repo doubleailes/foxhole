@@ -24,12 +24,12 @@ pub(super) fn event(uid: &str, cot_type: &str, time: i64) -> CotEvent {
 /// An app with a single peer at the given trust, no demo intel.
 pub(super) fn app_with_peer(hash: &str, trust: Trust) -> App {
     let mut app = App::new();
-    app.conversations.clear();
+    app.convs.list.clear();
     app.intel.live.clear();
     app.intel.staged.clear();
     let mut c = Conversation::new(hash);
     c.trust = trust;
-    app.conversations.push(c);
+    app.convs.list.push(c);
     app
 }
 
@@ -132,67 +132,67 @@ fn ctrl_n_p_cycle_tools() {
 #[test]
 fn tab_cycles_peerlist_thread_transmit() {
     let mut app = App::new();
-    assert_eq!(app.focus, Pane::Transmit);
+    assert_eq!(app.convs.focus, Pane::Transmit);
     app.handle_key(press(KeyCode::Tab));
-    assert_eq!(app.focus, Pane::PeerList);
+    assert_eq!(app.convs.focus, Pane::PeerList);
     app.handle_key(press(KeyCode::Tab));
-    assert_eq!(app.focus, Pane::Thread);
+    assert_eq!(app.convs.focus, Pane::Thread);
     app.handle_key(press(KeyCode::Tab));
-    assert_eq!(app.focus, Pane::Transmit);
+    assert_eq!(app.convs.focus, Pane::Transmit);
 }
 
 #[test]
 fn up_down_changes_selection_only_in_peerlist() {
     let mut app = App::new();
-    assert_eq!(app.selected, 0);
+    assert_eq!(app.convs.selected, 0);
 
     // Transmit focused: Up/Down do not move the selection.
     app.handle_key(press(KeyCode::Down));
     assert_eq!(
-        app.selected, 0,
+        app.convs.selected, 0,
         "selection only moves with PeerList focused"
     );
 
     // Focus the peer list, then navigate (clamped at the ends).
-    app.focus = Pane::PeerList;
+    app.convs.focus = Pane::PeerList;
     app.handle_key(press(KeyCode::Down));
-    assert_eq!(app.selected, 1);
+    assert_eq!(app.convs.selected, 1);
     app.handle_key(press(KeyCode::Down));
-    assert_eq!(app.selected, 2);
+    assert_eq!(app.convs.selected, 2);
     app.handle_key(press(KeyCode::Down)); // clamp at bottom (3 demo peers)
-    assert_eq!(app.selected, 2);
+    assert_eq!(app.convs.selected, 2);
     app.handle_key(press(KeyCode::Up));
-    assert_eq!(app.selected, 1);
+    assert_eq!(app.convs.selected, 1);
 }
 
 #[test]
 fn selecting_marks_conversation_read() {
     let mut app = App::new();
     app.deliver("bob", "ping"); // bob is index 1, not selected -> unread
-    assert_eq!(app.conversations[1].unread, 1);
+    assert_eq!(app.convs.list[1].unread, 1);
 
-    app.focus = Pane::PeerList;
+    app.convs.focus = Pane::PeerList;
     app.handle_key(press(KeyCode::Down)); // select bob
-    assert_eq!(app.selected, 1);
-    assert_eq!(app.conversations[1].unread, 0, "viewing clears unread");
+    assert_eq!(app.convs.selected, 1);
+    assert_eq!(app.convs.list[1].unread, 0, "viewing clears unread");
 }
 
 #[test]
 fn drafts_are_per_conversation() {
     let mut app = App::new(); // Transmit focused, alice (0) selected
     type_str(&mut app, "to-alice");
-    assert_eq!(app.conversations[0].draft, "to-alice");
+    assert_eq!(app.convs.list[0].draft, "to-alice");
 
     // Switch to bob via the peer list; bob's draft is independent/empty.
-    app.focus = Pane::PeerList;
+    app.convs.focus = Pane::PeerList;
     app.handle_key(press(KeyCode::Down));
-    assert_eq!(app.conversations[1].draft, "");
+    assert_eq!(app.convs.list[1].draft, "");
 
-    app.focus = Pane::Transmit;
+    app.convs.focus = Pane::Transmit;
     type_str(&mut app, "to-bob");
-    assert_eq!(app.conversations[1].draft, "to-bob");
+    assert_eq!(app.convs.list[1].draft, "to-bob");
     assert_eq!(
-        app.conversations[0].draft, "to-alice",
+        app.convs.list[0].draft, "to-alice",
         "alice's draft preserved"
     );
 }
@@ -203,7 +203,7 @@ fn typing_only_edits_when_transmit_focused() {
     type_str(&mut app, "hi");
     assert_eq!(app.selected_conv().unwrap().draft, "hi");
 
-    app.focus = Pane::Thread;
+    app.convs.focus = Pane::Thread;
     app.handle_key(press(KeyCode::Char('x')));
     assert_eq!(
         app.selected_conv().unwrap().draft,
@@ -219,11 +219,11 @@ fn typing_is_ignored_outside_conversations() {
     type_str(&mut app, "h");
     app.handle_key(press(KeyCode::Tab));
     assert!(
-        app.conversations[0].draft.is_empty(),
+        app.convs.list[0].draft.is_empty(),
         "non-Conversations tools take no compose input"
     );
     assert_eq!(
-        app.focus,
+        app.convs.focus,
         Pane::Transmit,
         "Tab must not move focus off Conversations"
     );
@@ -233,9 +233,9 @@ fn typing_is_ignored_outside_conversations() {
 fn transmit_targets_selected_peer() {
     let mut app = App::new();
     // Select bob (index 1) and give alice a stray draft to prove isolation.
-    app.conversations[0].draft = "stray".to_string();
-    app.selected = 1;
-    app.conversations[1].draft = "  hello bob  ".to_string();
+    app.convs.list[0].draft = "stray".to_string();
+    app.convs.selected = 1;
+    app.convs.list[1].draft = "  hello bob  ".to_string();
 
     app.handle_key(ctrl('s'));
 
@@ -245,20 +245,17 @@ fn transmit_targets_selected_peer() {
     assert_eq!(out.body, "hello bob");
     assert_eq!(out.title, "", "no title set");
     assert_eq!(
-        app.conversations[1].messages.last().unwrap().text,
+        app.convs.list[1].messages.last().unwrap().text,
         "[TX] hello bob"
     );
-    assert!(app.conversations[1].draft.is_empty(), "sent draft cleared");
-    assert_eq!(
-        app.conversations[0].draft, "stray",
-        "other drafts untouched"
-    );
+    assert!(app.convs.list[1].draft.is_empty(), "sent draft cleared");
+    assert_eq!(app.convs.list[0].draft, "stray", "other drafts untouched");
 }
 
 #[test]
 fn transmit_ignores_blank_draft() {
     let mut app = App::new();
-    app.conversations[0].draft = "   ".to_string();
+    app.convs.list[0].draft = "   ".to_string();
     app.handle_key(ctrl('s'));
     assert!(app.outbox.outbound.is_empty());
 }
@@ -266,11 +263,11 @@ fn transmit_ignores_blank_draft() {
 #[test]
 fn purge_clears_selected_draft_only() {
     let mut app = App::new();
-    app.conversations[0].draft = "secret".to_string();
-    app.conversations[1].draft = "keep".to_string();
+    app.convs.list[0].draft = "secret".to_string();
+    app.convs.list[1].draft = "keep".to_string();
     app.handle_key(ctrl('x'));
-    assert!(app.conversations[0].draft.is_empty());
-    assert_eq!(app.conversations[1].draft, "keep");
+    assert!(app.convs.list[0].draft.is_empty());
+    assert_eq!(app.convs.list[1].draft, "keep");
     assert!(app.outbox.outbound.is_empty());
 }
 
@@ -278,18 +275,18 @@ fn purge_clears_selected_draft_only() {
 fn ctrl_t_toggles_title_field_and_routes_typing() {
     let mut app = App::new();
     // Default focus is Transmit, default field is the body.
-    assert_eq!(app.transmit_field, TransmitField::Body);
+    assert_eq!(app.convs.transmit_field, TransmitField::Body);
 
     // Ctrl+T switches to the title field; typing now lands there.
     app.handle_key(ctrl('t'));
-    assert_eq!(app.transmit_field, TransmitField::Title);
+    assert_eq!(app.convs.transmit_field, TransmitField::Title);
     type_str(&mut app, "urgent");
     assert_eq!(app.selected_conv().unwrap().draft_title, "urgent");
     assert!(app.selected_conv().unwrap().draft.is_empty());
 
     // Ctrl+T toggles back to the body, leaving the title intact.
     app.handle_key(ctrl('t'));
-    assert_eq!(app.transmit_field, TransmitField::Body);
+    assert_eq!(app.convs.transmit_field, TransmitField::Body);
     type_str(&mut app, "hi");
     assert_eq!(app.selected_conv().unwrap().draft, "hi");
     assert_eq!(app.selected_conv().unwrap().draft_title, "urgent");
@@ -298,18 +295,18 @@ fn ctrl_t_toggles_title_field_and_routes_typing() {
 #[test]
 fn ctrl_t_focuses_transmit_from_another_pane() {
     let mut app = App::new();
-    app.focus = Pane::PeerList;
+    app.convs.focus = Pane::PeerList;
     app.handle_key(ctrl('t'));
-    assert_eq!(app.focus, Pane::Transmit);
-    assert_eq!(app.transmit_field, TransmitField::Title);
+    assert_eq!(app.convs.focus, Pane::Transmit);
+    assert_eq!(app.convs.transmit_field, TransmitField::Title);
 }
 
 #[test]
 fn transmit_sends_title_and_resets_field() {
     let mut app = App::new();
-    app.conversations[0].draft_title = "  report  ".to_string();
-    app.conversations[0].draft = "all clear".to_string();
-    app.transmit_field = TransmitField::Title;
+    app.convs.list[0].draft_title = "  report  ".to_string();
+    app.convs.list[0].draft = "all clear".to_string();
+    app.convs.transmit_field = TransmitField::Title;
 
     app.handle_key(ctrl('s'));
 
@@ -317,13 +314,13 @@ fn transmit_sends_title_and_resets_field() {
     assert_eq!(out.title, "report", "title trimmed and carried");
     assert_eq!(out.body, "all clear");
     assert_eq!(
-        app.conversations[0].messages.last().unwrap().text,
+        app.convs.list[0].messages.last().unwrap().text,
         "[TX] report: all clear",
         "title echoed ahead of the body"
     );
-    assert!(app.conversations[0].draft_title.is_empty(), "title cleared");
+    assert!(app.convs.list[0].draft_title.is_empty(), "title cleared");
     assert_eq!(
-        app.transmit_field,
+        app.convs.transmit_field,
         TransmitField::Body,
         "compose form reset to body"
     );
@@ -332,13 +329,13 @@ fn transmit_sends_title_and_resets_field() {
 #[test]
 fn purge_clears_title_too() {
     let mut app = App::new();
-    app.conversations[0].draft = "body".to_string();
-    app.conversations[0].draft_title = "title".to_string();
-    app.transmit_field = TransmitField::Title;
+    app.convs.list[0].draft = "body".to_string();
+    app.convs.list[0].draft_title = "title".to_string();
+    app.convs.transmit_field = TransmitField::Title;
     app.handle_key(ctrl('x'));
-    assert!(app.conversations[0].draft.is_empty());
-    assert!(app.conversations[0].draft_title.is_empty());
-    assert_eq!(app.transmit_field, TransmitField::Body);
+    assert!(app.convs.list[0].draft.is_empty());
+    assert!(app.convs.list[0].draft_title.is_empty());
+    assert_eq!(app.convs.transmit_field, TransmitField::Body);
 }
 
 #[test]
@@ -346,14 +343,14 @@ fn deliver_routes_to_peer_and_increments_unread() {
     let mut app = App::new();
     // Unknown peer -> conversation is created.
     app.deliver("dave", "first contact");
-    let dave = app.conversations.iter().find(|c| c.peer == "dave").unwrap();
+    let dave = app.convs.list.iter().find(|c| c.peer == "dave").unwrap();
     assert_eq!(texts(&dave.messages), vec!["[RX] first contact"]);
     assert_eq!(dave.unread, 1, "unread bumps when not selected");
 
     // A message to the currently selected peer does not bump unread.
     app.deliver("alice", "yo");
-    assert_eq!(app.conversations[0].peer, "alice");
-    assert_eq!(app.conversations[0].unread, 0, "selected peer stays read");
+    assert_eq!(app.convs.list[0].peer, "alice");
+    assert_eq!(app.convs.list[0].unread, 0, "selected peer stays read");
 }
 
 #[test]
@@ -364,7 +361,8 @@ fn push_log_routes_sys_to_syslog() {
     assert_eq!(texts(&app.syslog), vec!["[SYS] online"]);
     // Non-SYS line lands in the "(direct)" conversation as inbound.
     let direct = app
-        .conversations
+        .convs
+        .list
         .iter()
         .find(|c| c.peer == "(direct)")
         .unwrap();
@@ -510,7 +508,7 @@ fn network_columns_toggle_and_navigate_independently() {
 
     // Up/Down move the peer cursor (seeded with 3 conversations).
     app.handle_key(press(KeyCode::Down));
-    assert_eq!(app.selected, 1);
+    assert_eq!(app.convs.selected, 1);
     assert_eq!(app.net.selected, 0, "node cursor untouched while on Peers");
 
     // Tab / Left / Right switch the focused column.
@@ -518,7 +516,10 @@ fn network_columns_toggle_and_navigate_independently() {
     assert_eq!(app.net.col, NetColumn::Nodes);
     app.handle_key(press(KeyCode::Down));
     assert_eq!(app.net.selected, 1);
-    assert_eq!(app.selected, 1, "peer cursor untouched while on Nodes");
+    assert_eq!(
+        app.convs.selected, 1,
+        "peer cursor untouched while on Nodes"
+    );
     app.handle_key(press(KeyCode::Left));
     assert_eq!(app.net.col, NetColumn::Peers);
     app.handle_key(press(KeyCode::Right));
@@ -530,11 +531,11 @@ fn enter_on_peer_opens_its_conversation() {
     let mut app = App::new();
     app.active = Tool::Network;
     app.net.col = NetColumn::Peers;
-    app.selected = 1; // "bob"
+    app.convs.selected = 1; // "bob"
     app.handle_key(press(KeyCode::Enter));
     assert_eq!(app.active, Tool::Conversations);
-    assert_eq!(app.focus, Pane::Transmit);
-    assert_eq!(app.selected, 1);
+    assert_eq!(app.convs.focus, Pane::Transmit);
+    assert_eq!(app.convs.selected, 1);
 }
 
 #[test]
@@ -546,8 +547,8 @@ fn p_queues_path_probe_for_focused_selection() {
 
     // On the Peers column: probes the selected peer's key.
     app.net.col = NetColumn::Peers;
-    app.selected = 0;
-    let peer = app.conversations[0].peer.clone();
+    app.convs.selected = 0;
+    let peer = app.convs.list[0].peer.clone();
     app.handle_key(press(KeyCode::Char('p')));
     assert_eq!(
         app.outbox.commands.pop_front(),
@@ -568,7 +569,7 @@ fn upsert_peer_stamps_last_seen() {
     let mut app = App::new();
     let peer = "dd".repeat(16);
     app.upsert_peer(PeerKind::Delivery, peer.clone(), None);
-    let conv = app.conversations.iter().find(|c| c.peer == peer).unwrap();
+    let conv = app.convs.list.iter().find(|c| c.peer == peer).unwrap();
     assert!(conv.last_seen > 0, "delivery peer stamped");
 
     let nodehash = "ee".repeat(16);
@@ -1032,28 +1033,28 @@ fn fetch_page_resets_scroll_to_top() {
 #[test]
 fn start_conversation_validates_and_normalizes() {
     let mut app = App::new();
-    let before = app.conversations.len();
+    let before = app.convs.list.len();
     // Colons / spaces / case are tolerated → 32 hex chars.
     assert!(app.start_conversation("A1:b2:c3:d4 e5 f6:00:11:22:33:44:55:66:77:88:99", "Bravo-6"));
-    assert_eq!(app.conversations.len(), before + 1);
-    let conv = app.conversations.last().unwrap();
+    assert_eq!(app.convs.list.len(), before + 1);
+    let conv = app.convs.list.last().unwrap();
     assert_eq!(conv.peer, "a1b2c3d4e5f600112233445566778899");
     assert_eq!(conv.display_name.as_deref(), Some("Bravo-6"));
     assert!(conv.pinned);
-    assert_eq!(app.selected, app.conversations.len() - 1);
+    assert_eq!(app.convs.selected, app.convs.list.len() - 1);
     assert_eq!(app.active, Tool::Conversations);
-    assert_eq!(app.focus, Pane::Transmit);
+    assert_eq!(app.convs.focus, Pane::Transmit);
     assert!(app.outbox.dirty.iter().any(|p| p == &conv.peer));
 }
 
 #[test]
 fn start_conversation_rejects_bad_address() {
     let mut app = App::new();
-    let before = app.conversations.len();
+    let before = app.convs.list.len();
     assert!(!app.start_conversation("", ""));
     assert!(!app.start_conversation("abcd", ""), "too short");
     assert!(!app.start_conversation(&"z".repeat(32), ""), "not hex");
-    assert_eq!(app.conversations.len(), before);
+    assert_eq!(app.convs.list.len(), before);
 }
 
 #[test]
@@ -1061,10 +1062,10 @@ fn start_conversation_reuses_existing_and_updates_alias() {
     let mut app = App::new();
     let addr = "ff".repeat(16);
     assert!(app.start_conversation(&addr, ""));
-    let n = app.conversations.len();
+    let n = app.convs.list.len();
     assert!(app.start_conversation(&addr, "Renamed"));
-    assert_eq!(app.conversations.len(), n, "no duplicate thread");
-    let conv = app.conversations.iter().find(|c| c.peer == addr).unwrap();
+    assert_eq!(app.convs.list.len(), n, "no duplicate thread");
+    let conv = app.convs.list.iter().find(|c| c.peer == addr).unwrap();
     assert_eq!(conv.display_name.as_deref(), Some("Renamed"));
 }
 
@@ -1082,7 +1083,8 @@ fn new_conv_modal_open_type_confirm() {
 
     assert!(app.modals.new_conv.is_none(), "Enter closes on success");
     let conv = app
-        .conversations
+        .convs
+        .list
         .iter()
         .find(|c| c.peer == "aa".repeat(16))
         .unwrap();
@@ -1109,9 +1111,9 @@ fn new_conv_esc_cancels_and_invalid_shows_error() {
 #[test]
 fn transmit_stamps_id_and_sending_status() {
     let mut app = App::new();
-    app.conversations[0].draft = "hi".to_string();
+    app.convs.list[0].draft = "hi".to_string();
     app.handle_key(ctrl('s'));
-    let entry = app.conversations[0].messages.last().unwrap();
+    let entry = app.convs.list[0].messages.last().unwrap();
     assert!(entry.id > 0);
     assert_eq!(entry.status, MsgStatus::Sending);
     assert_eq!(
@@ -1124,17 +1126,17 @@ fn transmit_stamps_id_and_sending_status() {
 #[test]
 fn set_msg_status_updates_matching_entry_and_marks_dirty() {
     let mut app = App::new();
-    app.conversations[0].draft = "yo".to_string();
+    app.convs.list[0].draft = "yo".to_string();
     app.handle_key(ctrl('s'));
-    let id = app.conversations[0].messages.last().unwrap().id;
+    let id = app.convs.list[0].messages.last().unwrap().id;
     app.outbox.dirty.clear();
 
     app.set_msg_status(id, MsgStatus::Delivered);
     assert_eq!(
-        app.conversations[0].messages.last().unwrap().status,
+        app.convs.list[0].messages.last().unwrap().status,
         MsgStatus::Delivered
     );
-    let peer = app.conversations[0].peer.clone();
+    let peer = app.convs.list[0].peer.clone();
     assert!(app.outbox.dirty.iter().any(|p| p == &peer));
 
     app.set_msg_status(999_999, MsgStatus::Failed); // unknown id: no-op
@@ -1178,7 +1180,7 @@ fn requeue_choked_returns_message_to_front_and_warns() {
 #[test]
 fn fail_dropped_marks_entry_failed_and_errors() {
     let mut app = App::new();
-    app.conversations[0].draft = "sitrep".to_string();
+    app.convs.list[0].draft = "sitrep".to_string();
     app.handle_key(ctrl('s')); // echoes the entry (Sending) + queues the Outbound
     let out = app
         .outbox
@@ -1186,7 +1188,7 @@ fn fail_dropped_marks_entry_failed_and_errors() {
         .pop_front()
         .expect("transmit queues an outbound");
     assert_eq!(
-        app.conversations[0].messages.last().unwrap().status,
+        app.convs.list[0].messages.last().unwrap().status,
         MsgStatus::Sending
     );
 
@@ -1194,7 +1196,7 @@ fn fail_dropped_marks_entry_failed_and_errors() {
 
     // No longer stuck in Sending — the dead task can't advance it, so we do.
     assert_eq!(
-        app.conversations[0].messages.last().unwrap().status,
+        app.convs.list[0].messages.last().unwrap().status,
         MsgStatus::Failed
     );
     assert!(
@@ -1217,13 +1219,13 @@ fn trust_next_cycles_and_wraps() {
 #[test]
 fn t_key_cycles_trust_and_marks_dirty() {
     let mut app = App::new();
-    app.focus = Pane::PeerList; // the `t` binding is peer-list-only
+    app.convs.focus = Pane::PeerList; // the `t` binding is peer-list-only
     app.outbox.dirty.clear();
-    assert_eq!(app.conversations[0].trust, Trust::Unknown);
+    assert_eq!(app.convs.list[0].trust, Trust::Unknown);
 
     app.handle_key(press(KeyCode::Char('t')));
-    assert_eq!(app.conversations[0].trust, Trust::Trusted);
-    let peer = app.conversations[0].peer.clone();
+    assert_eq!(app.convs.list[0].trust, Trust::Trusted);
+    let peer = app.convs.list[0].peer.clone();
     assert!(
         app.outbox.dirty.iter().any(|p| p == &peer),
         "trust change persists"
@@ -1239,8 +1241,8 @@ fn t_key_in_transmit_pane_types_not_cycles() {
     let mut app = App::new();
     // Default focus is Transmit: `t` must edit the draft, not change trust.
     app.handle_key(press(KeyCode::Char('t')));
-    assert_eq!(app.conversations[0].draft, "t");
-    assert_eq!(app.conversations[0].trust, Trust::Unknown);
+    assert_eq!(app.convs.list[0].draft, "t");
+    assert_eq!(app.convs.list[0].trust, Trust::Unknown);
 }
 
 #[test]
@@ -1331,7 +1333,8 @@ fn load_conversation_adopts_persisted_trust_into_existing() {
     // Simulate an announce creating the conversation first (default Unknown).
     app.upsert_peer(PeerKind::Delivery, peer.clone(), None);
     assert_eq!(
-        app.conversations
+        app.convs
+            .list
             .iter()
             .find(|c| c.peer == peer)
             .unwrap()
@@ -1345,7 +1348,8 @@ fn load_conversation_adopts_persisted_trust_into_existing() {
     app.load_conversation(loaded);
 
     assert_eq!(
-        app.conversations
+        app.convs
+            .list
             .iter()
             .find(|c| c.peer == peer)
             .unwrap()
@@ -1361,7 +1365,8 @@ fn start_conversation_accepts_mnemonic_phrase() {
     let phrase = "payment noodle vivid slogan gas ancient match hammer fever crisp timber crazy";
     assert!(app.start_conversation(phrase, "Phrase-6"));
     let conv = app
-        .conversations
+        .convs
+        .list
         .iter()
         .find(|c| c.peer == "a1b2c3d4e5f600112233445566778899")
         .expect("decoded to the right hash");
@@ -1371,9 +1376,9 @@ fn start_conversation_accepts_mnemonic_phrase() {
 #[test]
 fn start_conversation_rejects_bad_mnemonic_phrase() {
     let mut app = App::new();
-    let before = app.conversations.len();
+    let before = app.convs.list.len();
     // 12 valid words but a swapped pair → checksum fails.
     let bad = "noodle payment vivid slogan gas ancient match hammer fever crisp timber crazy";
     assert!(!app.start_conversation(bad, ""));
-    assert_eq!(app.conversations.len(), before);
+    assert_eq!(app.convs.list.len(), before);
 }

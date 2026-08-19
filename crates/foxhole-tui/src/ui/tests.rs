@@ -145,8 +145,8 @@ fn map_app() -> crate::app::App {
     app.config.display_name = "base".to_string();
     app.config.lat = Some(48.85);
     app.config.lon = Some(2.35);
-    app.conversations[0].display_name = Some("london".to_string());
-    app.conversations[0].location = Some(GeoPos::new(51.5, -0.12));
+    app.convs.list[0].display_name = Some("london".to_string());
+    app.convs.list[0].location = Some(GeoPos::new(51.5, -0.12));
     app
 }
 
@@ -188,13 +188,14 @@ fn world_map_renders_received_intel_and_review_modal() {
     // A trusted peer's hostile zone is applied (live); an unknown peer's marker is
     // staged for review. Far-future stale so the sweep/render keeps them.
     let stale = super_now() + 36_000;
-    app.conversations[0].peer = "aa11bb22cc33".to_string();
-    app.conversations[0].trust = Trust::Trusted;
+    app.convs.list[0].peer = "aa11bb22cc33".to_string();
+    app.convs.list[0].trust = Trust::Trusted;
     app.apply_cot(
         "aa11bb22cc33".to_string(),
         CotEvent::zone("z1", "AO INTEL", 50.0, 10.0, 200_000.0, super_now(), stale),
     );
-    app.conversations
+    app.convs
+        .list
         .push(crate::app::Conversation::new("dead00beef11")); // Unknown
     app.apply_cot(
         "dead00beef11".to_string(),
@@ -236,10 +237,10 @@ fn share_zone_modal_lists_local_zones_for_the_peer() {
 
     let mut app = map_app();
     app.active = Tool::Conversations;
-    app.conversations[0].display_name = Some("kilo".to_string());
+    app.convs.list[0].display_name = Some("kilo".to_string());
     app.intel.share_zone = Some(ShareZone {
         selected: 0,
-        peer: app.conversations[0].peer.clone(),
+        peer: app.convs.list[0].peer.clone(),
         peer_label: "kilo".to_string(),
     });
 

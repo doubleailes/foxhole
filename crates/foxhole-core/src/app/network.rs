@@ -52,7 +52,7 @@ impl App {
                 NetColumn::Peers => {
                     if self.selected_conv().is_some() {
                         self.active = Tool::Conversations;
-                        self.focus = Pane::Transmit;
+                        self.convs.focus = Pane::Transmit;
                         self.mark_selected_read();
                     }
                 }

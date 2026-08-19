@@ -480,7 +480,7 @@ mod tests {
     #[test]
     fn editing_updates_in_place_via_selection() {
         let mut app = App::new();
-        app.conversations.clear();
+        app.convs.list.clear();
         app.intel.live.clear();
         app.config.lat = None; // no operator marker, so index 0 is the intel one
         app.config.lon = None;
@@ -520,7 +520,7 @@ mod tests {
     #[test]
     fn remove_selected_intel_drops_it_locally() {
         let mut app = App::new();
-        app.conversations.clear();
+        app.convs.list.clear();
         app.intel.live.clear();
         app.config.lat = None;
         app.config.lon = None;

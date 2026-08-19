@@ -74,7 +74,7 @@ async fn main() -> io::Result<()> {
 
     // Live discovery replaces the offline demo peers; start from an empty list.
     #[cfg(feature = "net")]
-    app.conversations.clear();
+    app.convs.list.clear();
 
     // `_guard` drops as this returns, restoring the terminal whether `run`
     // finished cleanly or propagated an I/O error.
@@ -329,7 +329,8 @@ impl Persistence {
         let Some(key) = &self.key else { return };
         for peer in std::mem::take(&mut app.outbox.dirty) {
             let result = app
-                .conversations
+                .convs
+                .list
                 .iter()
                 .find(|c| c.peer == peer)
                 .filter(|c| c.should_persist())

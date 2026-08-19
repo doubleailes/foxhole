@@ -19,6 +19,15 @@
 //! blocks, the intel layer into [`intel`] (ingest + review), [`share`] (sending
 //! it out), and [`author`] (drawing it in), and the cold-boot/scroll machinery
 //! into [`boot`].
+//!
+//! `App` itself is a composition of per-tool groups rather than a flat bag of
+//! fields: each of those modules owns the state its tool needs
+//! ([`ConversationsState`], [`NetworkState`], [`MapState`], [`BrowserState`],
+//! [`IntelState`]), with the cross-cutting [`Outbox`] and [`Modals`] alongside
+//! them. The groups' fields stay `pub` and are reached by direct path
+//! (`app.map.view`, `self.convs.list`) — not through accessor pairs, which
+//! would defeat the disjoint borrows the key handlers rely on. Methods that
+//! genuinely span groups stay here, on `App`, at the composition root.
 
 mod author;
 mod boot;
@@ -50,6 +59,7 @@ pub use boot::{AppState, Scroll};
 #[cfg(feature = "splash")]
 pub use boot::{Boot, BootStep};
 pub use browser::BrowserState;
+pub use conversations::ConversationsState;
 pub use intel::{IntelReview, IntelState};
 pub use map::{GotoMgrs, MapState};
 pub use network::NetworkState;
@@ -322,16 +332,9 @@ pub enum BrowserPane {
 pub struct App {
     /// Active top-level tool (drives the tab strip + key delegation).
     pub active: Tool,
-    /// Focused pane within the Conversations tool (drives the reversed
-    /// highlight + key routing there). Ignored by the read-only tools.
-    pub focus: Pane,
-    /// Which Transmit-pane field keystrokes edit (title vs body), toggled with
-    /// Ctrl+T. Only meaningful while the Transmit pane is focused.
-    pub transmit_field: TransmitField,
-    /// All conversations, in display order.
-    pub conversations: Vec<Conversation>,
-    /// Index of the selected conversation within `conversations`.
-    pub selected: usize,
+    /// Conversations tool state: the roster, the selection, the focused pane
+    /// and the compose form. See [`ConversationsState`].
+    pub convs: ConversationsState,
     /// Network tool state: the propagation-node registry, the focused column,
     /// and the reachability readouts. See [`NetworkState`].
     pub net: NetworkState,
@@ -344,10 +347,12 @@ pub struct App {
     /// Browser tool state: the node list, the focused pane, and the page being
     /// viewed. See [`BrowserState`].
     pub browser: BrowserState,
-    /// Scroll positions for the overflowing text panes (PageUp/PageDown/Home/End).
+    /// Scroll position of the Guide tool (PageUp/PageDown/Home/End). The other
+    /// scrollable panes belong to a tool, so they live with its state.
     pub guide_scroll: Scroll,
+    /// Scroll position of the Log tool (bottom-anchored: it follows the newest
+    /// line until the operator scrolls up).
     pub log_scroll: Scroll,
-    pub thread_scroll: Scroll,
     /// This node's own LXMF address (hex), once the network task reports it.
     pub local_address: Option<String>,
     /// When `Some`, a propagation sync is running and the pop-up shows this text.
@@ -391,30 +396,19 @@ impl Default for App {
 }
 
 impl App {
-    /// Fresh session: open on Conversations with the Transmit pane focused so
-    /// the operator can type at once. Seeds a few demo peers so the offline UI
-    /// is usable; under the `net` feature `main` clears them at startup and live
-    /// announce-based discovery fills the list instead.
+    /// Fresh session: open on Conversations (each group brings its own defaults
+    /// — see [`ConversationsState::default`] for the seeded demo roster and the
+    /// initial pane focus).
     pub fn new() -> Self {
-        let mut alice = Conversation::new("alice");
-        alice
-            .messages
-            .push(Entry::now("[RX] hey, you on the mesh?".to_string()));
-        let conversations = vec![alice, Conversation::new("bob"), Conversation::new("carol")];
-
         Self {
             active: Tool::Conversations,
-            focus: Pane::Transmit,
-            transmit_field: TransmitField::Body,
-            conversations,
-            selected: 0,
+            convs: ConversationsState::default(),
             net: NetworkState::default(),
             map: MapState::default(),
             intel: IntelState::default(),
             browser: BrowserState::default(),
             guide_scroll: Scroll::top(),
             log_scroll: Scroll::bottom(),
-            thread_scroll: Scroll::bottom(),
             local_address: None,
             sync_status: None,
             modals: Modals::default(),
@@ -551,7 +545,7 @@ impl App {
             Tool::Browser if self.browser.pane == BrowserPane::Page => Some(&self.browser.scroll),
             Tool::Log => Some(&self.log_scroll),
             Tool::Guide => Some(&self.guide_scroll),
-            Tool::Conversations if self.focus == Pane::Thread => Some(&self.thread_scroll),
+            Tool::Conversations if self.convs.focus == Pane::Thread => Some(&self.convs.scroll),
             _ => None,
         }
     }

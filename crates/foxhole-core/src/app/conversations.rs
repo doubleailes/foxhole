@@ -1,8 +1,50 @@
 //! Conversations tool: peer discovery, roster navigation, compose + send, and
-//! inbound delivery. All operate on `App`'s `conversations`/`selected` state.
+//! inbound delivery. All operate on [`ConversationsState`], `App`'s roster
+//! and compose state.
 
 use super::*;
 use crate::domain::{normalize_address, now_secs, short_hash};
+
+/// The Conversations tool's own state: the roster, which peer is selected,
+/// which of the three panes has focus, and the compose form.
+///
+/// The roster is the one piece of this group other tools read — the Network
+/// tab's peers column and the map's peer markers are both views of it — so it
+/// stays a plain field rather than hiding behind accessors.
+pub struct ConversationsState {
+    /// All conversations, in display order.
+    pub list: Vec<Conversation>,
+    /// Index of the selected conversation within [`ConversationsState::list`].
+    pub selected: usize,
+    /// Focused pane (drives the reversed highlight + key routing).
+    pub focus: Pane,
+    /// Which Transmit-pane field keystrokes edit (title vs body), toggled with
+    /// Ctrl+T. Only meaningful while the Transmit pane is focused.
+    pub transmit_field: TransmitField,
+    /// Scroll position of the Thread pane (bottom-anchored: it follows the
+    /// newest message until the operator scrolls up).
+    pub scroll: Scroll,
+}
+
+impl Default for ConversationsState {
+    /// Opens with the Transmit pane focused so the operator can type at once.
+    /// Seeds a few demo peers so the offline UI is usable; under the `net`
+    /// feature `main` clears them at startup and live announce-based discovery
+    /// fills the roster instead.
+    fn default() -> Self {
+        let mut alice = Conversation::new("alice");
+        alice
+            .messages
+            .push(Entry::now("[RX] hey, you on the mesh?".to_string()));
+        Self {
+            list: vec![alice, Conversation::new("bob"), Conversation::new("carol")],
+            selected: 0,
+            focus: Pane::Transmit,
+            transmit_field: TransmitField::Body,
+            scroll: Scroll::bottom(),
+        }
+    }
+}
 
 impl App {
     /// Record/refresh a discovered peer. Delivery peers become conversations
@@ -12,7 +54,7 @@ impl App {
         let now = now_secs();
         match kind {
             PeerKind::Delivery => {
-                if let Some(conv) = self.conversations.iter_mut().find(|c| c.peer == hash) {
+                if let Some(conv) = self.convs.list.iter_mut().find(|c| c.peer == hash) {
                     if name.is_some() {
                         conv.display_name = name;
                     }
@@ -21,7 +63,7 @@ impl App {
                     let mut conv = Conversation::new(hash);
                     conv.display_name = name;
                     conv.last_seen = now;
-                    self.conversations.push(conv);
+                    self.convs.list.push(conv);
                 }
             }
             PeerKind::Propagation => {
@@ -50,22 +92,22 @@ impl App {
             None => return false,
         };
         let alias = alias.trim();
-        let idx = match self.conversations.iter().position(|c| c.peer == key) {
+        let idx = match self.convs.list.iter().position(|c| c.peer == key) {
             Some(i) => i,
             None => {
                 let mut conv = Conversation::new(key.clone());
                 conv.pinned = true;
-                self.conversations.push(conv);
-                self.conversations.len() - 1
+                self.convs.list.push(conv);
+                self.convs.list.len() - 1
             }
         };
         if !alias.is_empty() {
-            self.conversations[idx].display_name = Some(alias.to_string());
-            self.conversations[idx].pinned = true;
+            self.convs.list[idx].display_name = Some(alias.to_string());
+            self.convs.list[idx].pinned = true;
         }
-        self.selected = idx;
+        self.convs.selected = idx;
         self.active = Tool::Conversations;
-        self.focus = Pane::Transmit;
+        self.convs.focus = Pane::Transmit;
         self.mark_dirty(&key);
         true
     }
@@ -82,23 +124,23 @@ impl App {
             // Set/edit the outbound message title (Nomadnet's Ctrl+T): focus the
             // Transmit pane and toggle between the title and the body field.
             (true, KeyCode::Char('t')) => {
-                self.focus = Pane::Transmit;
-                self.transmit_field = self.transmit_field.toggle();
+                self.convs.focus = Pane::Transmit;
+                self.convs.transmit_field = self.convs.transmit_field.toggle();
             }
             (_, KeyCode::Tab) => self.toggle_focus(),
 
             // Peer-list navigation — only when that pane is focused.
-            (false, KeyCode::Up) if self.focus == Pane::PeerList => self.select_prev(),
-            (false, KeyCode::Down) if self.focus == Pane::PeerList => self.select_next(),
+            (false, KeyCode::Up) if self.convs.focus == Pane::PeerList => self.select_prev(),
+            (false, KeyCode::Down) if self.convs.focus == Pane::PeerList => self.select_next(),
             // Cycle the selected peer's trust level.
-            (false, KeyCode::Char('t')) if self.focus == Pane::PeerList => {
+            (false, KeyCode::Char('t')) if self.convs.focus == Pane::PeerList => {
                 self.cycle_selected_trust()
             }
 
             // Transmit-pane editing — only when that pane is focused. Keystrokes
             // land in whichever field (title or body) Ctrl+T last selected.
-            (false, KeyCode::Char(c)) if self.focus == Pane::Transmit => {
-                let field = self.transmit_field;
+            (false, KeyCode::Char(c)) if self.convs.focus == Pane::Transmit => {
+                let field = self.convs.transmit_field;
                 if let Some(conv) = self.selected_conv_mut() {
                     match field {
                         TransmitField::Title => conv.draft_title.push(c),
@@ -106,8 +148,8 @@ impl App {
                     }
                 }
             }
-            (false, KeyCode::Backspace) if self.focus == Pane::Transmit => {
-                let field = self.transmit_field;
+            (false, KeyCode::Backspace) if self.convs.focus == Pane::Transmit => {
+                let field = self.convs.transmit_field;
                 if let Some(conv) = self.selected_conv_mut() {
                     match field {
                         TransmitField::Title => conv.draft_title.pop(),
@@ -123,25 +165,25 @@ impl App {
 
     /// Cycle focus between Conversations panes (bound to Tab).
     pub fn toggle_focus(&mut self) {
-        self.focus = self.focus.next();
+        self.convs.focus = self.convs.focus.next();
     }
 
     /// The selected conversation, if any (the list is empty only in degenerate
     /// states — seeding gives at least one).
     pub fn selected_conv(&self) -> Option<&Conversation> {
-        self.conversations.get(self.selected)
+        self.convs.list.get(self.convs.selected)
     }
 
     /// Mutable access to the selected conversation.
     pub fn selected_conv_mut(&mut self) -> Option<&mut Conversation> {
-        self.conversations.get_mut(self.selected)
+        self.convs.list.get_mut(self.convs.selected)
     }
 
     /// Move the selection up one peer (clamped at the top). Marks the newly
     /// selected conversation as read.
     pub fn select_prev(&mut self) {
-        if self.selected > 0 {
-            self.selected -= 1;
+        if self.convs.selected > 0 {
+            self.convs.selected -= 1;
             self.mark_selected_read();
         }
     }
@@ -149,8 +191,8 @@ impl App {
     /// Move the selection down one peer (clamped at the bottom). Marks the
     /// newly selected conversation as read.
     pub fn select_next(&mut self) {
-        if self.selected + 1 < self.conversations.len() {
-            self.selected += 1;
+        if self.convs.selected + 1 < self.convs.list.len() {
+            self.convs.selected += 1;
             self.mark_selected_read();
         }
     }
@@ -159,7 +201,7 @@ impl App {
     /// screen).
     pub(super) fn mark_selected_read(&mut self) {
         // Switching conversations re-anchors the thread to its newest message.
-        self.thread_scroll.to_bottom();
+        self.convs.scroll.to_bottom();
         if let Some(conv) = self.selected_conv_mut() {
             conv.unread = 0;
             let peer = conv.peer.clone();
@@ -170,7 +212,7 @@ impl App {
     /// Cycle the selected peer's trust level (the `t` key in the peer rosters),
     /// persist it, and log a `[SEC]` line. No-op without a selected conversation.
     pub(super) fn cycle_selected_trust(&mut self) {
-        let Some(conv) = self.conversations.get_mut(self.selected) else {
+        let Some(conv) = self.convs.list.get_mut(self.convs.selected) else {
             return;
         };
         conv.trust = conv.trust.next();
@@ -194,11 +236,7 @@ impl App {
     /// display name is filled. Loaded conversations are not re-marked dirty.
     #[cfg_attr(not(feature = "net"), allow(dead_code))]
     pub fn load_conversation(&mut self, mut loaded: Conversation) {
-        if let Some(existing) = self
-            .conversations
-            .iter_mut()
-            .find(|c| c.peer == loaded.peer)
-        {
+        if let Some(existing) = self.convs.list.iter_mut().find(|c| c.peer == loaded.peer) {
             loaded.messages.append(&mut existing.messages);
             existing.messages = loaded.messages;
             if existing.display_name.is_none() {
@@ -210,7 +248,7 @@ impl App {
                 existing.trust = loaded.trust;
             }
         } else {
-            self.conversations.push(loaded);
+            self.convs.list.push(loaded);
         }
     }
 
@@ -219,7 +257,7 @@ impl App {
     /// No-op on an empty/whitespace draft so a stray Ctrl+S doesn't emit a
     /// blank frame.
     pub fn transmit(&mut self) {
-        let (body, title) = match self.conversations.get(self.selected) {
+        let (body, title) = match self.convs.list.get(self.convs.selected) {
             Some(conv) => (
                 conv.draft.trim().to_string(),
                 conv.draft_title.trim().to_string(),
@@ -230,7 +268,7 @@ impl App {
             return;
         }
         let id = self.outbox.next_id();
-        let conv = &mut self.conversations[self.selected];
+        let conv = &mut self.convs.list[self.convs.selected];
         // Echo the title (when set) ahead of the body so the thread shows what
         // was sent, mirroring how the recipient sees a titled message.
         let echo = if title.is_empty() {
@@ -254,7 +292,7 @@ impl App {
             cot_xml: None,
         });
         // Sending resets the compose form back to the body field.
-        self.transmit_field = TransmitField::Body;
+        self.convs.transmit_field = TransmitField::Body;
         self.mark_dirty(&peer);
     }
 
@@ -262,7 +300,7 @@ impl App {
     /// it lives), and mark its conversation dirty so the status is persisted.
     pub fn set_msg_status(&mut self, id: u64, status: MsgStatus) {
         let mut hit = None;
-        for conv in &mut self.conversations {
+        for conv in &mut self.convs.list {
             if let Some(entry) = conv.messages.iter_mut().find(|e| e.id == id) {
                 entry.status = status;
                 hit = Some(conv.peer.clone());
@@ -309,7 +347,7 @@ impl App {
             conv.draft.clear();
             conv.draft_title.clear();
         }
-        self.transmit_field = TransmitField::Body;
+        self.convs.transmit_field = TransmitField::Body;
     }
 
     /// Deliver an inbound message from `peer` into its conversation, creating
@@ -323,18 +361,18 @@ impl App {
         if body.is_empty() {
             return;
         }
-        let idx = match self.conversations.iter().position(|c| c.peer == peer) {
+        let idx = match self.convs.list.iter().position(|c| c.peer == peer) {
             Some(i) => i,
             None => {
-                self.conversations.push(Conversation::new(peer));
-                self.conversations.len() - 1
+                self.convs.list.push(Conversation::new(peer));
+                self.convs.list.len() - 1
             }
         };
-        self.conversations[idx]
+        self.convs.list[idx]
             .messages
             .push(Entry::now(format!("[RX] {body}")));
-        if idx != self.selected {
-            self.conversations[idx].unread += 1;
+        if idx != self.convs.selected {
+            self.convs.list[idx].unread += 1;
         }
         self.mark_dirty(peer);
     }
@@ -345,19 +383,19 @@ impl App {
     /// written to the store) — it is refreshed from live telemetry. Logs the
     /// update to the Log tool.
     pub fn set_location(&mut self, peer: &str, pos: GeoPos) {
-        let idx = match self.conversations.iter().position(|c| c.peer == peer) {
+        let idx = match self.convs.list.iter().position(|c| c.peer == peer) {
             Some(i) => i,
             None => {
-                self.conversations.push(Conversation::new(peer));
-                self.conversations.len() - 1
+                self.convs.list.push(Conversation::new(peer));
+                self.convs.list.len() - 1
             }
         };
         // Only log an actual move: a stationary peer re-sending the same fix is
         // common, and logging every repeat would just churn the (bounded) log.
-        let changed = self.conversations[idx].location != Some(pos);
-        self.conversations[idx].location = Some(pos);
+        let changed = self.convs.list[idx].location != Some(pos);
+        self.convs.list[idx].location = Some(pos);
         if changed {
-            let label = self.conversations[idx].label();
+            let label = self.convs.list[idx].label();
             self.push_log(format!(
                 "[SYS] telemetry: {label} @ {:.4}, {:.4}",
                 pos.lat, pos.lon

@@ -38,7 +38,7 @@ pub(super) fn render_conversations(frame: &mut Frame, app: &App, area: Rect) {
         Some(conv) => (
             format!("THREAD: {} (UTC)", conv.peer),
             conv.messages.iter().map(styled_entry).collect(),
-            app.focus == Pane::Thread,
+            app.convs.focus == Pane::Thread,
         ),
         None => ("THREAD".to_string(), Vec::new(), false),
     };
@@ -47,7 +47,7 @@ pub(super) fn render_conversations(frame: &mut Frame, app: &App, area: Rect) {
         &title,
         lines,
         thread_active,
-        &app.thread_scroll,
+        &app.convs.scroll,
         top[1],
     );
 
@@ -60,11 +60,12 @@ pub(super) fn render_conversations(frame: &mut Frame, app: &App, area: Rect) {
 /// show as a trailing `(N)`.
 fn render_peer_list(frame: &mut Frame, app: &App, area: Rect) {
     let lines: Vec<Line> = app
-        .conversations
+        .convs
+        .list
         .iter()
         .enumerate()
         .map(|(i, conv)| {
-            let selected = i == app.selected;
+            let selected = i == app.convs.selected;
             let marker = if selected { SEL } else { NOSEL };
             let unread = if conv.unread > 0 {
                 format!(" ({})", conv.unread)
@@ -90,8 +91,8 @@ fn render_peer_list(frame: &mut Frame, app: &App, area: Rect) {
 
     let para = Paragraph::new(lines).block(tactical_block(
         "PEERS",
-        Some(count_tag(app.conversations.len())),
-        app.focus == Pane::PeerList,
+        Some(count_tag(app.convs.list.len())),
+        app.convs.focus == Pane::PeerList,
     ));
     frame.render_widget(para, area);
 }
@@ -100,7 +101,7 @@ fn render_peer_list(frame: &mut Frame, app: &App, area: Rect) {
 /// body. The real terminal cursor stays hidden (field constraint), so when
 /// focused we paint a synthetic reversed block as the caret on the active field.
 fn render_transmit(frame: &mut Frame, app: &App, area: Rect) {
-    let active = app.focus == Pane::Transmit;
+    let active = app.convs.focus == Pane::Transmit;
     let conv = app.selected_conv();
     let title = conv.map(|c| c.draft_title.as_str()).unwrap_or("");
     let body = conv.map(|c| c.draft.as_str()).unwrap_or("");
@@ -112,7 +113,7 @@ fn render_transmit(frame: &mut Frame, app: &App, area: Rect) {
     let label_style = Style::default().add_modifier(Modifier::DIM);
 
     // Title row: dimmed when empty so it reads as an optional prompt.
-    let editing_title = app.transmit_field == TransmitField::Title;
+    let editing_title = app.convs.transmit_field == TransmitField::Title;
     let mut title_spans = vec![Span::styled("TITLE ", label_style), Span::raw(title)];
     if let Some(c) = caret(editing_title) {
         title_spans.push(c);
