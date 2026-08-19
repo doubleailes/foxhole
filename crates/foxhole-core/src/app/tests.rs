@@ -3,6 +3,34 @@
 use super::*;
 use crossterm::event::KeyEventState;
 
+/// A test event at a fixed instant (shared with the `intel`/`share`/`author`
+/// test modules); `stale` is `time + 3600` (one hour out).
+pub(super) fn event(uid: &str, cot_type: &str, time: i64) -> CotEvent {
+    let mut e = CotEvent::marker(
+        uid,
+        Affiliation::Hostile,
+        "AO",
+        50.4,
+        30.5,
+        time,
+        time + 3600,
+    );
+    e.cot_type = cot_type.to_string();
+    e
+}
+
+/// An app with a single peer at the given trust, no demo intel.
+pub(super) fn app_with_peer(hash: &str, trust: Trust) -> App {
+    let mut app = App::new();
+    app.conversations.clear();
+    app.intel.clear();
+    app.intel_staged.clear();
+    let mut c = Conversation::new(hash);
+    c.trust = trust;
+    app.conversations.push(c);
+    app
+}
+
 /// Build a press event with no modifiers.
 fn press(code: KeyCode) -> KeyEvent {
     KeyEvent {
