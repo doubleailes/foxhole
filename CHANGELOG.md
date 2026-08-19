@@ -6,6 +6,48 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-08-19
+
+Maintenance release. The mesh stack moves to upstream's first release carrying
+the packet-proof fix, so **DIRECT delivery is acknowledged** — the headline
+known limitation of 0.1.0 is closed.
+
+### Added
+
+- **Release CI.** Publishing a GitHub release now builds and attaches four
+  archives — Linux (`x86_64-unknown-linux-gnu`) and Windows
+  (`x86_64-pc-windows-msvc`), each in the offline and the `-net` configuration —
+  with a SHA-256 checksum per asset, built `--locked` from the tagged tree.
+
+### Changed
+
+- **Mesh stack pinned to `rsReticulum`/`rsLXMF` v1.2.0** (by release tag rather
+  than commit), the floor at which link-packet proofs validate role-correctly.
+  v1.2.0 is now the documented minimum.
+- **Networking extracted into the `foxhole-net` member crate**, keeping the
+  async/live-protocol dependencies off the logic and rendering layers.
+- Shared dependency versions and the pinned mesh tags centralised in
+  `[workspace.dependencies]`.
+- Keyboard input is drained ahead of network events (`biased select!`), so the
+  console stays responsive under inbound traffic.
+
+### Fixed
+
+- **DIRECT delivery acknowledgement** (via the v1.2.0 pin above).
+- Outbound send failures are surfaced to the operator instead of being silently
+  dropped, and channel backpressure retries rather than discarding the message.
+- **C0/C1 control sequences are stripped from remote text** before it reaches
+  the terminal, closing a terminal-injection vector in peer-supplied content.
+- `foxhole-cot`'s ISO-8601 parser hardened against malformed timestamps, and
+  `format()` saturated to the range `parse()` accepts.
+- Splash-tick starvation during cold boot.
+
+### Known limitations
+
+- Ratchets, delivery-proof surfacing, the `cot/proto` transport, and a TAK
+  gateway are not yet built — see `docs/lxmf-integration.md` and
+  `docs/intel-sharing.md` §13.
+
 ## [0.1.0] - 2026-06-21
 
 First public release — the keyboard-only, monochrome-legible LXMF comms
@@ -61,5 +103,6 @@ terminal. **Experimental.**
   gateway are not yet built — see `docs/lxmf-integration.md` and
   `docs/intel-sharing.md` §13.
 
-[Unreleased]: https://github.com/doubleailes/foxhole/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/doubleailes/foxhole/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/doubleailes/foxhole/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/doubleailes/foxhole/releases/tag/v0.1.0

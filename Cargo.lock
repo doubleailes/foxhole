@@ -551,7 +551,7 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "foxhole"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "crossterm",
  "foxhole-core",
@@ -565,7 +565,7 @@ dependencies = [
 
 [[package]]
 name = "foxhole-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "crossterm",
  "foxhole-cot",
@@ -575,25 +575,25 @@ dependencies = [
 
 [[package]]
 name = "foxhole-cot"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "foxhole-map"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "foxhole-cot",
 ]
 
 [[package]]
 name = "foxhole-micron"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ratatui",
 ]
 
 [[package]]
 name = "foxhole-net"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bytes",
  "foxhole-core",
@@ -611,7 +611,7 @@ dependencies = [
 
 [[package]]
 name = "foxhole-tui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "foxhole-core",
  "foxhole-map",
