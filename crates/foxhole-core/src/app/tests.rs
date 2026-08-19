@@ -388,14 +388,14 @@ fn type_burn(app: &mut App, s: &str) {
 fn ctrl_k_opens_burn_and_token_confirms() {
     let mut app = App::new();
     app.handle_key(ctrl('k'));
-    assert!(app.burn_confirm.is_some(), "burn modal opened");
+    assert!(app.modals.burn_confirm.is_some(), "burn modal opened");
     assert!(!app.burn && !app.should_quit);
 
     type_burn(&mut app, BURN_TOKEN);
     app.handle_key(press(KeyCode::Enter));
     assert!(app.burn, "burn confirmed");
     assert!(app.should_quit, "and quitting");
-    assert!(app.burn_confirm.is_none(), "modal closed");
+    assert!(app.modals.burn_confirm.is_none(), "modal closed");
 }
 
 #[test]
@@ -406,10 +406,13 @@ fn wrong_burn_token_does_not_burn() {
     app.handle_key(press(KeyCode::Enter));
     assert!(!app.burn, "no burn for the wrong token");
     assert!(!app.should_quit);
-    assert!(app.burn_confirm.as_ref().unwrap().error, "error flagged");
+    assert!(
+        app.modals.burn_confirm.as_ref().unwrap().error,
+        "error flagged"
+    );
     // Editing clears the error; the modal stays open until Esc or the token.
     app.handle_key(press(KeyCode::Backspace));
-    assert!(!app.burn_confirm.as_ref().unwrap().error);
+    assert!(!app.modals.burn_confirm.as_ref().unwrap().error);
 }
 
 #[test]
@@ -418,7 +421,7 @@ fn esc_cancels_burn() {
     app.handle_key(ctrl('k'));
     type_burn(&mut app, BURN_TOKEN);
     app.handle_key(press(KeyCode::Esc));
-    assert!(app.burn_confirm.is_none(), "cancelled");
+    assert!(app.modals.burn_confirm.is_none(), "cancelled");
     assert!(!app.burn && !app.should_quit, "nothing burned");
 }
 
@@ -1058,7 +1061,7 @@ fn start_conversation_reuses_existing_and_updates_alias() {
 fn new_conv_modal_open_type_confirm() {
     let mut app = App::new();
     app.handle_key(ctrl('o'));
-    assert!(app.new_conv.is_some(), "Ctrl+O opens the popup");
+    assert!(app.modals.new_conv.is_some(), "Ctrl+O opens the popup");
 
     // Modal captures input: address, Tab to alias, then a name.
     type_str(&mut app, &"aa".repeat(16));
@@ -1066,7 +1069,7 @@ fn new_conv_modal_open_type_confirm() {
     type_str(&mut app, "Alpha");
     app.handle_key(press(KeyCode::Enter));
 
-    assert!(app.new_conv.is_none(), "Enter closes on success");
+    assert!(app.modals.new_conv.is_none(), "Enter closes on success");
     let conv = app
         .conversations
         .iter()
@@ -1081,13 +1084,13 @@ fn new_conv_esc_cancels_and_invalid_shows_error() {
     app.handle_key(ctrl('o'));
     app.handle_key(press(KeyCode::Char('a')));
     app.handle_key(press(KeyCode::Esc));
-    assert!(app.new_conv.is_none(), "Esc cancels");
+    assert!(app.modals.new_conv.is_none(), "Esc cancels");
 
     app.handle_key(ctrl('o'));
     app.handle_key(press(KeyCode::Char('z'))); // non-hex → normalizes to empty
     app.handle_key(press(KeyCode::Enter));
     assert!(
-        app.new_conv.as_ref().is_some_and(|nc| nc.error),
+        app.modals.new_conv.as_ref().is_some_and(|nc| nc.error),
         "stays open with error"
     );
 }
@@ -1236,7 +1239,7 @@ fn m_key_opens_mnemonic_modal_and_any_key_closes() {
     app.active = Tool::Network; // net_col defaults to Peers, selection = new conv
 
     app.handle_key(press(KeyCode::Char('m')));
-    let view = app.mnemonic_view.as_ref().expect("modal opens");
+    let view = app.modals.mnemonic_view.as_ref().expect("modal opens");
     assert_eq!(view.phrase.split_whitespace().count(), 12);
     assert_eq!(
         view.phrase,
@@ -1244,7 +1247,7 @@ fn m_key_opens_mnemonic_modal_and_any_key_closes() {
     );
 
     app.handle_key(press(KeyCode::Char('x'))); // any key dismisses
-    assert!(app.mnemonic_view.is_none());
+    assert!(app.modals.mnemonic_view.is_none());
 }
 
 #[test]
