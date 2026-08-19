@@ -1,16 +1,20 @@
 name: Release
 
 # Cut the shipping binaries when a GitHub release is published and attach them to
-# that release: one Linux (x86_64-unknown-linux-gnu) and one Windows
-# (x86_64-pc-windows-msvc) archive, each with a SHA-256 checksum file.
+# that release. Four assets, one per (platform × configuration) pair, each with a
+# SHA-256 checksum file:
 #
-# Both are the **default (offline) configuration** — `--features net` pulls the
-# AGPL rsReticulum/rsLXMF git deps, which are built from source by operators who
-# want the live mesh compartment (see README §7 and docs/lxmf-integration.md);
-# the published artifacts stay dependency-light and reproducible from crates.io.
+#   foxhole-<tag>-x86_64-unknown-linux-gnu.tar.gz       offline (default)
+#   foxhole-<tag>-x86_64-unknown-linux-gnu-net.tar.gz   live mesh (--features net)
+#   foxhole-<tag>-x86_64-pc-windows-msvc.zip            offline (default)
+#   foxhole-<tag>-x86_64-pc-windows-msvc-net.zip        live mesh (--features net)
 #
-# `workflow_dispatch` re-cuts the artifacts for an existing release tag (e.g.
-# after a runner failure) without having to delete and re-publish the release.
+# The `-net` builds link the AGPL-3.0-or-later rsReticulum/rsLXMF stack, so they
+# ship as a combined AGPL work (LICENSE travels in the archive; see README §7 for
+# the network-use clause the operator inherits).
+#
+# `workflow_dispatch` re-cuts the assets for an existing release tag (e.g. after
+# a runner failure) without having to delete and re-publish the release.
 on:
   release:
     types: [published]
@@ -30,19 +34,24 @@ env:
 
 jobs:
   build:
-    name: ${{ matrix.target }}
-    runs-on: ${{ matrix.os }}
+    name: ${{ matrix.platform.target }} (${{ matrix.variant.id }})
+    runs-on: ${{ matrix.platform.os }}
     strategy:
-      # One platform failing must not cancel the other's artifact.
+      # One combination failing must not cancel the other three assets.
       fail-fast: false
       matrix:
-        include:
+        platform:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             archive: tar.gz
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             archive: zip
+        variant:
+          # The dependency-light offline terminal, and the live mesh compartment
+          # (which additionally fetches the pinned rsReticulum/rsLXMF git revs).
+          - { id: offline, flags: "", suffix: "" }
+          - { id: net, flags: "--features net", suffix: "-net" }
     # bash on both runners (Git for Windows ships it), so the packaging steps
     # below are written once instead of per-platform.
     defaults:
@@ -54,7 +63,7 @@ jobs:
         run: |
           tag="${{ github.event.release.tag_name || inputs.tag }}"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "name=foxhole-$tag-${{ matrix.target }}" >> "$GITHUB_OUTPUT"
+          echo "name=foxhole-$tag-${{ matrix.platform.target }}${{ matrix.variant.suffix }}" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@v4
         with:
@@ -63,22 +72,23 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: ${{ matrix.platform.target }}
 
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.target }}
+          key: ${{ matrix.platform.target }}-${{ matrix.variant.id }}
 
-      # `--locked` so the release is built from the committed Cargo.lock.
+      # `--locked` so the release is built from the committed Cargo.lock — which
+      # pins the mesh stack's git revs as well.
       - name: Build
-        run: cargo build --release --locked --target ${{ matrix.target }}
+        run: cargo build --release --locked --target ${{ matrix.platform.target }} ${{ matrix.variant.flags }}
 
       - name: Package
         id: package
         run: |
           set -euo pipefail
           name='${{ steps.meta.outputs.name }}'
-          bin="target/${{ matrix.target }}/release/foxhole"
+          bin="target/${{ matrix.platform.target }}/release/foxhole"
           mkdir -p "dist/$name"
           if [ '${{ runner.os }}' = 'Windows' ]; then
             cp "$bin.exe" "dist/$name/"
@@ -88,13 +98,17 @@ jobs:
           fi
           # Ship the licence with the binary (AGPL) plus the operator docs.
           cp README.md LICENSE CHANGELOG.md SECURITY.md "dist/$name/"
+          # The mesh build's binding notes travel with the mesh build.
+          if [ -n '${{ matrix.variant.suffix }}' ]; then
+            cp docs/lxmf-integration.md "dist/$name/"
+          fi
           cd dist
-          if [ '${{ matrix.archive }}' = 'zip' ]; then
+          if [ '${{ matrix.platform.archive }}' = 'zip' ]; then
             7z a -tzip "$name.zip" "$name" > /dev/null
           else
             tar czf "$name.tar.gz" "$name"
           fi
-          asset="$name.${{ matrix.archive }}"
+          asset="$name.${{ matrix.platform.archive }}"
           sha256sum "$asset" > "$asset.sha256"
           echo "asset=dist/$asset" >> "$GITHUB_OUTPUT"
 

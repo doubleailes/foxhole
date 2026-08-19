@@ -101,11 +101,13 @@ Capabilities ██ through ██ are withheld. ██████████�
 > not reproduced here.
 
 **Prebuilt issue.** Every published
-[release](https://github.com/doubleailes/foxhole/releases) carries a Linux
-(`x86_64-unknown-linux-gnu`, `.tar.gz`) and a Windows (`x86_64-pc-windows-msvc`,
-`.zip`) archive of the **offline** terminal, each with a `.sha256` to verify
-before you trust it. The `net` compartment is not issued prebuilt — arm it from
-source below.
+[release](https://github.com/doubleailes/foxhole/releases) carries four
+archives — Linux (`x86_64-unknown-linux-gnu`, `.tar.gz`) and Windows
+(`x86_64-pc-windows-msvc`, `.zip`), each in both configurations: the **offline**
+terminal, and the live mesh build marked `-net` (the `net` compartment already
+armed, no toolchain required). Each asset ships a `.sha256` — verify before you
+trust it. The `-net` binaries are a combined AGPL work; §7 below states what that
+obliges of the operator running one.
 
 **Prerequisites.** A Rust toolchain ≥ **1.88** (edition 2024). The offline
 build needs nothing else; the `net` build fetches its mesh stack from git on
