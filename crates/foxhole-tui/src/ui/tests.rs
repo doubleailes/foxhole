@@ -303,7 +303,7 @@ fn world_map_draws_cities_and_g_hides_them() {
     // label. The default viewport is centred on the origin, where Lagos is an
     // in-view anchor clear of the operator/peer markers.
     let mut app = map_app();
-    app.map.span = 120.0;
+    app.map.view.span = 120.0;
     let mut term = Terminal::new(TestBackend::new(110, 30)).unwrap();
     term.draw(|f| crate::ui::render(f, &app)).unwrap();
     assert!(
@@ -312,7 +312,7 @@ fn world_map_draws_cities_and_g_hides_them() {
     );
 
     // Toggling the layer off (g) removes them.
-    app.map_cities = false;
+    app.map.cities = false;
     term.draw(|f| crate::ui::render(f, &app)).unwrap();
     assert!(
         !term.backend().to_string().contains("Lagos"),
