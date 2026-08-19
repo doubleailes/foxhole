@@ -20,10 +20,43 @@ pub struct GotoMgrs {
     pub error: bool,
 }
 
+/// World Map tool state: the viewport plus the operator-facing layers and the
+/// map's own modal. Fields stay `pub` on purpose — the renderer reads them
+/// directly, and disjoint borrows only work through direct field paths.
+pub struct MapState {
+    /// Viewport (pan/zoom state).
+    pub view: MapView,
+    /// Selected marker index within [`App::map_markers`].
+    pub selected: usize,
+    /// Whether the embedded capitals/cities reference layer is drawn
+    /// (toggled with `g`). On by default for orientation.
+    pub cities: bool,
+    /// Hazard areas overlaid on the map (war zones / areas of operations).
+    /// Seeded with a demo set; overridden from `zones.conf` when present. This
+    /// is *local* (operator-authored) intel — distinct from the received layer.
+    pub zones: Vec<Zone>,
+    /// When `Some`, the "go to MGRS" modal is open (captures input) — reframes
+    /// the map onto a typed grid reference.
+    pub goto_mgrs: Option<GotoMgrs>,
+}
+
+impl MapState {
+    /// Whole-globe view with the reference layers on and the demo hazard set.
+    pub(super) fn new() -> Self {
+        Self {
+            view: MapView::default(),
+            selected: 0,
+            cities: true,
+            zones: crate::zones::demo(),
+            goto_mgrs: None,
+        }
+    }
+}
+
 impl App {
     /// The markers to plot, in selection order: the operator's own fix first (if
     /// configured), then every peer carrying a telemetry location, in roster
-    /// order. `map_selected` indexes into this list.
+    /// order. `MapState::selected` indexes into this list.
     pub fn map_markers(&self) -> Vec<MapMarker> {
         let mut out = Vec::new();
         if let Some(pos) = self.config.operator_pos() {
@@ -63,21 +96,21 @@ impl App {
     /// reference layer, `r` resets the view.
     pub(super) fn handle_map_key(&mut self, _ctrl: bool, key: KeyEvent) {
         match key.code {
-            KeyCode::Left => self.map.pan_west(),
-            KeyCode::Right => self.map.pan_east(),
-            KeyCode::Up => self.map.pan_north(),
-            KeyCode::Down => self.map.pan_south(),
-            KeyCode::Char('+') | KeyCode::Char('=') => self.map.zoom_in(),
-            KeyCode::Char('-') | KeyCode::Char('_') => self.map.zoom_out(),
+            KeyCode::Left => self.map.view.pan_west(),
+            KeyCode::Right => self.map.view.pan_east(),
+            KeyCode::Up => self.map.view.pan_north(),
+            KeyCode::Down => self.map.view.pan_south(),
+            KeyCode::Char('+') | KeyCode::Char('=') => self.map.view.zoom_in(),
+            KeyCode::Char('-') | KeyCode::Char('_') => self.map.view.zoom_out(),
             KeyCode::Tab | KeyCode::Char(']') => self.select_map_marker(1),
             KeyCode::BackTab | KeyCode::Char('[') => self.select_map_marker(-1),
             KeyCode::Enter | KeyCode::Char('c') => self.center_selected_marker(),
-            KeyCode::Char('g') => self.map_cities = !self.map_cities,
+            KeyCode::Char('g') => self.map.cities = !self.map.cities,
             // Reframe the map onto a typed MGRS grid reference.
             KeyCode::Char('/') => self.open_goto_mgrs(),
             KeyCode::Char('r') => {
-                self.map = MapView::default();
-                self.map_selected = 0;
+                self.map.view = MapView::default();
+                self.map.selected = 0;
             }
             // Open the incoming-intel review list (staged CoT from unvetted peers).
             KeyCode::Char('i') => self.open_intel_review(),
@@ -97,11 +130,11 @@ impl App {
     fn select_map_marker(&mut self, delta: isize) {
         let n = self.map_markers().len();
         if n == 0 {
-            self.map_selected = 0;
+            self.map.selected = 0;
             return;
         }
-        let cur = self.map_selected.min(n - 1) as isize;
-        self.map_selected = (cur + delta).rem_euclid(n as isize) as usize;
+        let cur = self.map.selected.min(n - 1) as isize;
+        self.map.selected = (cur + delta).rem_euclid(n as isize) as usize;
         self.center_selected_marker();
     }
 
@@ -109,17 +142,18 @@ impl App {
     /// zoom-in-from-globe behaviour lives in [`MapView::frame_on`].)
     fn center_selected_marker(&mut self) {
         let markers = self.map_markers();
-        if let Some(m) = markers.get(self.map_selected) {
-            self.map.frame_on(m.pos);
+        if let Some(m) = markers.get(self.map.selected) {
+            self.map.view.frame_on(m.pos);
         }
     }
 
     /// Open the "go to MGRS" modal, prefilled with the current viewport centre as
     /// a grid reference so the operator can nudge to a nearby square.
     pub(super) fn open_goto_mgrs(&mut self) {
-        let input = foxhole_map::mgrs::format(self.map.center, foxhole_map::mgrs::DEFAULT_DIGITS)
-            .unwrap_or_default();
-        self.goto_mgrs = Some(GotoMgrs {
+        let input =
+            foxhole_map::mgrs::format(self.map.view.center, foxhole_map::mgrs::DEFAULT_DIGITS)
+                .unwrap_or_default();
+        self.map.goto_mgrs = Some(GotoMgrs {
             input,
             error: false,
         });
@@ -128,11 +162,11 @@ impl App {
     /// Key handling while the goto-MGRS modal is open: type the reference, Enter
     /// reframes, Backspace edits, Esc cancels.
     pub(super) fn handle_goto_mgrs_key(&mut self, key: KeyEvent) {
-        let Some(g) = self.goto_mgrs.as_mut() else {
+        let Some(g) = self.map.goto_mgrs.as_mut() else {
             return;
         };
         match key.code {
-            KeyCode::Esc => self.goto_mgrs = None,
+            KeyCode::Esc => self.map.goto_mgrs = None,
             KeyCode::Enter => self.commit_goto_mgrs(),
             KeyCode::Backspace => {
                 g.error = false;
@@ -150,18 +184,18 @@ impl App {
     /// Parse the typed reference and frame the map on it, or flag an error and
     /// keep the modal open.
     fn commit_goto_mgrs(&mut self) {
-        let Some(g) = self.goto_mgrs.as_ref() else {
+        let Some(g) = self.map.goto_mgrs.as_ref() else {
             return;
         };
         match foxhole_map::mgrs::parse(&g.input) {
             Some(pos) => {
                 let label = g.input.clone();
-                self.map.frame_on(pos);
-                self.goto_mgrs = None;
+                self.map.view.frame_on(pos);
+                self.map.goto_mgrs = None;
                 self.push_log(format!("[SYS] map: framed on {label}"));
             }
             None => {
-                if let Some(g) = self.goto_mgrs.as_mut() {
+                if let Some(g) = self.map.goto_mgrs.as_mut() {
                     g.error = true;
                 }
             }
@@ -277,30 +311,30 @@ mod tests {
         app.conversations[0].location = Some(GeoPos::new(10.0, 20.0));
         // Zoom in so the latitude band is wide enough to shift the centre onto a
         // marker (at full-globe zoom the band collapses to the equator).
-        app.map.span = 40.0;
+        app.map.view.span = 40.0;
 
         // Two markers: operator (idx 0) then the located peer (idx 1).
         app.select_map_marker(1);
-        assert_eq!(app.map_selected, 1);
-        assert_eq!(app.map.center, GeoPos::new(10.0, 20.0));
+        assert_eq!(app.map.selected, 1);
+        assert_eq!(app.map.view.center, GeoPos::new(10.0, 20.0));
         // Wrap back to the operator.
         app.select_map_marker(1);
-        assert_eq!(app.map_selected, 0);
+        assert_eq!(app.map.selected, 0);
     }
 
     #[test]
     fn g_toggles_the_cities_layer() {
         let mut app = App::new();
-        assert!(app.map_cities, "cities are shown by default");
+        assert!(app.map.cities, "cities are shown by default");
         let g = KeyEvent::from(KeyCode::Char('g'));
         app.handle_map_key(false, g);
-        assert!(!app.map_cities, "g hides the layer");
+        assert!(!app.map.cities, "g hides the layer");
         app.handle_map_key(false, g);
-        assert!(app.map_cities, "g shows it again");
+        assert!(app.map.cities, "g shows it again");
         // Resetting the viewport leaves the display toggle alone.
-        app.map_cities = false;
+        app.map.cities = false;
         app.handle_map_key(false, KeyEvent::from(KeyCode::Char('r')));
-        assert!(!app.map_cities, "reset only touches the viewport");
+        assert!(!app.map.cities, "reset only touches the viewport");
     }
 
     #[test]
@@ -308,27 +342,30 @@ mod tests {
         let mut app = App::new();
         // Opening prefills the modal with the current centre as a reference.
         app.open_goto_mgrs();
-        assert!(app.goto_mgrs.is_some());
-        assert!(!app.goto_mgrs.as_ref().unwrap().input.is_empty());
+        assert!(app.map.goto_mgrs.is_some());
+        assert!(!app.map.goto_mgrs.as_ref().unwrap().input.is_empty());
 
         // Type a known reference (origin of zone 31N) and commit: the view jumps.
-        app.goto_mgrs.as_mut().unwrap().input = "31NAA6602100000".to_string();
+        app.map.goto_mgrs.as_mut().unwrap().input = "31NAA6602100000".to_string();
         app.handle_goto_mgrs_key(KeyEvent::from(KeyCode::Enter));
-        assert!(app.goto_mgrs.is_none(), "modal closes on a good reference");
-        assert!(app.map.center.lat.abs() < 0.01 && app.map.center.lon.abs() < 0.01);
+        assert!(
+            app.map.goto_mgrs.is_none(),
+            "modal closes on a good reference"
+        );
+        assert!(app.map.view.center.lat.abs() < 0.01 && app.map.view.center.lon.abs() < 0.01);
 
         // A bad reference keeps the modal open with an error flagged.
         app.open_goto_mgrs();
-        app.goto_mgrs.as_mut().unwrap().input = "not-a-grid".to_string();
+        app.map.goto_mgrs.as_mut().unwrap().input = "not-a-grid".to_string();
         app.handle_goto_mgrs_key(KeyEvent::from(KeyCode::Enter));
         assert!(
-            app.goto_mgrs.as_ref().unwrap().error,
+            app.map.goto_mgrs.as_ref().unwrap().error,
             "bad input flags error"
         );
 
         // Esc cancels without moving the view.
         app.handle_goto_mgrs_key(KeyEvent::from(KeyCode::Esc));
-        assert!(app.goto_mgrs.is_none());
+        assert!(app.map.goto_mgrs.is_none());
     }
 
     #[test]
@@ -339,14 +376,14 @@ mod tests {
         // Whole-globe default view: centring would otherwise be a no-op, so it
         // zooms to a regional scale and the view jumps to the marker. (The 60°
         // regional span is `MapView`'s CENTER_ZOOM_SPAN.)
-        assert_eq!(app.map.span, 360.0);
+        assert_eq!(app.map.view.span, 360.0);
         app.center_selected_marker();
-        assert_eq!(app.map.span, 60.0);
-        assert_eq!(app.map.center, GeoPos::new(40.0, 30.0));
+        assert_eq!(app.map.view.span, 60.0);
+        assert_eq!(app.map.view.center, GeoPos::new(40.0, 30.0));
 
         // Once already zoomed in past the threshold, centring leaves zoom alone.
-        app.map.span = 20.0;
+        app.map.view.span = 20.0;
         app.center_selected_marker();
-        assert_eq!(app.map.span, 20.0);
+        assert_eq!(app.map.view.span, 20.0);
     }
 }

@@ -101,7 +101,7 @@ pub(super) fn render_map(frame: &mut Frame, app: &App, area: Rect) {
     // Right column stacks the positions roster over the INTEL roster (local
     // hazard zones + received CoT intel).
     let staged_row = usize::from(!app.intel_staged.is_empty());
-    let intel_rows = app.zones.len() + app.live_intel().len() + staged_row;
+    let intel_rows = app.map.zones.len() + app.live_intel().len() + staged_row;
     let intel_h = (intel_rows as u16 + 2).clamp(3, 14);
     let right = Layout::default()
         .direction(Direction::Vertical)
@@ -124,13 +124,13 @@ pub(super) fn render_map(frame: &mut Frame, app: &App, area: Rect) {
 /// The map canvas itself: the world outline, then peer/operator points, then the
 /// marker labels on top (selected one lit).
 fn render_canvas(frame: &mut Frame, app: &App, area: Rect) {
-    let view = app.map;
+    let view = app.map.view;
     let markers = app.map_markers();
-    let selected = app.map_selected;
-    let zones = app.zones.clone();
+    let selected = app.map.selected;
+    let zones = app.map.zones.clone();
     // Received-intel circular overlays (live, affiliation-tinted).
     let intel_zones = app.intel_zones();
-    let show_cities = app.map_cities;
+    let show_cities = app.map.cities;
 
     // Pre-split coordinates by kind so each layer is one cheap `Points` draw.
     // `project_lon` shifts each point by ±360 when the viewport straddles the
@@ -336,7 +336,7 @@ fn render_marker_list(frame: &mut Frame, app: &App, area: Rect) {
         markers
             .iter()
             .enumerate()
-            .map(|(i, m)| marker_row(m, i == app.map_selected))
+            .map(|(i, m)| marker_row(m, i == app.map.selected))
             .collect()
     };
     let para = Paragraph::new(lines).block(tactical_block(
@@ -385,7 +385,7 @@ fn render_intel_list(frame: &mut Frame, app: &App, area: Rect) {
     let ttl = app.config.intel_ttl_secs;
 
     let mut lines: Vec<Line<'static>> = Vec::new();
-    for z in &app.zones {
+    for z in &app.map.zones {
         lines.push(zone_row(z));
     }
     for r in &live {
@@ -406,7 +406,7 @@ fn render_intel_list(frame: &mut Frame, app: &App, area: Rect) {
         lines.push(Line::styled("  (no intel)", ts_style()));
     }
 
-    let count = app.zones.len() + live.len();
+    let count = app.map.zones.len() + live.len();
     let para = Paragraph::new(lines).block(tactical_block("INTEL", Some(count_tag(count)), false));
     frame.render_widget(para, area);
 }

@@ -66,7 +66,7 @@ async fn main() -> io::Result<()> {
     // the demo set. The filesystem read lives here; core stays I/O-free and only
     // parses.
     match std::fs::read_to_string(config::config_dir().join("zones.conf")) {
-        Ok(text) => app.zones = zones::parse(&text),
+        Ok(text) => app.map.zones = zones::parse(&text),
         Err(_) => { /* no file (or unreadable): keep the seeded demo zones */ }
     }
 

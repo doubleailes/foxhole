@@ -81,7 +81,7 @@ impl App {
     pub(super) fn selected_intel_key(&self) -> Option<(String, String)> {
         self.map_markers()
             .into_iter()
-            .nth(self.map_selected)
+            .nth(self.map.selected)
             .and_then(|m| m.intel_key)
     }
 
@@ -124,9 +124,9 @@ impl App {
                 kind: AuthorKind::Marker,
                 affiliation: Affiliation::Unknown,
                 callsign: String::new(),
-                lat: fmt_coord(self.map.center.lat),
-                lon: fmt_coord(self.map.center.lon),
-                mgrs: mgrs_for(self.map.center.lat, self.map.center.lon),
+                lat: fmt_coord(self.map.view.center.lat),
+                lon: fmt_coord(self.map.view.center.lon),
+                mgrs: mgrs_for(self.map.view.center.lat, self.map.view.center.lon),
                 radius_km: "10".to_string(),
                 remarks: String::new(),
                 field: AuthorField::Kind,
@@ -290,7 +290,7 @@ impl App {
             .retain(|r| !(r.source == source && r.event.uid == uid));
         if self.intel.len() != before {
             self.intel_dirty = true;
-            self.map_selected = 0;
+            self.map.selected = 0;
             self.push_log(format!("[SYS] intel: removed {uid} (local)"));
         }
     }
@@ -494,7 +494,7 @@ mod tests {
         let key = app.intel[0].key();
         let key = (key.0.to_string(), key.1.to_string());
 
-        app.map_selected = 0; // the sole marker
+        app.map.selected = 0; // the sole marker
         app.open_author(true);
         assert_eq!(app.author.as_ref().unwrap().edit_key, Some(key.clone()));
         app.author.as_mut().unwrap().callsign = "OP-MOVED".into();
@@ -518,7 +518,7 @@ mod tests {
         app.commit_author();
         assert_eq!(app.intel.len(), 1);
 
-        app.map_selected = 0;
+        app.map.selected = 0;
         app.intel_dirty = false;
         app.remove_selected_intel();
         assert!(app.intel.is_empty());

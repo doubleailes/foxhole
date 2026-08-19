@@ -27,7 +27,7 @@ impl App {
     /// Open the "share zone" picker for the active conversation (P3). No-op when
     /// there is no selected peer or no local zone to share.
     pub(super) fn open_share_zone(&mut self) {
-        if self.zones.is_empty() {
+        if self.map.zones.is_empty() {
             self.push_log("[SYS] intel: no local zones to share (add to zones.conf)".to_string());
             return;
         }
@@ -56,7 +56,7 @@ impl App {
                 }
             }
             KeyCode::Down => {
-                if selected + 1 < self.zones.len()
+                if selected + 1 < self.map.zones.len()
                     && let Some(s) = self.share_zone.as_mut()
                 {
                     s.selected = selected + 1;
@@ -82,7 +82,7 @@ impl App {
     /// for graceful degradation). The wire generation is `foxhole-cot`'s producer
     /// side — "today's `Zone` becomes a produced `u-d-c-c`" (design note §4).
     pub fn share_zone(&mut self, zone_idx: usize, peer: &str) {
-        let Some(zone) = self.zones.get(zone_idx) else {
+        let Some(zone) = self.map.zones.get(zone_idx) else {
             return;
         };
         let (label, lat, lon, radius_km) = (
@@ -125,7 +125,7 @@ impl App {
     /// the map. The local `zones.conf` entry is untouched — this only withdraws
     /// the copy the peer holds (design note §6; no auto-relay, an explicit action).
     pub fn revoke_shared_zone(&mut self, zone_idx: usize, peer: &str) {
-        let Some(zone) = self.zones.get(zone_idx) else {
+        let Some(zone) = self.map.zones.get(zone_idx) else {
             return;
         };
         let (label, lat, lon, radius_km) = (
@@ -186,7 +186,7 @@ mod tests {
         app.conversations.clear();
         app.conversations.push(Conversation::new("aa11"));
         app.selected = 0;
-        app.zones = vec![crate::domain::Zone::new("AO ALPHA", 50.4, 30.5, 400.0)];
+        app.map.zones = vec![crate::domain::Zone::new("AO ALPHA", 50.4, 30.5, 400.0)];
 
         app.share_zone(0, "aa11");
 
@@ -221,7 +221,7 @@ mod tests {
         sender.conversations.clear();
         sender.conversations.push(Conversation::new("aa11"));
         sender.selected = 0;
-        sender.zones = vec![crate::domain::Zone::new("AO ALPHA", 50.4, 30.5, 400.0)];
+        sender.map.zones = vec![crate::domain::Zone::new("AO ALPHA", 50.4, 30.5, 400.0)];
         sender.revoke_shared_zone(0, "aa11");
 
         let out = sender.outbound.front().expect("revocation enqueued");
@@ -270,12 +270,12 @@ mod tests {
     fn share_picker_opens_only_with_a_peer_and_zone() {
         let mut app = App::new();
         app.conversations.clear();
-        app.zones.clear();
+        app.map.zones.clear();
         // No zones → no picker (logs a hint instead).
         app.open_share_zone();
         assert!(app.share_zone.is_none());
 
-        app.zones = vec![crate::domain::Zone::new("AO", 0.0, 0.0, 10.0)];
+        app.map.zones = vec![crate::domain::Zone::new("AO", 0.0, 0.0, 10.0)];
         // No conversation selected → still no picker.
         app.open_share_zone();
         assert!(app.share_zone.is_none());

@@ -230,13 +230,13 @@ pub(super) fn render_share_zone_popup(frame: &mut Frame, app: &App, share: &Shar
         ),
         Line::raw(""),
     ];
-    if app.zones.is_empty() {
+    if app.map.zones.is_empty() {
         lines.push(Line::styled(
             "  (no local zones — add to zones.conf)",
             base_style(),
         ));
     } else {
-        for (i, z) in app.zones.iter().enumerate() {
+        for (i, z) in app.map.zones.iter().enumerate() {
             let sel = i == share.selected;
             let lead = if sel { "\u{25b6} " } else { "  " }; // ▶
             let mut style = Style::default();
