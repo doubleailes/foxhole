@@ -4,6 +4,44 @@
 
 use super::*;
 
+/// Which Browser-tab pane has focus: the node list or the page viewport.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BrowserPane {
+    Nodes,
+    Page,
+}
+
+/// Browser tool state: the discovered Nomad Network nodes and the micron page
+/// viewport (current page, back stack, and scroll position).
+pub struct BrowserState {
+    /// Discovered Nomad Network nodes.
+    pub nodes: Vec<NomadNode>,
+    /// Highlighted row in the node list.
+    pub selected: usize,
+    /// Which pane has focus (node list vs page viewport).
+    pub pane: BrowserPane,
+    /// The page currently being viewed/fetched, if any.
+    pub page: Option<Page>,
+    /// Back stack of visited `(node identity, path)` pages (Backspace pops).
+    pub history: Vec<(String, String)>,
+    /// Scroll position of the page viewport.
+    pub scroll: Scroll,
+}
+
+impl BrowserState {
+    /// Nothing discovered, nothing loaded; the node list focused.
+    pub(super) fn new() -> Self {
+        Self {
+            nodes: Vec::new(),
+            selected: 0,
+            pane: BrowserPane::Nodes,
+            page: None,
+            history: Vec::new(),
+            scroll: Scroll::top(),
+        }
+    }
+}
+
 impl App {
     /// Browser: two panes (node list / page viewport), switched with Tab.
     /// Nodes — Up/Down select, Enter/`g` open the node's index. Page — Up/Down
@@ -12,13 +50,13 @@ impl App {
     pub(super) fn handle_browser_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Tab => {
-                self.browser_pane = match self.browser_pane {
+                self.browser.pane = match self.browser.pane {
                     BrowserPane::Nodes => BrowserPane::Page,
                     BrowserPane::Page => BrowserPane::Nodes,
                 };
             }
             KeyCode::Char('r') if !self.editing_field() => self.reload(),
-            _ => match self.browser_pane {
+            _ => match self.browser.pane {
                 BrowserPane::Nodes => self.handle_browser_nodes_key(key),
                 BrowserPane::Page => self.handle_browser_page_key(key),
             },
@@ -28,17 +66,17 @@ impl App {
     /// Node-list pane keys.
     fn handle_browser_nodes_key(&mut self, key: KeyEvent) {
         match key.code {
-            KeyCode::Up => self.browser_selected = self.browser_selected.saturating_sub(1),
+            KeyCode::Up => self.browser.selected = self.browser.selected.saturating_sub(1),
             KeyCode::Down => {
-                if self.browser_selected + 1 < self.nomad_nodes.len() {
-                    self.browser_selected += 1;
+                if self.browser.selected + 1 < self.browser.nodes.len() {
+                    self.browser.selected += 1;
                 }
             }
             KeyCode::Enter | KeyCode::Char('g') => {
-                if let Some(node) = self.nomad_nodes.get(self.browser_selected) {
+                if let Some(node) = self.browser.nodes.get(self.browser.selected) {
                     let id = node.identity.clone();
                     self.fetch_page(id, "/page/index.mu".to_string(), Vec::new(), true);
-                    self.browser_pane = BrowserPane::Page; // focus the page to read/follow
+                    self.browser.pane = BrowserPane::Page; // focus the page to read/follow
                 }
             }
             _ => {}
@@ -61,7 +99,7 @@ impl App {
 
     /// Move the page-element cursor by `delta`, clamped.
     fn move_element(&mut self, delta: isize) {
-        if let Some(p) = &mut self.page {
+        if let Some(p) = &mut self.browser.page {
             let n = p.elements.len();
             if n == 0 {
                 return;
@@ -73,7 +111,7 @@ impl App {
 
     /// Name of the focused element if it is a text field.
     fn focused_field_name(&self) -> Option<String> {
-        let p = self.page.as_ref()?;
+        let p = self.browser.page.as_ref()?;
         match p.elements.get(p.element_sel)? {
             crate::micron::Element::Field { name, .. } => Some(name.clone()),
             _ => None,
@@ -84,14 +122,14 @@ impl App {
     /// of reloading).
     fn editing_field(&self) -> bool {
         self.active == Tool::Browser
-            && self.browser_pane == BrowserPane::Page
+            && self.browser.pane == BrowserPane::Page
             && self.focused_field_name().is_some()
     }
 
     /// Append a char to the focused field's value (end-insert editing).
     fn field_push(&mut self, c: char) {
         if let Some(name) = self.focused_field_name()
-            && let Some(p) = &mut self.page
+            && let Some(p) = &mut self.browser.page
         {
             p.field_values.entry(name).or_default().push(c);
         }
@@ -100,7 +138,7 @@ impl App {
     /// Delete the last char of the focused field's value.
     fn field_pop(&mut self) {
         if let Some(name) = self.focused_field_name()
-            && let Some(p) = &mut self.page
+            && let Some(p) = &mut self.browser.page
         {
             p.field_values.entry(name).or_default().pop();
         }
@@ -108,7 +146,7 @@ impl App {
 
     /// Reload the current page (no history push).
     fn reload(&mut self) {
-        if let Some(p) = &self.page {
+        if let Some(p) = &self.browser.page {
             let (node, path) = (p.node.clone(), p.path.clone());
             self.fetch_page(node, path, Vec::new(), false);
         }
@@ -117,6 +155,7 @@ impl App {
     /// Follow the focused link, submitting its form fields if it has any.
     fn follow_link(&mut self) {
         let Some(crate::micron::Element::Link { target, fields }) = self
+            .browser
             .page
             .as_ref()
             .and_then(|p| p.elements.get(p.element_sel))
@@ -131,7 +170,7 @@ impl App {
             }
             None => {
                 // Unsupported scheme or an undiscovered node — surface it inline.
-                if let Some(p) = &mut self.page {
+                if let Some(p) = &mut self.browser.page {
                     p.status = PageStatus::Error(format!("cannot follow link: {target}"));
                 }
             }
@@ -141,7 +180,7 @@ impl App {
     /// Collect a link's form submission per NomadNet: `*` → every field;
     /// `name` → `field_<name>`; `k=v` → `var_<k>`. (Checkbox/radio deferred.)
     fn collect_form(&self, link_fields: &[String]) -> Vec<(String, String)> {
-        let Some(p) = &self.page else {
+        let Some(p) = &self.browser.page else {
             return Vec::new();
         };
         let all = link_fields.iter().any(|f| f == "*");
@@ -185,11 +224,12 @@ impl App {
         };
         if host.is_empty() {
             // Relative link — stay on the current page's node.
-            return self.page.as_ref().map(|p| (p.node.clone(), path));
+            return self.browser.page.as_ref().map(|p| (p.node.clone(), path));
         }
         // Absolute link — `host` is a destination hash; map it to a known node.
         let host = host.to_lowercase();
-        self.nomad_nodes
+        self.browser
+            .nodes
             .iter()
             .find(|n| n.dest == host)
             .map(|n| (n.identity.clone(), path))
@@ -197,7 +237,7 @@ impl App {
 
     /// Go back to the previous page in history (no-op when empty).
     fn go_back(&mut self) {
-        if let Some((node, path)) = self.history.pop() {
+        if let Some((node, path)) = self.browser.history.pop() {
             self.fetch_page(node, path, Vec::new(), false);
         }
     }
@@ -214,22 +254,22 @@ impl App {
         push_history: bool,
     ) {
         let already = matches!(
-            &self.page,
+            &self.browser.page,
             Some(p) if p.node == identity && p.path == path && matches!(p.status, PageStatus::Fetching)
         );
         if already {
             return;
         }
-        if push_history && let Some(p) = &self.page {
-            self.history.push((p.node.clone(), p.path.clone()));
+        if push_history && let Some(p) = &self.browser.page {
+            self.browser.history.push((p.node.clone(), p.path.clone()));
         }
-        self.page_scroll.to_top(); // each navigation opens at the top
+        self.browser.scroll.to_top(); // each navigation opens at the top
         self.commands.push_back(NetCommand::FetchPage {
             identity: identity.clone(),
             path: path.clone(),
             fields,
         });
-        self.page = Some(Page {
+        self.browser.page = Some(Page {
             node: identity,
             path,
             status: PageStatus::Fetching,
@@ -249,14 +289,19 @@ impl App {
         name: Option<String>,
         last_seen: u64,
     ) {
-        if let Some(node) = self.nomad_nodes.iter_mut().find(|n| n.identity == identity) {
+        if let Some(node) = self
+            .browser
+            .nodes
+            .iter_mut()
+            .find(|n| n.identity == identity)
+        {
             if name.is_some() {
                 node.name = name;
             }
             node.dest = dest;
             node.last_seen = node.last_seen.max(last_seen);
         } else {
-            self.nomad_nodes.push(NomadNode {
+            self.browser.nodes.push(NomadNode {
                 identity,
                 dest,
                 name,
@@ -271,7 +316,7 @@ impl App {
     #[cfg_attr(not(feature = "net"), allow(dead_code))]
     pub fn set_page(&mut self, identity: String, path: String, body: Result<String, String>) {
         // Ignore stale results for a page the operator has navigated away from.
-        if !matches!(&self.page, Some(p) if p.node == identity && p.path == path) {
+        if !matches!(&self.browser.page, Some(p) if p.node == identity && p.path == path) {
             return;
         }
         let (status, elements, field_values) = match body {
@@ -289,7 +334,7 @@ impl App {
             }
             Err(e) => (PageStatus::Error(e), Vec::new(), HashMap::new()),
         };
-        self.page = Some(Page {
+        self.browser.page = Some(Page {
             node: identity,
             path,
             status,

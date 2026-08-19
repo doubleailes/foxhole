@@ -50,6 +50,7 @@ pub use author::{AuthorField, AuthorForm, AuthorKind};
 pub use boot::{AppState, Scroll};
 #[cfg(feature = "splash")]
 pub use boot::{Boot, BootStep};
+pub use browser::{BrowserPane, BrowserState};
 pub use intel::IntelReview;
 pub use map::{GotoMgrs, MapState};
 pub use network::NetworkState;
@@ -268,7 +269,6 @@ impl NetColumn {
     }
 }
 
-/// Which Browser-tab pane has focus: the node list or the page viewport.
 /// The modal overlays that capture all input while open. Each corresponds to an
 /// `Option<…>` field on [`App`]; keeping the set enumerated means adding one is
 /// a variant plus two match arms, not another hand-ordered `is_some()` branch
@@ -289,12 +289,6 @@ enum Modal {
     Author,
     /// "Go to MGRS" grid-reference jump.
     GotoMgrs,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BrowserPane {
-    Nodes,
-    Page,
 }
 
 /// Whole-program UI state.
@@ -331,18 +325,9 @@ pub struct App {
     /// Set when the live/staged intel layer changed this iteration; `main` drains
     /// it and persists the encrypted intel store. Keeps `App` free of I/O.
     pub intel_dirty: bool,
-    /// Discovered Nomad Network nodes (Browser tab).
-    pub nomad_nodes: Vec<NomadNode>,
-    /// Highlighted row in the Browser tab's node list.
-    pub browser_selected: usize,
-    /// Which Browser-tab pane has focus (node list vs page viewport).
-    pub browser_pane: BrowserPane,
-    /// The page currently being viewed/fetched in the Browser tab, if any.
-    pub page: Option<Page>,
-    /// Back stack of visited `(node identity, path)` pages (Backspace pops).
-    pub history: Vec<(String, String)>,
+    /// Browser tool state (Nomad Network nodes, page viewport, history).
+    pub browser: BrowserState,
     /// Scroll positions for the overflowing text panes (PageUp/PageDown/Home/End).
-    pub page_scroll: Scroll,
     pub guide_scroll: Scroll,
     pub log_scroll: Scroll,
     pub thread_scroll: Scroll,
@@ -424,12 +409,7 @@ impl App {
             share_zone: None,
             author: None,
             intel_dirty: false,
-            nomad_nodes: Vec::new(),
-            browser_selected: 0,
-            browser_pane: BrowserPane::Nodes,
-            page: None,
-            history: Vec::new(),
-            page_scroll: Scroll::top(),
+            browser: BrowserState::new(),
             guide_scroll: Scroll::top(),
             log_scroll: Scroll::bottom(),
             thread_scroll: Scroll::bottom(),
@@ -571,7 +551,7 @@ impl App {
     /// PageUp/PageDown/Home/End act on.
     fn active_scroll(&self) -> Option<&Scroll> {
         match self.active {
-            Tool::Browser if self.browser_pane == BrowserPane::Page => Some(&self.page_scroll),
+            Tool::Browser if self.browser.pane == BrowserPane::Page => Some(&self.browser.scroll),
             Tool::Log => Some(&self.log_scroll),
             Tool::Guide => Some(&self.guide_scroll),
             Tool::Conversations if self.focus == Pane::Thread => Some(&self.thread_scroll),
