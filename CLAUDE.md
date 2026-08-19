@@ -39,10 +39,16 @@ terminal, or networking. Fast to build, fully unit-tested.
   cold-boot/scroll machinery into `boot.rs`. Free of I/O and rendering. Modal
   overlays are enumerated as `Modal`, so `handle_key` routes to the open one in a
   single match rather than a hand-ordered chain of `is_some()` branches. `App`
-  itself is a 49-field flat struct and still growing; the measured case for
-  decomposing it into per-tool sub-structs — and the two groupings that turn out
-  not to be worth splitting — is `docs/app-state-decomposition.md`. Read it
-  before adding fields to a tool that already has several. `map.rs`
+  is a composition of per-tool state groups rather than a flat bag of fields:
+  each per-tool module defines the state its tool owns (`ConversationsState`,
+  `NetworkState`, `MapState`, `BrowserState`, `IntelState`), with the
+  cross-cutting `Outbox` (`outbox.rs`) and `Modals` alongside them — 21 fields
+  on `App` instead of the former 49. Group fields stay `pub` and are reached by
+  direct path (`app.map.view`, `self.convs.list`), never through accessor pairs,
+  which would defeat the disjoint borrows the key handlers rely on; methods that
+  genuinely span groups stay on `App`. New state belongs in its group, not on
+  `App` — `docs/app-state-decomposition.md` records the measurement, what
+  shipped, and the conventions to keep. `map.rs`
   is only the App-level *binding* for the World Map — deriving markers from peer
   telemetry/intel and routing keys to `MapView`; the geometry/data live in
   `foxhole-map`. The intel layer is split by direction:

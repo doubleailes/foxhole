@@ -226,7 +226,7 @@ event loop:
 - **net → UI**: `enum NetEvent { Sys(String), Peer { hash:[u8;16], name:Option<String> }, Message { source:[u8;16], title:String, content:String } }`.
 - **UI → net**: the existing `app::Outbound { peer, title, body }`, where `peer`
   is the hex destination hash and `title` is the optional LXMF message title
-  (set with Ctrl+T, empty for none); `main.rs` drains `app.outbound` after each
+  (set with Ctrl+T, empty for none); `main.rs` drains `app.outbox.outbound` after each
   key event.
 
 Conversations re-key on the hex destination hash with a display name shown when
