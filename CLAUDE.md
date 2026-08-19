@@ -24,30 +24,39 @@ terminal, or networking. Fast to build, fully unit-tested.
 - `src/domain/` — the shared model every layer agrees on: `Conversation`,
   `Entry`, `MsgStatus`; the UI↔network events/commands (`NetEvent`,
   `NetCommand`, `Outbound`, `PeerKind`); the Network/Browser registries (`Node`,
-  `PathProbe`, `NomadNode`, `Page`). The geographic types `GeoPos`/`Zone` are
-  re-exported here from `foxhole-map`. Carries no UI focus/navigation semantics.
+  `PathProbe`, `NomadNode`, `Page`); and `intel.rs`'s `IntelRecord`/`IntelZone`
+  (one received CoT object plus its provenance, with the derived queries the map,
+  the roster, and the encrypted store all read). The geographic types
+  `GeoPos`/`Zone` are re-exported here from `foxhole-map`. Carries no UI
+  focus/navigation semantics.
 - `src/app/` — all state and key routing (`App`). Two focus tiers mirror
   Nomadnet: top-level **tools** (tabs: Conversations / Network / Map / Browser /
   Log / Interfaces / Notes / Guide, switched with Ctrl+N/Ctrl+P) and **panes**
   within a tool (PeerList / Thread / Transmit, cycled with Tab). The struct +
   program-global key routing + modals live in `mod.rs`; per-tool behaviour is
   split into sibling `impl App` blocks (`conversations.rs`, `network.rs`,
-  `browser.rs`, `map.rs`, `intel.rs`) and the cold-boot/scroll machinery into
-  `boot.rs`. Free of I/O and rendering. `map.rs` is only the App-level *binding*
-  for the World Map — deriving markers from peer telemetry/intel and routing keys
-  to `MapView`; the geometry/data live in `foxhole-map`. `intel.rs` is the
-  **received-intel layer** (P2 of the intel-sharing plan): `apply_cot` folds a
-  decoded `CotEvent` in with trust gating (Trusted→live, Unknown/Untrusted→staged
-  for review, Compromised→dropped), newest-`(source,uid)`-wins upsert, revocation,
-  and a `sweep_intel` stale sweep (default TTL from config). The incoming-intel
-  review modal accepts/discards staged events; `share_zone` (P3) produces a
-  `u-d-c-c` CoT event from a local `zones.conf` zone and enqueues it (with a
-  summary body) for a peer, and `revoke_shared_zone` (P4) sends a `stale==time`
-  revocation (same deterministic uid) so the peer's `apply_cot` revoke path drops
-  it. In-app authoring (P4, `AuthorForm`) places/edits markers & zones of any
-  affiliation into the live intel layer (map keys `a`/`e`), and
-  `remove_selected_intel` (`x`) drops the selected object locally — so a received
-  report can be cleared without a network round-trip.
+  `browser.rs`, `map.rs`, and the three intel modules below) and the
+  cold-boot/scroll machinery into `boot.rs`. Free of I/O and rendering. Modal
+  overlays are enumerated as `Modal`, so `handle_key` routes to the open one in a
+  single match rather than a hand-ordered chain of `is_some()` branches. `map.rs`
+  is only the App-level *binding* for the World Map — deriving markers from peer
+  telemetry/intel and routing keys to `MapView`; the geometry/data live in
+  `foxhole-map`. The intel layer is split by direction:
+  - `intel.rs` — **what arrives** (P2 of the intel-sharing plan): `apply_cot`
+    folds a decoded `CotEvent` in with trust gating (Trusted→live,
+    Unknown/Untrusted→staged for review, Compromised→dropped),
+    newest-`(source,uid)`-wins upsert, revocation, and a `sweep_intel` stale
+    sweep (default TTL from config), plus the review modal that accepts/discards
+    staged events.
+  - `share.rs` — **what goes out** (P3): `share_zone` produces a `u-d-c-c` CoT
+    event from a local `zones.conf` zone and enqueues it (with a summary body)
+    for a peer; `revoke_shared_zone` (P4) sends a `stale==time` revocation (same
+    deterministic uid) so the peer's `apply_cot` revoke path drops it.
+  - `author.rs` — **what the operator draws** (P4): `AuthorForm` places/edits
+    markers & zones of any affiliation into the live intel layer (map keys
+    `a`/`e`) with lat/lon↔MGRS mirroring, and `remove_selected_intel` (`x`) drops
+    the selected object locally — so a received report can be cleared without a
+    network round-trip.
 - `src/config.rs` — persistent `key = value` settings (no serde/TOML);
   `config_dir()` (overridable via `FOXHOLE_CONFIG_DIR`).
 - `src/storage.rs` — `atomic_write` (write-temp → fsync → rename) for durable state.
@@ -144,15 +153,30 @@ stack (tokio + the `rns-*` Reticulum crates + `lxmf-core`) stays off the
 dependency-light logic/rendering crates. Built **only** when the binary's `net`
 feature pulls it in (an optional dep), so the default build stays offline. Depends
 on `foxhole-core` (domain model + `storage::atomic_write`, with its `net` feature)
-and `foxhole-cot` (inbound intel decode). Three modules:
+and `foxhole-cot` (inbound intel decode).
 
-- `src/net.rs` — *(in progress)* live LXMF/Reticulum stack: identity,
-  `ReticulumHandle`, `LxmRouter`, announce/delivery tasks. Also Nomad Network node
-  discovery (recent-announce-cache poll for `nomadnetwork.node`) and page fetching
-  via `LinkClient::query` (spawned off the select loop), reported as
-  `NetEvent::{NomadNode,Page}`. Inbound CoT intel is decoded from the
-  `FIELD_CUSTOM_TYPE=cot/xml` / `FIELD_CUSTOM_DATA` fields and reported as
-  `NetEvent::Cot` (malformed payloads logged + dropped, never fatal).
+- `src/net/` — *(in progress)* the live LXMF/Reticulum stack, split by concern
+  behind `mod.rs`, which owns only the bring-up and one `select!` loop that hands
+  each source to the piece that owns it:
+  - `endpoint.rs` — our identity, `lxmf.delivery` destination, and message
+    framing (the three decode paths, message/telemetry building, announcing).
+  - `peers.rs` — `PeerCache`: announce-learned identity keys (persisted across
+    restarts), hop counts, and the per-destination path-request throttle.
+  - `outbound.rs` — `Dispatcher`: `LxmRouter` + link delivery + propagation
+    client + delivery-status tracking in one owner, with the
+    DIRECT→PROPAGATED→OPPORTUNISTIC cascade. Its `sys`/`emit_status` take
+    `&mut self` on purpose — `LxmRouter` is `!Sync`, so a shared `&Dispatcher`
+    held across an `.await` would make the whole networking future non-`Send`.
+  - `inbound.rs` — decoded message → UI events. Inbound CoT intel is decoded
+    from the `FIELD_CUSTOM_TYPE=cot/xml` / `FIELD_CUSTOM_DATA` fields and
+    reported as `NetEvent::Cot` (malformed payloads logged + dropped, never
+    fatal).
+  - `nomad.rs` — Nomad Network node discovery (recent-announce-cache poll for
+    `nomadnetwork.node`) and page fetching via `LinkClient::query` (spawned off
+    the select loop), reported as `NetEvent::{NomadNode,Page}`.
+  - `discovery.rs` — operator path probes and interface statistics.
+  - `codec.rs` / `telemetry.rs` — pure, unit-tested wire-format helpers
+    (address/form/custom-field parsing; the Sideband location-telemetry codec).
 - `src/store.rs` — encrypted, atomic, per-conversation history store: `FXC1` blob
   → `rns_crypto::token` (AES-256-CBC + HMAC) → `atomic_write`, key HKDF-derived
   from the identity (`derive_key`, also used by `net`). Corruption/foreign files
@@ -162,6 +186,10 @@ and `foxhole-cot` (inbound intel decode). Three modules:
   (reusing the identity store key), loaded at boot and re-saved when
   `app.intel_dirty` is set. `Option` timestamps are preserved so a stale-less
   event reloads stale-less; a corrupt/foreign file loads empty.
+- `src/wire.rs` — the framing both stores share: the bounds-checked `Reader` and
+  `put_*` writers, plus the `seal`/`unseal` envelope (encrypt → `atomic_write`,
+  and read → decrypt into `Missing`/`Plain`/`Corrupt`). Keeps the two stores from
+  drifting on what a durable — or a corrupt — file means.
 
 ### `foxhole` (root binary) — runtime wiring
 
@@ -170,6 +198,11 @@ and `foxhole-cot` (inbound intel decode). Three modules:
   inbound network events. Holds no UI or state rules. Re-exports the member crates
   under `crate::app`/`crate::config`/`crate::burn` and, under `net`, imports
   `foxhole_net::{net, store, intel_store}` so its call sites read unchanged.
+  The two things that differ between an offline and a `net` build are isolated
+  behind one abstraction each, so the loop body itself carries no `cfg`s:
+  `NetLink` (the outbound/command channels, `None` offline) and `Persistence`
+  (the identity-keyed encrypted stores, inert until the key arrives and always
+  offline).
 
 ## Networking (the `net` feature)
 

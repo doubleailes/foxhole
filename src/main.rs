@@ -54,9 +54,7 @@ async fn main() -> io::Result<()> {
     // RAII: restores the terminal on any return path below (incl. `?`).
     let _guard = TerminalGuard;
 
-    // The network task feeds events in; the UI loop drains them. Under the
-    // `net` feature it is the real LXMF/Reticulum stack (and we keep a sender to
-    // hand it outbound messages); otherwise it is an offline stub.
+    // The network task feeds events in; the UI loop drains them.
     let (net_tx, net_rx) = mpsc::channel::<NetEvent>(INBOUND_CAPACITY);
 
     let mut app = App::new();
@@ -72,23 +70,7 @@ async fn main() -> io::Result<()> {
         Err(_) => { /* no file (or unreadable): keep the seeded demo zones */ }
     }
 
-    // Under `net` the network task gets a clone of the config plus channels for
-    // outbound messages and UI commands; offline it is a quiet stub.
-    #[cfg(feature = "net")]
-    let (outbound_tx, command_tx) = {
-        let (otx, orx) = mpsc::channel::<app::Outbound>(64);
-        let (ctx, crx) = mpsc::channel::<NetCommand>(16);
-        tokio::spawn(net::run(net_tx, orx, crx, app.config.clone()));
-        (Some(otx), Some(ctx))
-    };
-    #[cfg(not(feature = "net"))]
-    let (outbound_tx, command_tx): (
-        Option<mpsc::Sender<app::Outbound>>,
-        Option<mpsc::Sender<NetCommand>>,
-    ) = {
-        spawn_stub_task(net_tx);
-        (None, None)
-    };
+    let link = spawn_network(net_tx, &app.config);
 
     // Live discovery replaces the offline demo peers; start from an empty list.
     #[cfg(feature = "net")]
@@ -96,7 +78,7 @@ async fn main() -> io::Result<()> {
 
     // `_guard` drops as this returns, restoring the terminal whether `run`
     // finished cleanly or propagated an I/O error.
-    let result = run(&mut terminal, &mut app, net_rx, outbound_tx, command_tx).await;
+    let result = run(&mut terminal, &mut app, net_rx, link).await;
 
     // Burn notice: the operator confirmed destruction. Restore the terminal,
     // shred the config dir, report, and exit hard — `process::exit` skips the
@@ -120,13 +102,10 @@ async fn run(
     terminal: &mut Tui,
     app: &mut App,
     mut net_rx: mpsc::Receiver<NetEvent>,
-    outbound_tx: Option<mpsc::Sender<app::Outbound>>,
-    command_tx: Option<mpsc::Sender<NetCommand>>,
+    link: NetLink,
 ) -> io::Result<()> {
     let mut events = EventStream::new();
-    // Conversation-store key, once the network task derives it from the identity.
-    #[cfg(feature = "net")]
-    let mut store_key: Option<[u8; 64]> = None;
+    let mut store = Persistence::default();
 
     // Cold-boot bring-up clock: ticked *only* while the splash is showing (the
     // select branch's `if` precondition gates on `state == Splash`), so the
@@ -152,44 +131,8 @@ async fn run(
             maybe_event = events.next() => match maybe_event {
                 Some(Ok(Event::Key(key))) => {
                     app.handle_key(key);
-                    // Hand off anything the keystroke queued for transmission.
-                    // A bounded channel means `try_send` can fail if the network
-                    // task is jammed; never swallow that — a silently dropped
-                    // sitrep is worse than none. `App` owns what happens to the
-                    // message and what the operator is told; here we only route
-                    // the transport outcome: requeue-and-stop on a full pipe,
-                    // mark-failed on a dead task.
-                    if let Some(tx) = &outbound_tx {
-                        while let Some(out) = app.outbound.pop_front() {
-                            match tx.try_send(out) {
-                                Ok(()) => {}
-                                Err(mpsc::error::TrySendError::Full(out)) => {
-                                    app.requeue_choked(out);
-                                    break;
-                                }
-                                Err(mpsc::error::TrySendError::Closed(out)) => {
-                                    app.fail_dropped(out);
-                                }
-                            }
-                        }
-                    }
-                    // Drain UI commands: persist a node change, then forward.
-                    while let Some(cmd) = app.commands.pop_front() {
-                        if matches!(cmd, NetCommand::SetPropagationNode(_))
-                            && let Err(e) = app.config.save()
-                        {
-                            app.push_log(format!("[SYS] config save failed: {e}"));
-                        }
-                        if let Some(tx) = &command_tx {
-                            let _ = tx.try_send(cmd);
-                        }
-                    }
-                    // Persist the note buffer if a slot changed this keystroke.
-                    if std::mem::take(&mut app.notes_dirty)
-                        && let Err(e) = app.notes.save()
-                    {
-                        app.push_log(format!("[SYS] notes save failed: {e}"));
-                    }
+                    link.drain(app);
+                    save_notes(app);
                 }
                 // Resize is handled implicitly by redrawing; other events
                 // (we never enable mouse capture) are ignored.
@@ -212,70 +155,202 @@ async fn run(
                 // `None` => the sender was dropped (task ended); fall through
                 // silently and keep the TUI usable for reviewing scrollback.
                 if let Some(ev) = maybe_event {
-                    // The store key arrives once; stash it and load history before
-                    // the live event is applied.
-                    #[cfg(feature = "net")]
-                    if let NetEvent::StoreKey(key) = &ev {
-                        let (loaded, skipped) = store::load_all(key);
-                        let n = loaded.len();
-                        for conv in loaded {
-                            app.load_conversation(conv);
-                        }
-                        store_key = Some(*key);
-                        if n > 0 || skipped > 0 {
-                            app.push_log(format!(
-                                "[SYS] loaded {n} conversation(s), {skipped} skipped"
-                            ));
-                        }
-                        // Restore the persisted intel layer (live + staged).
-                        let (live, staged) = intel_store::load(key);
-                        let (nl, ns) = (live.len(), staged.len());
-                        app.intel = live;
-                        app.intel_staged = staged;
-                        // Drop anything that expired while we were down, and don't
-                        // treat the freshly-loaded state as needing a re-save.
-                        app.sweep_intel(now_secs());
-                        app.intel_dirty = false;
-                        if nl > 0 || ns > 0 {
-                            app.push_log(format!("[SYS] loaded {nl} intel, {ns} staged"));
-                        }
-                    }
+                    // The store key arrives once; adopting it loads history and
+                    // the intel layer before the live event is applied.
+                    store.adopt(app, &ev);
                     apply_net_event(app, ev);
                 }
             },
         }
 
-        // Persist any conversation whose history changed this iteration. Skips
-        // empty (discovery-only) threads; failures are logged, never fatal.
-        #[cfg(feature = "net")]
-        if let Some(key) = &store_key {
-            for peer in std::mem::take(&mut app.dirty) {
-                let result = app
-                    .conversations
-                    .iter()
-                    .find(|c| c.peer == peer)
-                    .filter(|c| c.should_persist())
-                    .map(|conv| store::save(key, conv));
-                if let Some(Err(e)) = result {
-                    app.push_log(format!("[SYS] store save failed: {e}"));
-                }
-            }
-            // Persist the intel layer when it changed this iteration.
-            if std::mem::take(&mut app.intel_dirty)
-                && let Err(e) = intel_store::save(key, &app.intel, &app.intel_staged)
-            {
-                app.push_log(format!("[SYS] intel store save failed: {e}"));
-            }
-        }
-        // Offline build never persists; keep the dirty flags from growing.
-        #[cfg(not(feature = "net"))]
-        {
-            app.dirty.clear();
-            app.intel_dirty = false;
-        }
+        // Persist whatever this iteration marked dirty.
+        store.flush(app);
     }
 
     Ok(())
+}
+
+// --- Network link ---------------------------------------------------------------
+
+/// The channels down to the network task. Both are `None` in an offline build,
+/// so the UI loop drains its queues the same way either way — nothing on the hot
+/// path has to know which stack it is talking to.
+struct NetLink {
+    outbound: Option<mpsc::Sender<app::Outbound>>,
+    commands: Option<mpsc::Sender<NetCommand>>,
+}
+
+impl NetLink {
+    /// Hand off everything the last keystroke queued.
+    fn drain(&self, app: &mut App) {
+        self.send_outbound(app);
+        self.send_commands(app);
+    }
+
+    /// Push accepted messages to the protocol task. A bounded channel means
+    /// `try_send` can fail if that task is jammed; never swallow that — a
+    /// silently dropped sitrep is worse than none. `App` owns what happens to the
+    /// message and what the operator is told; here we only route the transport
+    /// outcome: requeue-and-stop on a full pipe, mark-failed on a dead task.
+    fn send_outbound(&self, app: &mut App) {
+        let Some(tx) = &self.outbound else { return };
+        while let Some(out) = app.outbound.pop_front() {
+            match tx.try_send(out) {
+                Ok(()) => {}
+                Err(mpsc::error::TrySendError::Full(out)) => {
+                    app.requeue_choked(out);
+                    break;
+                }
+                Err(mpsc::error::TrySendError::Closed(out)) => app.fail_dropped(out),
+            }
+        }
+    }
+
+    /// Forward UI commands, persisting a propagation-node change on the way.
+    /// Drained even with no network task so the setting still sticks offline.
+    fn send_commands(&self, app: &mut App) {
+        while let Some(cmd) = app.commands.pop_front() {
+            if matches!(cmd, NetCommand::SetPropagationNode(_))
+                && let Err(e) = app.config.save()
+            {
+                app.push_log(format!("[SYS] config save failed: {e}"));
+            }
+            if let Some(tx) = &self.commands {
+                let _ = tx.try_send(cmd);
+            }
+        }
+    }
+}
+
+/// Start the network task and return the link to it: the real LXMF/Reticulum
+/// stack under the `net` feature, a quiet offline stub without it.
+#[cfg(feature = "net")]
+fn spawn_network(net_tx: mpsc::Sender<NetEvent>, config: &config::Config) -> NetLink {
+    let (outbound_tx, outbound_rx) = mpsc::channel::<app::Outbound>(64);
+    let (command_tx, command_rx) = mpsc::channel::<NetCommand>(16);
+    tokio::spawn(net::run(net_tx, outbound_rx, command_rx, config.clone()));
+    NetLink {
+        outbound: Some(outbound_tx),
+        commands: Some(command_tx),
+    }
+}
+
+/// Offline stand-in for the network task (no `net` feature). Emits a couple of
+/// banners so the Log tab confirms the async path is live, then parks — the
+/// bounded channel means we hold no resources and never spin.
+#[cfg(not(feature = "net"))]
+fn spawn_network(net_tx: mpsc::Sender<NetEvent>, _config: &config::Config) -> NetLink {
+    tokio::spawn(async move {
+        let _ = net_tx
+            .send(NetEvent::Sys("[SYS] FoxHole terminal online.".to_string()))
+            .await;
+        let _ = net_tx
+            .send(NetEvent::Sys(
+                "[SYS] protocol layer offline — rebuild with --features net.".to_string(),
+            ))
+            .await;
+    });
+    NetLink {
+        outbound: None,
+        commands: None,
+    }
+}
+
+// --- Persistence ----------------------------------------------------------------
+
+/// Persist the note buffer if a slot changed this keystroke.
+fn save_notes(app: &mut App) {
+    if std::mem::take(&mut app.notes_dirty)
+        && let Err(e) = app.notes.save()
+    {
+        app.push_log(format!("[SYS] notes save failed: {e}"));
+    }
+}
+
+/// The encrypted on-disk stores, driven from the UI loop.
+///
+/// Their key is derived from the Reticulum identity, so it only exists once the
+/// network task reports it — hence the whole thing is a no-op until [`adopt`]
+/// sees a [`NetEvent::StoreKey`], and a no-op *always* in an offline build,
+/// which has no identity to derive from.
+///
+/// [`adopt`]: Persistence::adopt
+#[derive(Default)]
+struct Persistence {
+    /// The identity-derived store key, once the network task reports it.
+    #[cfg(feature = "net")]
+    key: Option<[u8; 64]>,
+}
+
+impl Persistence {
+    /// Take the store key from a [`NetEvent::StoreKey`] and load what is on
+    /// disk: conversation history first, then the intel layer.
+    #[cfg(feature = "net")]
+    fn adopt(&mut self, app: &mut App, ev: &NetEvent) {
+        let NetEvent::StoreKey(key) = ev else { return };
+
+        let (loaded, skipped) = store::load_all(key);
+        let n = loaded.len();
+        for conv in loaded {
+            app.load_conversation(conv);
+        }
+        self.key = Some(*key);
+        if n > 0 || skipped > 0 {
+            app.push_log(format!(
+                "[SYS] loaded {n} conversation(s), {skipped} skipped"
+            ));
+        }
+
+        // Restore the persisted intel layer (live + staged).
+        let (live, staged) = intel_store::load(key);
+        let (nl, ns) = (live.len(), staged.len());
+        app.intel = live;
+        app.intel_staged = staged;
+        // Drop anything that expired while we were down, and don't treat the
+        // freshly-loaded state as needing a re-save.
+        app.sweep_intel(now_secs());
+        app.intel_dirty = false;
+        if nl > 0 || ns > 0 {
+            app.push_log(format!("[SYS] loaded {nl} intel, {ns} staged"));
+        }
+    }
+
+    /// Offline builds have no identity, so no key ever arrives.
+    #[cfg(not(feature = "net"))]
+    fn adopt(&mut self, _app: &mut App, _ev: &NetEvent) {}
+
+    /// Write out whatever the last iteration marked dirty: every conversation
+    /// whose history changed (skipping empty discovery-only threads) and the
+    /// intel layer. Failures are logged, never fatal.
+    #[cfg(feature = "net")]
+    fn flush(&mut self, app: &mut App) {
+        // No key yet: leave the dirty flags set so the first flush after it
+        // arrives still writes everything that changed while we waited.
+        let Some(key) = &self.key else { return };
+        for peer in std::mem::take(&mut app.dirty) {
+            let result = app
+                .conversations
+                .iter()
+                .find(|c| c.peer == peer)
+                .filter(|c| c.should_persist())
+                .map(|conv| store::save(key, conv));
+            if let Some(Err(e)) = result {
+                app.push_log(format!("[SYS] store save failed: {e}"));
+            }
+        }
+        if std::mem::take(&mut app.intel_dirty)
+            && let Err(e) = intel_store::save(key, &app.intel, &app.intel_staged)
+        {
+            app.push_log(format!("[SYS] intel store save failed: {e}"));
+        }
+    }
+
+    /// Offline builds never persist; just keep the dirty flags from growing.
+    #[cfg(not(feature = "net"))]
+    fn flush(&mut self, app: &mut App) {
+        app.dirty.clear();
+        app.intel_dirty = false;
+    }
 }
 
 /// Current Unix time in whole seconds (UTC); `0` if the clock predates the
@@ -361,24 +436,6 @@ fn mark_boot_from_event(app: &mut App, ev: &NetEvent) {
         }
         _ => {}
     }
-}
-
-/// Offline stand-in for the network task (no `net` feature). Emits a couple of
-/// banners so the Log tab confirms the async path is live, then parks — the
-/// bounded channel means we hold no resources and never spin. With `--features
-/// net`, `net::run` replaces this with the real LXMF/Reticulum stack.
-#[cfg(not(feature = "net"))]
-fn spawn_stub_task(tx: mpsc::Sender<NetEvent>) {
-    tokio::spawn(async move {
-        let _ = tx
-            .send(NetEvent::Sys("[SYS] FoxHole terminal online.".to_string()))
-            .await;
-        let _ = tx
-            .send(NetEvent::Sys(
-                "[SYS] protocol layer offline — rebuild with --features net.".to_string(),
-            ))
-            .await;
-    });
 }
 
 /// Enter raw mode, switch to the alternate screen, and hide the cursor.

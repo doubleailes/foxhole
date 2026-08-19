@@ -268,6 +268,28 @@ impl NetColumn {
 }
 
 /// Which Browser-tab pane has focus: the node list or the page viewport.
+/// The modal overlays that capture all input while open. Each corresponds to an
+/// `Option<…>` field on [`App`]; keeping the set enumerated means adding one is
+/// a variant plus two match arms, not another hand-ordered `is_some()` branch
+/// spliced into the middle of key routing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Modal {
+    /// Read-only mnemonic phrase for a peer address.
+    Mnemonic,
+    /// Emergency data-destruction confirmation (type `BURN`).
+    Burn,
+    /// New Conversation address/alias form.
+    NewConv,
+    /// Incoming-intel review queue (accept / discard staged events).
+    IntelReview,
+    /// Share-a-local-zone picker.
+    ShareZone,
+    /// Intel authoring form (place / edit a marker or zone).
+    Author,
+    /// "Go to MGRS" grid-reference jump.
+    GotoMgrs,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BrowserPane {
     Nodes,
@@ -490,45 +512,9 @@ impl App {
 
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
-        // The read-only mnemonic modal is dismissed by any key.
-        if self.mnemonic_view.is_some() {
-            self.mnemonic_view = None;
-            return;
-        }
-
-        // The burn-confirmation modal, when open, captures all input.
-        if self.burn_confirm.is_some() {
-            self.handle_burn_key(key);
-            return;
-        }
-
-        // The New Conversation modal, when open, captures all input.
-        if self.new_conv.is_some() {
-            self.handle_new_conv_key(ctrl, key);
-            return;
-        }
-
-        // The incoming-intel review modal, when open, captures all input.
-        if self.intel_review.is_some() {
-            self.handle_intel_review_key(key);
-            return;
-        }
-
-        // The share-zone picker, when open, captures all input.
-        if self.share_zone.is_some() {
-            self.handle_share_zone_key(key);
-            return;
-        }
-
-        // The intel authoring form, when open, captures all input.
-        if self.author.is_some() {
-            self.handle_author_key(key);
-            return;
-        }
-
-        // The "go to MGRS" modal, when open, captures all input.
-        if self.goto_mgrs.is_some() {
-            self.handle_goto_mgrs_key(key);
+        // An open modal captures all input; nothing below it sees the keystroke.
+        if let Some(modal) = self.open_modal() {
+            self.handle_modal_key(modal, ctrl, key);
             return;
         }
 
@@ -572,6 +558,43 @@ impl App {
 
             // --- Delegated to the active tool -----------------------------------
             _ => self.handle_tool_key(ctrl, key),
+        }
+    }
+
+    /// Which modal overlay is open, if any. Exactly one can capture input at a
+    /// time; the order here is the precedence when (however briefly) more than
+    /// one state is set.
+    fn open_modal(&self) -> Option<Modal> {
+        if self.mnemonic_view.is_some() {
+            Some(Modal::Mnemonic)
+        } else if self.burn_confirm.is_some() {
+            Some(Modal::Burn)
+        } else if self.new_conv.is_some() {
+            Some(Modal::NewConv)
+        } else if self.intel_review.is_some() {
+            Some(Modal::IntelReview)
+        } else if self.share_zone.is_some() {
+            Some(Modal::ShareZone)
+        } else if self.author.is_some() {
+            Some(Modal::Author)
+        } else if self.goto_mgrs.is_some() {
+            Some(Modal::GotoMgrs)
+        } else {
+            None
+        }
+    }
+
+    /// Hand a keystroke to the open modal.
+    fn handle_modal_key(&mut self, modal: Modal, ctrl: bool, key: KeyEvent) {
+        match modal {
+            // Read-only: dismissed by any key.
+            Modal::Mnemonic => self.mnemonic_view = None,
+            Modal::Burn => self.handle_burn_key(key),
+            Modal::NewConv => self.handle_new_conv_key(ctrl, key),
+            Modal::IntelReview => self.handle_intel_review_key(key),
+            Modal::ShareZone => self.handle_share_zone_key(key),
+            Modal::Author => self.handle_author_key(key),
+            Modal::GotoMgrs => self.handle_goto_mgrs_key(key),
         }
     }
 
