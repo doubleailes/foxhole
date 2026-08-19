@@ -304,12 +304,12 @@ impl Persistence {
         // Restore the persisted intel layer (live + staged).
         let (live, staged) = intel_store::load(key);
         let (nl, ns) = (live.len(), staged.len());
-        app.intel = live;
-        app.intel_staged = staged;
+        app.intel.live = live;
+        app.intel.staged = staged;
         // Drop anything that expired while we were down, and don't treat the
         // freshly-loaded state as needing a re-save.
         app.sweep_intel(now_secs());
-        app.intel_dirty = false;
+        app.intel.dirty = false;
         if nl > 0 || ns > 0 {
             app.push_log(format!("[SYS] loaded {nl} intel, {ns} staged"));
         }
@@ -338,8 +338,8 @@ impl Persistence {
                 app.push_log(format!("[SYS] store save failed: {e}"));
             }
         }
-        if std::mem::take(&mut app.intel_dirty)
-            && let Err(e) = intel_store::save(key, &app.intel, &app.intel_staged)
+        if std::mem::take(&mut app.intel.dirty)
+            && let Err(e) = intel_store::save(key, &app.intel.live, &app.intel.staged)
         {
             app.push_log(format!("[SYS] intel store save failed: {e}"));
         }
@@ -349,7 +349,7 @@ impl Persistence {
     #[cfg(not(feature = "net"))]
     fn flush(&mut self, app: &mut App) {
         app.outbox.dirty.clear();
-        app.intel_dirty = false;
+        app.intel.dirty = false;
     }
 }
 

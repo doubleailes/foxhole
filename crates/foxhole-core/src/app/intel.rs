@@ -5,9 +5,9 @@
 //! and is folded in by [`App::apply_cot`]. Provenance is the LXMF signature (the
 //! `source` hash), so trust is keyed on the sending peer:
 //!
-//! - **Trusted** → applied straight to the live map layer ([`App::intel`]).
+//! - **Trusted** → applied straight to the live map layer ([`IntelState::live`]).
 //! - **Unknown / Untrusted** → **staged** for operator review
-//!   ([`App::intel_staged`]); accept promotes it, discard drops it. (A config
+//!   ([`IntelState::staged`]); accept promotes it, discard drops it. (A config
 //!   toggle, [`Config::intel_auto_apply`](crate::config::Config), opts into
 //!   auto-applying these too.)
 //! - **Compromised** → dropped (logged, never shown).
@@ -28,8 +28,44 @@ use foxhole_cot::{CotEvent, Kind};
 /// Modal state for the "incoming intel" review list (design note §6): the staged
 /// events from Unknown/Untrusted peers the operator accepts or discards.
 pub struct IntelReview {
-    /// Highlighted row within [`App::intel_staged`].
+    /// Highlighted row within the staged list.
     pub selected: usize,
+}
+
+/// The intel layer: received/authored CoT objects and the modals that act on
+/// them. Deliberately entangled with the map — intel objects *are* map objects —
+/// so the methods spanning both stay on [`App`], the composition root.
+pub struct IntelState {
+    /// Live CoT intel applied to the map (from Trusted peers, or all peers when
+    /// `intel_auto_apply` is set, or operator-accepted/authored). Keyed by
+    /// `(source, uid)`; expired entries are swept.
+    pub live: Vec<IntelRecord>,
+    /// Received CoT intel from Unknown/Untrusted peers, staged for operator
+    /// review (accept → `live`, or discard).
+    pub staged: Vec<IntelRecord>,
+    /// When `Some`, the incoming-intel review modal is open (captures input).
+    pub review: Option<IntelReview>,
+    /// When `Some`, the share-zone picker is open (captures input).
+    pub share_zone: Option<ShareZone>,
+    /// When `Some`, the intel authoring form is open (captures input).
+    pub author: Option<AuthorForm>,
+    /// Set when the live/staged layer changed this iteration; `main` drains it
+    /// and persists the encrypted intel store. Keeps `App` free of I/O.
+    pub dirty: bool,
+}
+
+impl IntelState {
+    /// Empty layers, no modal open, nothing to persist.
+    pub(super) fn new() -> Self {
+        Self {
+            live: Vec::new(),
+            staged: Vec::new(),
+            review: None,
+            share_zone: None,
+            author: None,
+            dirty: false,
+        }
+    }
 }
 
 impl App {
@@ -44,7 +80,7 @@ impl App {
         if event.is_revocation() {
             let removed = self.revoke_intel(&source, &event.uid);
             if removed {
-                self.intel_dirty = true;
+                self.intel.dirty = true;
                 self.push_log(format!("[SYS] intel: {who} revoked {}", event.uid));
             }
             return;
@@ -64,8 +100,8 @@ impl App {
             }
             Trust::Trusted => {
                 let label = record.label();
-                if upsert(&mut self.intel, record) {
-                    self.intel_dirty = true;
+                if upsert(&mut self.intel.live, record) {
+                    self.intel.dirty = true;
                     self.push_log(format!("[SYS] intel: applied {label} from {who}"));
                 }
             }
@@ -74,14 +110,14 @@ impl App {
             Trust::Unknown | Trust::Untrusted => {
                 if self.config.intel_auto_apply {
                     let label = record.label();
-                    if upsert(&mut self.intel, record) {
-                        self.intel_dirty = true;
+                    if upsert(&mut self.intel.live, record) {
+                        self.intel.dirty = true;
                         self.push_log(format!("[SYS] intel: auto-applied {label} from {who}"));
                     }
                 } else {
                     let label = record.label();
-                    if upsert(&mut self.intel_staged, record) {
-                        self.intel_dirty = true;
+                    if upsert(&mut self.intel.staged, record) {
+                        self.intel.dirty = true;
                         self.push_log(format!("[SYS] intel: staged {label} from {who} (review)"));
                     }
                 }
@@ -102,13 +138,15 @@ impl App {
     /// Remove any live or staged object matching `(source, uid)`. Returns whether
     /// anything was removed.
     fn revoke_intel(&mut self, source: &str, uid: &str) -> bool {
-        let before = self.intel.len() + self.intel_staged.len();
+        let before = self.intel.live.len() + self.intel.staged.len();
         self.intel
+            .live
             .retain(|r| !(r.source == source && r.event.uid == uid));
-        self.intel_staged
+        self.intel
+            .staged
             .retain(|r| !(r.source == source && r.event.uid == uid));
         self.clamp_intel_review();
-        before != self.intel.len() + self.intel_staged.len()
+        before != self.intel.live.len() + self.intel.staged.len()
     }
 
     /// Drop every expired object (live and staged) at `now`, given the configured
@@ -116,13 +154,13 @@ impl App {
     /// runs it as the periodic sweep §6 calls for.
     pub fn sweep_intel(&mut self, now: i64) -> usize {
         let ttl = self.config.intel_ttl_secs;
-        let before = self.intel.len() + self.intel_staged.len();
-        self.intel.retain(|r| !r.is_expired(now, ttl));
-        self.intel_staged.retain(|r| !r.is_expired(now, ttl));
+        let before = self.intel.live.len() + self.intel.staged.len();
+        self.intel.live.retain(|r| !r.is_expired(now, ttl));
+        self.intel.staged.retain(|r| !r.is_expired(now, ttl));
         self.clamp_intel_review();
-        let removed = before - (self.intel.len() + self.intel_staged.len());
+        let removed = before - (self.intel.live.len() + self.intel.staged.len());
         if removed > 0 {
-            self.intel_dirty = true;
+            self.intel.dirty = true;
         }
         removed
     }
@@ -131,6 +169,7 @@ impl App {
     pub fn live_intel_at(&self, now: i64) -> Vec<&IntelRecord> {
         let ttl = self.config.intel_ttl_secs;
         self.intel
+            .live
             .iter()
             .filter(|r| !r.is_expired(now, ttl))
             .collect()
@@ -164,27 +203,27 @@ impl App {
 
     /// Open the incoming-intel review modal (no-op when nothing is staged).
     pub(super) fn open_intel_review(&mut self) {
-        if !self.intel_staged.is_empty() {
-            self.intel_review = Some(IntelReview { selected: 0 });
+        if !self.intel.staged.is_empty() {
+            self.intel.review = Some(IntelReview { selected: 0 });
         }
     }
 
     /// Key handling while the incoming-intel review modal is open: Up/Down select,
     /// `a`/Enter accept (apply to the map), `x`/`d`/Delete discard, Esc close.
     pub(super) fn handle_intel_review_key(&mut self, key: KeyEvent) {
-        let Some(selected) = self.intel_review.as_ref().map(|r| r.selected) else {
+        let Some(selected) = self.intel.review.as_ref().map(|r| r.selected) else {
             return;
         };
         match key.code {
-            KeyCode::Esc => self.intel_review = None,
+            KeyCode::Esc => self.intel.review = None,
             KeyCode::Up => {
-                if let Some(r) = self.intel_review.as_mut() {
+                if let Some(r) = self.intel.review.as_mut() {
                     r.selected = selected.saturating_sub(1);
                 }
             }
             KeyCode::Down => {
-                if selected + 1 < self.intel_staged.len()
-                    && let Some(r) = self.intel_review.as_mut()
+                if selected + 1 < self.intel.staged.len()
+                    && let Some(r) = self.intel.review.as_mut()
                 {
                     r.selected = selected + 1;
                 }
@@ -196,48 +235,48 @@ impl App {
             _ => {}
         }
         // Close the modal once the queue is drained so it never lingers empty.
-        if self.intel_staged.is_empty() {
-            self.intel_review = None;
+        if self.intel.staged.is_empty() {
+            self.intel.review = None;
         }
     }
 
     /// Promote a staged object to the live map layer (operator vouches for it).
     pub fn accept_staged(&mut self, idx: usize) {
-        if idx >= self.intel_staged.len() {
+        if idx >= self.intel.staged.len() {
             return;
         }
-        let record = self.intel_staged.remove(idx);
+        let record = self.intel.staged.remove(idx);
         let (label, who) = (
             record.label(),
             crate::domain::short_hash(&record.source).to_string(),
         );
-        upsert(&mut self.intel, record);
-        self.intel_dirty = true;
+        upsert(&mut self.intel.live, record);
+        self.intel.dirty = true;
         self.push_log(format!("[SYS] intel: accepted {label} from {who}"));
         self.clamp_intel_review();
     }
 
     /// Discard a staged object without applying it.
     pub fn discard_staged(&mut self, idx: usize) {
-        if idx >= self.intel_staged.len() {
+        if idx >= self.intel.staged.len() {
             return;
         }
-        let record = self.intel_staged.remove(idx);
+        let record = self.intel.staged.remove(idx);
         let (label, who) = (
             record.label(),
             crate::domain::short_hash(&record.source).to_string(),
         );
-        self.intel_dirty = true;
+        self.intel.dirty = true;
         self.push_log(format!("[SYS] intel: discarded {label} from {who}"));
         self.clamp_intel_review();
     }
 
     /// Keep the review cursor within the staged list after a removal.
     fn clamp_intel_review(&mut self) {
-        if let Some(review) = self.intel_review.as_mut() {
+        if let Some(review) = self.intel.review.as_mut() {
             review.selected = review
                 .selected
-                .min(self.intel_staged.len().saturating_sub(1));
+                .min(self.intel.staged.len().saturating_sub(1));
         }
     }
 }
@@ -266,22 +305,22 @@ mod tests {
     fn trusted_source_is_applied_unknown_is_staged() {
         let mut app = app_with_peer("aa", Trust::Trusted);
         app.apply_cot("aa".into(), event("u1", "a-h-G", 1000));
-        assert_eq!(app.intel.len(), 1);
-        assert!(app.intel_staged.is_empty());
+        assert_eq!(app.intel.live.len(), 1);
+        assert!(app.intel.staged.is_empty());
 
         // A second, unknown peer's intel is staged for review, not applied.
         app.conversations.push(Conversation::new("bb")); // defaults to Unknown
         app.apply_cot("bb".into(), event("u2", "a-h-G", 1000));
-        assert_eq!(app.intel.len(), 1);
-        assert_eq!(app.intel_staged.len(), 1);
+        assert_eq!(app.intel.live.len(), 1);
+        assert_eq!(app.intel.staged.len(), 1);
     }
 
     #[test]
     fn compromised_source_is_dropped() {
         let mut app = app_with_peer("aa", Trust::Compromised);
         app.apply_cot("aa".into(), event("u1", "a-h-G", 1000));
-        assert!(app.intel.is_empty());
-        assert!(app.intel_staged.is_empty());
+        assert!(app.intel.live.is_empty());
+        assert!(app.intel.staged.is_empty());
     }
 
     #[test]
@@ -289,8 +328,8 @@ mod tests {
         let mut app = app_with_peer("aa", Trust::Unknown);
         app.config.intel_auto_apply = true;
         app.apply_cot("aa".into(), event("u1", "a-h-G", 1000));
-        assert_eq!(app.intel.len(), 1);
-        assert!(app.intel_staged.is_empty());
+        assert_eq!(app.intel.live.len(), 1);
+        assert!(app.intel.staged.is_empty());
     }
 
     #[test]
@@ -301,30 +340,30 @@ mod tests {
         let mut newer = event("u1", "a-h-G", 2000);
         newer.callsign = Some("MOVED".into());
         app.apply_cot("aa".into(), newer);
-        assert_eq!(app.intel.len(), 1);
-        assert_eq!(app.intel[0].label(), "MOVED");
+        assert_eq!(app.intel.live.len(), 1);
+        assert_eq!(app.intel.live[0].label(), "MOVED");
         // An older replay is ignored (no churn).
         app.apply_cot("aa".into(), event("u1", "a-h-G", 500));
-        assert_eq!(app.intel.len(), 1);
-        assert_eq!(app.intel[0].label(), "MOVED");
+        assert_eq!(app.intel.live.len(), 1);
+        assert_eq!(app.intel.live[0].label(), "MOVED");
         // The same uid from a *different* source is kept separately (attributed).
         let mut c = Conversation::new("bb");
         c.trust = Trust::Trusted;
         app.conversations.push(c);
         app.apply_cot("bb".into(), event("u1", "a-h-G", 1000));
-        assert_eq!(app.intel.len(), 2);
+        assert_eq!(app.intel.live.len(), 2);
     }
 
     #[test]
     fn revocation_removes_the_object() {
         let mut app = app_with_peer("aa", Trust::Trusted);
         app.apply_cot("aa".into(), event("u1", "a-h-G", 1000));
-        assert_eq!(app.intel.len(), 1);
+        assert_eq!(app.intel.live.len(), 1);
         // stale <= time is a revoke for the same uid.
         let mut revoke = event("u1", "a-h-G", 3000);
         revoke.stale = Some(3000);
         app.apply_cot("aa".into(), revoke);
-        assert!(app.intel.is_empty());
+        assert!(app.intel.live.is_empty());
     }
 
     #[test]
@@ -337,7 +376,7 @@ mod tests {
         // After stale: the live view hides it and the sweep reclaims it.
         assert!(app.live_intel_at(5000).is_empty());
         assert_eq!(app.sweep_intel(5000), 1);
-        assert!(app.intel.is_empty());
+        assert!(app.intel.live.is_empty());
     }
 
     #[test]
@@ -356,15 +395,15 @@ mod tests {
         let mut app = app_with_peer("aa", Trust::Unknown);
         app.apply_cot("aa".into(), event("u1", "a-h-G", 1000));
         app.apply_cot("aa".into(), event("u2", "a-h-G", 1000));
-        assert_eq!(app.intel_staged.len(), 2);
+        assert_eq!(app.intel.staged.len(), 2);
 
         app.accept_staged(0);
-        assert_eq!(app.intel.len(), 1);
-        assert_eq!(app.intel_staged.len(), 1);
+        assert_eq!(app.intel.live.len(), 1);
+        assert_eq!(app.intel.staged.len(), 1);
 
         app.discard_staged(0);
-        assert!(app.intel_staged.is_empty());
-        assert_eq!(app.intel.len(), 1);
+        assert!(app.intel.staged.is_empty());
+        assert_eq!(app.intel.live.len(), 1);
     }
 
     #[test]

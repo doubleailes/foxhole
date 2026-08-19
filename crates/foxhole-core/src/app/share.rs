@@ -34,7 +34,7 @@ impl App {
         let Some(conv) = self.conversations.get(self.selected) else {
             return;
         };
-        self.share_zone = Some(ShareZone {
+        self.intel.share_zone = Some(ShareZone {
             selected: 0,
             peer: conv.peer.clone(),
             peer_label: conv.label(),
@@ -44,32 +44,32 @@ impl App {
     /// Key handling while the share-zone picker is open: Up/Down select, Enter/`s`
     /// share the highlighted zone, `r` revoke it on the peer, Esc cancel.
     pub(super) fn handle_share_zone_key(&mut self, key: KeyEvent) {
-        let Some(state) = self.share_zone.as_ref() else {
+        let Some(state) = self.intel.share_zone.as_ref() else {
             return;
         };
         let selected = state.selected;
         match key.code {
-            KeyCode::Esc => self.share_zone = None,
+            KeyCode::Esc => self.intel.share_zone = None,
             KeyCode::Up => {
-                if let Some(s) = self.share_zone.as_mut() {
+                if let Some(s) = self.intel.share_zone.as_mut() {
                     s.selected = selected.saturating_sub(1);
                 }
             }
             KeyCode::Down => {
                 if selected + 1 < self.map.zones.len()
-                    && let Some(s) = self.share_zone.as_mut()
+                    && let Some(s) = self.intel.share_zone.as_mut()
                 {
                     s.selected = selected + 1;
                 }
             }
             KeyCode::Enter | KeyCode::Char('s') => {
-                if let Some(state) = self.share_zone.take() {
+                if let Some(state) = self.intel.share_zone.take() {
                     self.share_zone(state.selected, &state.peer);
                 }
             }
             // Revoke the highlighted zone on the peer (withdraw a prior share).
             KeyCode::Char('r') => {
-                if let Some(state) = self.share_zone.take() {
+                if let Some(state) = self.intel.share_zone.take() {
                     self.revoke_shared_zone(state.selected, &state.peer);
                 }
             }
@@ -244,7 +244,7 @@ mod tests {
         // revocation removes it via apply_cot's revoke path.
         let mut rx = App::new();
         rx.conversations.clear();
-        rx.intel.clear();
+        rx.intel.live.clear();
         let mut trusted = Conversation::new("sender-hash");
         trusted.trust = Trust::Trusted;
         rx.conversations.push(trusted);
@@ -259,11 +259,11 @@ mod tests {
         );
         shared.cot_type = "u-d-c-c".into();
         rx.apply_cot("sender-hash".into(), shared);
-        assert_eq!(rx.intel.len(), 1, "object applied");
+        assert_eq!(rx.intel.live.len(), 1, "object applied");
 
         let revoke = foxhole_cot::parse(xml).unwrap();
         rx.apply_cot("sender-hash".into(), revoke);
-        assert!(rx.intel.is_empty(), "revocation dropped the object");
+        assert!(rx.intel.live.is_empty(), "revocation dropped the object");
     }
 
     #[test]
@@ -273,17 +273,17 @@ mod tests {
         app.map.zones.clear();
         // No zones → no picker (logs a hint instead).
         app.open_share_zone();
-        assert!(app.share_zone.is_none());
+        assert!(app.intel.share_zone.is_none());
 
         app.map.zones = vec![crate::domain::Zone::new("AO", 0.0, 0.0, 10.0)];
         // No conversation selected → still no picker.
         app.open_share_zone();
-        assert!(app.share_zone.is_none());
+        assert!(app.intel.share_zone.is_none());
 
         app.conversations.push(Conversation::new("bb22"));
         app.selected = 0;
         app.open_share_zone();
-        assert!(app.share_zone.is_some());
-        assert_eq!(app.share_zone.as_ref().unwrap().peer, "bb22");
+        assert!(app.intel.share_zone.is_some());
+        assert_eq!(app.intel.share_zone.as_ref().unwrap().peer, "bb22");
     }
 }
