@@ -629,8 +629,8 @@ fn upsert_nomad_dedupes_and_keeps_newest_last_seen() {
     let dest = "aa".repeat(16);
     app.upsert_nomad(id.clone(), dest.clone(), Some("hub".to_string()), 100);
     app.upsert_nomad(id.clone(), dest.clone(), None, 250); // newer, no name update
-    assert_eq!(app.nomad_nodes.len(), 1);
-    let n = &app.nomad_nodes[0];
+    assert_eq!(app.browser.nodes.len(), 1);
+    let n = &app.browser.nodes[0];
     assert_eq!(n.name.as_deref(), Some("hub"));
     assert_eq!(n.dest, dest);
     assert_eq!(n.last_seen, 250);
@@ -642,7 +642,7 @@ fn browser_enter_queues_index_fetch() {
     app.active = Tool::Browser;
     let id = "22".repeat(16);
     app.upsert_nomad(id.clone(), "bb".repeat(16), Some("node".to_string()), 1);
-    app.browser_selected = 0;
+    app.browser.selected = 0;
     app.handle_key(press(KeyCode::Enter));
     assert_eq!(
         app.commands.pop_front(),
@@ -652,11 +652,11 @@ fn browser_enter_queues_index_fetch() {
             fields: Vec::new(),
         })
     );
-    let page = app.page.as_ref().expect("page set to fetching");
+    let page = app.browser.page.as_ref().expect("page set to fetching");
     assert_eq!(page.node, id);
     assert!(matches!(page.status, PageStatus::Fetching));
     // Opening a node focuses the page pane.
-    assert_eq!(app.browser_pane, BrowserPane::Page);
+    assert_eq!(app.browser.pane, BrowserPane::Page);
 }
 
 #[test]
@@ -673,29 +673,29 @@ fn set_page_folds_ok_and_err_for_current_page() {
         field_values: HashMap::new(),
     };
 
-    app.page = Some(viewing());
+    app.browser.page = Some(viewing());
     app.set_page(id.clone(), path.clone(), Ok(">Hello".to_string()));
     assert!(matches!(
-        app.page.as_ref().unwrap().status,
+        app.browser.page.as_ref().unwrap().status,
         PageStatus::Loaded(_)
     ));
 
-    app.page = Some(viewing());
+    app.browser.page = Some(viewing());
     app.set_page(id, path, Err("timeout".to_string()));
     assert!(matches!(
-        app.page.as_ref().unwrap().status,
+        app.browser.page.as_ref().unwrap().status,
         PageStatus::Error(_)
     ));
 
     // A result for a page we're no longer viewing is ignored.
-    app.page = Some(viewing());
+    app.browser.page = Some(viewing());
     app.set_page(
         "99".repeat(16),
         "/other.mu".to_string(),
         Ok("x".to_string()),
     );
     assert!(matches!(
-        app.page.as_ref().unwrap().status,
+        app.browser.page.as_ref().unwrap().status,
         PageStatus::Fetching
     ));
 }
@@ -705,7 +705,7 @@ fn set_page_extracts_elements_and_seeds_fields() {
     let mut app = App::new();
     let id = "44".repeat(16);
     let path = "/page/index.mu".to_string();
-    app.page = Some(Page {
+    app.browser.page = Some(Page {
         node: id.clone(),
         path: path.clone(),
         status: PageStatus::Fetching,
@@ -718,7 +718,7 @@ fn set_page_extracts_elements_and_seeds_fields() {
         path,
         Ok("`[Home`:/page/a.mu] `<user`alice>".to_string()),
     );
-    let p = app.page.as_ref().unwrap();
+    let p = app.browser.page.as_ref().unwrap();
     // A link element followed by a text field element.
     assert!(matches!(
         p.elements.as_slice(),
@@ -746,8 +746,8 @@ fn browsing(node: &str, path: &str, links: Vec<String>) -> App {
         .collect();
     let mut app = App::new();
     app.active = Tool::Browser;
-    app.browser_pane = BrowserPane::Page;
-    app.page = Some(Page {
+    app.browser.pane = BrowserPane::Page;
+    app.browser.page = Some(Page {
         node: node.to_string(),
         path: path.to_string(),
         status: PageStatus::Loaded(String::new()),
@@ -762,11 +762,11 @@ fn browsing(node: &str, path: &str, links: Vec<String>) -> App {
 fn tab_toggles_browser_pane() {
     let mut app = App::new();
     app.active = Tool::Browser;
-    assert_eq!(app.browser_pane, BrowserPane::Nodes);
+    assert_eq!(app.browser.pane, BrowserPane::Nodes);
     app.handle_key(press(KeyCode::Tab));
-    assert_eq!(app.browser_pane, BrowserPane::Page);
+    assert_eq!(app.browser.pane, BrowserPane::Page);
     app.handle_key(press(KeyCode::Tab));
-    assert_eq!(app.browser_pane, BrowserPane::Nodes);
+    assert_eq!(app.browser.pane, BrowserPane::Nodes);
 }
 
 #[test]
@@ -778,11 +778,11 @@ fn page_pane_element_cursor_clamps() {
         vec![":/a.mu".to_string(), ":/b.mu".to_string()],
     );
     app.handle_key(press(KeyCode::Down));
-    assert_eq!(app.page.as_ref().unwrap().element_sel, 1);
+    assert_eq!(app.browser.page.as_ref().unwrap().element_sel, 1);
     app.handle_key(press(KeyCode::Down)); // clamp at last
-    assert_eq!(app.page.as_ref().unwrap().element_sel, 1);
+    assert_eq!(app.browser.page.as_ref().unwrap().element_sel, 1);
     app.handle_key(press(KeyCode::Up));
-    assert_eq!(app.page.as_ref().unwrap().element_sel, 0);
+    assert_eq!(app.browser.page.as_ref().unwrap().element_sel, 0);
 }
 
 #[test]
@@ -799,7 +799,7 @@ fn relative_link_follows_on_current_node() {
         })
     );
     // The previous page was pushed to history.
-    assert_eq!(app.history.last().unwrap().1, "/page/index.mu");
+    assert_eq!(app.browser.history.last().unwrap().1, "/page/index.mu");
 }
 
 #[test]
@@ -829,7 +829,7 @@ fn link_to_unknown_dest_errors_without_fetching() {
     app.handle_key(press(KeyCode::Enter));
     assert!(app.commands.is_empty(), "no fetch for an unknown node");
     assert!(matches!(
-        app.page.as_ref().unwrap().status,
+        app.browser.page.as_ref().unwrap().status,
         PageStatus::Error(_)
     ));
 }
@@ -838,7 +838,9 @@ fn link_to_unknown_dest_errors_without_fetching() {
 fn backspace_pops_history_and_refetches() {
     let node = "cc".repeat(16);
     let mut app = browsing(&node, "/page/two.mu", vec![]);
-    app.history.push((node.clone(), "/page/one.mu".to_string()));
+    app.browser
+        .history
+        .push((node.clone(), "/page/one.mu".to_string()));
     app.handle_key(press(KeyCode::Backspace));
     assert_eq!(
         app.commands.pop_front(),
@@ -848,15 +850,18 @@ fn backspace_pops_history_and_refetches() {
             fields: Vec::new(),
         })
     );
-    assert!(app.history.is_empty(), "history was popped (not re-pushed)");
+    assert!(
+        app.browser.history.is_empty(),
+        "history was popped (not re-pushed)"
+    );
 }
 
 /// A Browser page with the given pre-built elements, focused on the page pane.
 fn browsing_elements(node: &str, elements: Vec<crate::micron::Element>) -> App {
     let mut app = App::new();
     app.active = Tool::Browser;
-    app.browser_pane = BrowserPane::Page;
-    app.page = Some(Page {
+    app.browser.pane = BrowserPane::Page;
+    app.browser.page = Some(Page {
         node: node.to_string(),
         path: "/page/index.mu".to_string(),
         status: PageStatus::Loaded(String::new()),
@@ -879,7 +884,8 @@ fn typing_into_focused_field_edits_its_value() {
     app.handle_key(press(KeyCode::Char('h')));
     app.handle_key(press(KeyCode::Char('i')));
     assert_eq!(
-        app.page
+        app.browser
+            .page
             .as_ref()
             .unwrap()
             .field_values
@@ -889,7 +895,8 @@ fn typing_into_focused_field_edits_its_value() {
     );
     app.handle_key(press(KeyCode::Backspace));
     assert_eq!(
-        app.page
+        app.browser
+            .page
             .as_ref()
             .unwrap()
             .field_values
@@ -968,14 +975,14 @@ fn scroll_bottom_follows_then_releases_then_resticks() {
 fn pagekeys_scroll_focused_pane() {
     let mut app = App::new();
     app.active = Tool::Browser;
-    app.browser_pane = BrowserPane::Page;
-    app.page_scroll.visible(100, 10); // prime the viewport step
+    app.browser.pane = BrowserPane::Page;
+    app.browser.scroll.visible(100, 10); // prime the viewport step
     app.handle_key(press(KeyCode::PageDown));
-    assert_eq!(app.page_scroll.visible(100, 10), 10);
+    assert_eq!(app.browser.scroll.visible(100, 10), 10);
     app.handle_key(press(KeyCode::End));
-    assert_eq!(app.page_scroll.visible(100, 10), 90);
+    assert_eq!(app.browser.scroll.visible(100, 10), 90);
     app.handle_key(press(KeyCode::Home));
-    assert_eq!(app.page_scroll.visible(100, 10), 0);
+    assert_eq!(app.browser.scroll.visible(100, 10), 0);
 }
 
 #[test]
@@ -989,9 +996,9 @@ fn active_scroll_follows_focus() {
         "node columns aren't a text pane"
     );
     app.active = Tool::Browser;
-    app.browser_pane = BrowserPane::Nodes;
+    app.browser.pane = BrowserPane::Nodes;
     assert!(app.active_scroll().is_none(), "node list isn't scrollable");
-    app.browser_pane = BrowserPane::Page;
+    app.browser.pane = BrowserPane::Page;
     assert!(app.active_scroll().is_some());
 }
 
@@ -999,13 +1006,13 @@ fn active_scroll_follows_focus() {
 fn fetch_page_resets_scroll_to_top() {
     let node = "dd".repeat(16);
     let mut app = browsing(&node, "/page/index.mu", vec![]);
-    app.page_scroll.visible(100, 10);
-    app.page_scroll.page_down(); // scrolled down
-    app.browser_pane = BrowserPane::Nodes;
+    app.browser.scroll.visible(100, 10);
+    app.browser.scroll.page_down(); // scrolled down
+    app.browser.pane = BrowserPane::Nodes;
     app.upsert_nomad(node.clone(), "ee".repeat(16), None, 1);
-    app.browser_selected = 0;
+    app.browser.selected = 0;
     app.handle_key(press(KeyCode::Enter)); // open index → resets to top
-    assert_eq!(app.page_scroll.visible(100, 10), 0);
+    assert_eq!(app.browser.scroll.visible(100, 10), 0);
 }
 
 #[test]
