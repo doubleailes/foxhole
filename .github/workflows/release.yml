@@ -1,0 +1,117 @@
+name: Release
+
+# Cut the shipping binaries when a GitHub release is published and attach them to
+# that release: one Linux (x86_64-unknown-linux-gnu) and one Windows
+# (x86_64-pc-windows-msvc) archive, each with a SHA-256 checksum file.
+#
+# Both are the **default (offline) configuration** — `--features net` pulls the
+# AGPL rsReticulum/rsLXMF git deps, which are built from source by operators who
+# want the live mesh compartment (see README §7 and docs/lxmf-integration.md);
+# the published artifacts stay dependency-light and reproducible from crates.io.
+#
+# `workflow_dispatch` re-cuts the artifacts for an existing release tag (e.g.
+# after a runner failure) without having to delete and re-publish the release.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to build and upload to (e.g. v0.1.0)
+        required: true
+        type: string
+
+# The release upload is the only write this workflow needs.
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One platform failing must not cancel the other's artifact.
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+    # bash on both runners (Git for Windows ships it), so the packaging steps
+    # below are written once instead of per-platform.
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Resolve release tag
+        id: meta
+        run: |
+          tag="${{ github.event.release.tag_name || inputs.tag }}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "name=foxhole-$tag-${{ matrix.target }}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          # Build the tagged tree, not the branch head the event points at.
+          ref: ${{ steps.meta.outputs.tag }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      # `--locked` so the release is built from the committed Cargo.lock.
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package
+        id: package
+        run: |
+          set -euo pipefail
+          name='${{ steps.meta.outputs.name }}'
+          bin="target/${{ matrix.target }}/release/foxhole"
+          mkdir -p "dist/$name"
+          if [ '${{ runner.os }}' = 'Windows' ]; then
+            cp "$bin.exe" "dist/$name/"
+          else
+            cp "$bin" "dist/$name/"
+            strip "dist/$name/foxhole"
+          fi
+          # Ship the licence with the binary (AGPL) plus the operator docs.
+          cp README.md LICENSE CHANGELOG.md SECURITY.md "dist/$name/"
+          cd dist
+          if [ '${{ matrix.archive }}' = 'zip' ]; then
+            7z a -tzip "$name.zip" "$name" > /dev/null
+          else
+            tar czf "$name.tar.gz" "$name"
+          fi
+          asset="$name.${{ matrix.archive }}"
+          sha256sum "$asset" > "$asset.sha256"
+          echo "asset=dist/$asset" >> "$GITHUB_OUTPUT"
+
+      # Keeps the archives reachable from the run itself, which is handy when a
+      # dispatch build is being checked before it lands on the release.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.name }}
+          path: ${{ steps.package.outputs.asset }}*
+          if-no-files-found: error
+
+      - name: Attach to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release upload '${{ steps.meta.outputs.tag }}' \
+            '${{ steps.package.outputs.asset }}' \
+            '${{ steps.package.outputs.asset }}.sha256' \
+            --clobber
