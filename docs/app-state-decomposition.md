@@ -1,10 +1,12 @@
 # Decomposing the `App` god-struct
 
-**Status: deferred, not rejected.** Identified during the architecture refactor
-of 2026-08 (`refactor(net)` / `refactor(core)` / `refactor: isolate the
-feature-gated wiring`), which deliberately stopped short of it. This note
-records the measurement so the work can be picked up as its own reviewable pass
-instead of being rediscovered.
+**Status: done (2026-08).** Carried out as the seven single-group commits
+`refactor(core): group …` (`MapState` → `NetworkState` → `BrowserState` →
+`Modals` → `Outbox` → `IntelState` → `ConversationsState`), in the order and
+shape this note prescribes; every commit compiled and passed the full workspace
+test suite (offline and `--features net`). See **Outcome** at the end for the
+decisions taken where this note left a question open. The measurement below is
+kept as written — it is the record of why the work took this shape.
 
 ## The problem
 
@@ -195,3 +197,40 @@ here can strand a message, mis-plot a marker, or leak intel. The trigger to
 schedule it is the next feature that would add fields to a group that already
 exists on this list, since that is the point where the decomposition pays for
 itself immediately instead of eventually.
+
+## Outcome
+
+What was actually built, including the calls made where the note above left a
+question open:
+
+- **All seven groups landed**, one commit each, in the prescribed order. Each
+  sub-struct lives in its tool's module (`ConversationsState` in
+  `conversations.rs`, `NetworkState` in `network.rs`, and so on; `Modals` and
+  `Outbox` in `mod.rs`), is re-exported from `app`, and owns its defaults in a
+  `new()` — `App::new` now composes groups instead of listing 49 fields.
+- **Map and Intel stayed two groups.** The other sanctioned option — accepting
+  that the six map↔intel methods stay on `App` — was taken instead of the
+  merge. Those methods are composition-root methods either way (pushing them
+  down would re-create the coupling with an extra hop, per the hazard list),
+  and a standalone `IntelState` keeps the binary's encrypted-store handoff a
+  clean `intel.live`/`intel.staged`/`intel.dirty` interface. All thirteen
+  cross-group methods remain on `App`, unmoved.
+- **Fields stayed `pub`, no accessors were staged** — both as prescribed.
+  Disjoint borrows (`&mut self.browser.page` alongside `&self.convs.items`)
+  work through the direct field paths.
+- **Names drop the old prefixes** now the group provides the context:
+  `nomad_nodes`/`browser_selected`/`browser_pane`/`page_scroll` became
+  `browser.{nodes,selected,pane,scroll}`, `map`/`map_selected`/`map_cities`
+  became `map.{view,selected,cities}`, `net_col` became `net.column`,
+  `intel`/`intel_staged`/`intel_dirty` became `intel.{live,staged,dirty}`,
+  and `conversations` became `convs.items`. `BrowserPane` moved next to
+  `BrowserState` (still re-exported from `app`).
+- `App` is down to **21 fields**: the seven groups plus the 14 genuinely
+  top-level ones listed above (unchanged, `config` still not folded in).
+- The renderer validated the split as predicted: `foxhole-tui` reads
+  `app.convs.items`, `app.map.view`, `app.net.nodes` etc. without a single
+  clone being forced.
+
+The counter-pressure this note asked for now exists: a new feature's state
+either belongs to a group — and goes there, with its default beside its
+siblings — or it argues explicitly for being top-level.
