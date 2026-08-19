@@ -11,7 +11,12 @@
 //! - [`store`] — encrypted, atomic, per-conversation history store.
 //! - [`intel_store`] — encrypted, atomic persistence for the received-intel
 //!   layer (live + staged records).
+//!
+//! Both stores share their framing and their encrypt-then-atomically-write
+//! envelope through the internal `wire` module, so they cannot drift apart on
+//! what a durable — or a corrupt — file means.
 
 pub mod intel_store;
 pub mod net;
 pub mod store;
+mod wire;

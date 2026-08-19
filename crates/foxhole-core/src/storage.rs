@@ -17,10 +17,6 @@ use std::path::Path;
 /// final `rename` stays on one filesystem (cross-device renames are not atomic
 /// and would fall back to a copy). On any error the temp file is cleaned up
 /// best-effort and the original `path` is left untouched.
-///
-/// Currently unused — wired in ahead of the persistence layer so all future
-/// state writes have a single durable path to go through.
-#[allow(dead_code)]
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
     let file_name = path.file_name().ok_or_else(|| {

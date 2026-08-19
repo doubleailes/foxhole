@@ -17,11 +17,13 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use rns_crypto::{hkdf, sha, token};
+use rns_crypto::{hkdf, sha};
 use rns_identity::identity::Identity;
 
 use foxhole_core::app::{Conversation, Entry, MsgStatus, Trust};
 use foxhole_core::config::config_dir;
+
+use crate::wire::{Reader, Sealed, put_str, put_text, seal, unseal};
 
 /// File-format magic + version. v2 adds a per-message status byte; v3 adds a
 /// per-conversation trust byte. Older files still load: a missing status
@@ -64,11 +66,7 @@ pub fn load_all(key: &[u8; 64]) -> (Vec<Conversation>, usize) {
 }
 
 fn save_to(dir: &Path, key: &[u8; 64], conv: &Conversation) -> io::Result<()> {
-    std::fs::create_dir_all(dir)?;
-    let blob = serialize(conv);
-    let token =
-        token::encrypt(&blob, key).map_err(|e| io::Error::other(format!("encrypt: {e}")))?;
-    foxhole_core::storage::atomic_write(&file_for(dir, &conv.peer), &token)
+    seal(&file_for(dir, &conv.peer), key, &serialize(conv))
 }
 
 fn load_all_from(dir: &Path, key: &[u8; 64]) -> (Vec<Conversation>, usize) {
@@ -82,13 +80,14 @@ fn load_all_from(dir: &Path, key: &[u8; 64]) -> (Vec<Conversation>, usize) {
         if path.extension().and_then(|e| e.to_str()) != Some("lxmc") {
             continue;
         }
-        match std::fs::read(&path)
-            .ok()
-            .and_then(|bytes| token::decrypt(&bytes, key).ok())
-            .and_then(|plain| deserialize(&plain))
-        {
-            Some(conv) => loaded.push(conv),
-            None => skipped += 1,
+        // A listed file that won't decrypt/decode is foreign or damaged: skip it
+        // (and count it) rather than letting one bad blob sink the whole load.
+        match unseal(&path, key) {
+            Sealed::Plain(plain) => match deserialize(&plain) {
+                Some(conv) => loaded.push(conv),
+                None => skipped += 1,
+            },
+            _ => skipped += 1,
         }
     }
     (loaded, skipped)
@@ -199,65 +198,6 @@ fn deserialize(data: &[u8]) -> Option<Conversation> {
     conv.unread = unread;
     conv.messages = messages;
     Some(conv)
-}
-
-/// `u16` length-prefixed string (peer / display name).
-fn put_str(b: &mut Vec<u8>, s: &str) {
-    let bytes = s.as_bytes();
-    b.extend_from_slice(&(bytes.len() as u16).to_be_bytes());
-    b.extend_from_slice(bytes);
-}
-
-/// `u32` length-prefixed text (message body — may be long / multi-line).
-fn put_text(b: &mut Vec<u8>, s: &str) {
-    let bytes = s.as_bytes();
-    b.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
-    b.extend_from_slice(bytes);
-}
-
-/// Bounds-checked sequential reader; any out-of-range read yields `None`.
-struct Reader<'a> {
-    data: &'a [u8],
-    pos: usize,
-}
-
-impl<'a> Reader<'a> {
-    fn new(data: &'a [u8]) -> Self {
-        Self { data, pos: 0 }
-    }
-
-    fn take(&mut self, n: usize) -> Option<&'a [u8]> {
-        let end = self.pos.checked_add(n)?;
-        let slice = self.data.get(self.pos..end)?;
-        self.pos = end;
-        Some(slice)
-    }
-
-    fn u8(&mut self) -> Option<u8> {
-        self.take(1).map(|s| s[0])
-    }
-
-    fn u16(&mut self) -> Option<u16> {
-        Some(u16::from_be_bytes(self.take(2)?.try_into().ok()?))
-    }
-
-    fn u32(&mut self) -> Option<u32> {
-        Some(u32::from_be_bytes(self.take(4)?.try_into().ok()?))
-    }
-
-    fn u64(&mut self) -> Option<u64> {
-        Some(u64::from_be_bytes(self.take(8)?.try_into().ok()?))
-    }
-
-    fn str(&mut self) -> Option<String> {
-        let len = self.u16()? as usize;
-        Some(String::from_utf8_lossy(self.take(len)?).into_owned())
-    }
-
-    fn text(&mut self) -> Option<String> {
-        let len = self.u32()? as usize;
-        Some(String::from_utf8_lossy(self.take(len)?).into_owned())
-    }
 }
 
 #[cfg(test)]
