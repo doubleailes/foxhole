@@ -4,26 +4,61 @@
 use super::*;
 use crate::domain::{now_secs, short_hash};
 
+/// Network tool state: the discovered-infrastructure side of the two-column
+/// view (the Peers column reuses the Conversations roster and its selection),
+/// plus the probe/interface telemetry the tab reports.
+pub struct NetworkState {
+    /// Discovered propagation nodes.
+    pub nodes: Vec<Node>,
+    /// Highlighted row in the propagation-node list.
+    pub selected: usize,
+    /// Which column has focus (Peers reuses the Conversations selection,
+    /// Nodes uses `selected` for the in-column cursor).
+    pub column: NetColumn,
+    /// Latest rnpath-style path probe per hex destination hash.
+    pub path_probes: HashMap<String, PathProbe>,
+    /// Live interface status (Interfaces tab); empty until the stack reports.
+    pub interfaces: Vec<Interface>,
+    /// Active link count reported alongside the interface snapshot.
+    pub link_count: u32,
+}
+
+impl NetworkState {
+    /// Nothing discovered yet; the Peers column focused.
+    pub(super) fn new() -> Self {
+        Self {
+            nodes: Vec::new(),
+            selected: 0,
+            column: NetColumn::Peers,
+            path_probes: HashMap::new(),
+            interfaces: Vec::new(),
+            link_count: 0,
+        }
+    }
+}
+
 impl App {
     /// Network: two columns (peers | nodes). Up/Down move within the focused
     /// column; Tab/Left/Right switch columns; Enter opens a peer's conversation
     /// or sets a node active; `p` path-probes the selection; `s` syncs.
     pub(super) fn handle_network_key(&mut self, _ctrl: bool, key: KeyEvent) {
         match key.code {
-            KeyCode::Up => match self.net_col {
+            KeyCode::Up => match self.net.column {
                 NetColumn::Peers => self.select_prev(),
-                NetColumn::Nodes => self.node_selected = self.node_selected.saturating_sub(1),
+                NetColumn::Nodes => self.net.selected = self.net.selected.saturating_sub(1),
             },
-            KeyCode::Down => match self.net_col {
+            KeyCode::Down => match self.net.column {
                 NetColumn::Peers => self.select_next(),
                 NetColumn::Nodes => {
-                    if self.node_selected + 1 < self.nodes.len() {
-                        self.node_selected += 1;
+                    if self.net.selected + 1 < self.net.nodes.len() {
+                        self.net.selected += 1;
                     }
                 }
             },
-            KeyCode::Left | KeyCode::Right | KeyCode::Tab => self.net_col = self.net_col.other(),
-            KeyCode::Enter => match self.net_col {
+            KeyCode::Left | KeyCode::Right | KeyCode::Tab => {
+                self.net.column = self.net.column.other()
+            }
+            KeyCode::Enter => match self.net.column {
                 // Jump straight from the roster into the chat.
                 NetColumn::Peers => {
                     if self.selected_conv().is_some() {
@@ -33,7 +68,7 @@ impl App {
                     }
                 }
                 NetColumn::Nodes => {
-                    if let Some(node) = self.nodes.get(self.node_selected) {
+                    if let Some(node) = self.net.nodes.get(self.net.selected) {
                         let hash = node.hash.clone();
                         self.config.propagation_node = Some(hash.clone());
                         self.commands
@@ -60,16 +95,22 @@ impl App {
             }
             // Cycle the selected peer's trust level (peers column only — nodes
             // are relays, not correspondents).
-            KeyCode::Char('t') if self.net_col == NetColumn::Peers => self.cycle_selected_trust(),
+            KeyCode::Char('t') if self.net.column == NetColumn::Peers => {
+                self.cycle_selected_trust()
+            }
             _ => {}
         }
     }
 
     /// The hex destination hash of the focused Network-tab selection, if any.
     fn focused_net_hash(&self) -> Option<String> {
-        match self.net_col {
+        match self.net.column {
             NetColumn::Peers => self.selected_conv().map(|c| c.peer.clone()),
-            NetColumn::Nodes => self.nodes.get(self.node_selected).map(|n| n.hash.clone()),
+            NetColumn::Nodes => self
+                .net
+                .nodes
+                .get(self.net.selected)
+                .map(|n| n.hash.clone()),
         }
     }
 
@@ -82,7 +123,7 @@ impl App {
             "[RT] PATH {}..: {summary}",
             short_hash(&hash)
         )));
-        self.path_probes.insert(
+        self.net.path_probes.insert(
             hash,
             PathProbe {
                 at: now_secs(),
@@ -96,7 +137,7 @@ impl App {
     /// record the active link count (a status refresh, not an upsert).
     #[cfg_attr(not(feature = "net"), allow(dead_code))]
     pub fn set_interfaces(&mut self, interfaces: Vec<Interface>, links: u32) {
-        self.interfaces = interfaces;
-        self.link_count = links;
+        self.net.interfaces = interfaces;
+        self.net.link_count = links;
     }
 }

@@ -435,18 +435,18 @@ fn node(hash: &str, name: Option<&str>) -> Node {
 fn network_tab_selects_and_sets_propagation_node() {
     let mut app = App::new();
     app.active = Tool::Network;
-    app.net_col = NetColumn::Nodes; // focus the right column
+    app.net.column = NetColumn::Nodes; // focus the right column
     let n0 = "aa".repeat(16); // 32 hex chars = 16 bytes
     let n1 = "bb".repeat(16);
-    app.nodes = vec![node(&n0, Some("n0")), node(&n1, None)];
+    app.net.nodes = vec![node(&n0, Some("n0")), node(&n1, None)];
 
     // Down moves the selection and clamps at the last row.
     app.handle_key(press(KeyCode::Down));
-    assert_eq!(app.node_selected, 1);
+    assert_eq!(app.net.selected, 1);
     app.handle_key(press(KeyCode::Down));
-    assert_eq!(app.node_selected, 1, "clamped at bottom");
+    assert_eq!(app.net.selected, 1, "clamped at bottom");
     app.handle_key(press(KeyCode::Up));
-    assert_eq!(app.node_selected, 0);
+    assert_eq!(app.net.selected, 0);
 
     // Enter activates the highlighted node (config + queued command).
     app.handle_key(press(KeyCode::Enter));
@@ -481,10 +481,10 @@ fn esc_cancels_a_running_sync_popup() {
 fn network_node_column_inert_with_no_nodes() {
     let mut app = App::new();
     app.active = Tool::Network;
-    app.net_col = NetColumn::Nodes;
+    app.net.column = NetColumn::Nodes;
     app.handle_key(press(KeyCode::Down));
     app.handle_key(press(KeyCode::Enter));
-    assert_eq!(app.node_selected, 0);
+    assert_eq!(app.net.selected, 0);
     assert!(app.config.propagation_node.is_none());
     assert!(
         app.commands.is_empty(),
@@ -496,32 +496,32 @@ fn network_node_column_inert_with_no_nodes() {
 fn network_columns_toggle_and_navigate_independently() {
     let mut app = App::new();
     app.active = Tool::Network;
-    app.nodes = vec![node(&"aa".repeat(16), None), node(&"bb".repeat(16), None)];
+    app.net.nodes = vec![node(&"aa".repeat(16), None), node(&"bb".repeat(16), None)];
     // Defaults to the Peers column.
-    assert_eq!(app.net_col, NetColumn::Peers);
+    assert_eq!(app.net.column, NetColumn::Peers);
 
     // Up/Down move the peer cursor (seeded with 3 conversations).
     app.handle_key(press(KeyCode::Down));
     assert_eq!(app.selected, 1);
-    assert_eq!(app.node_selected, 0, "node cursor untouched while on Peers");
+    assert_eq!(app.net.selected, 0, "node cursor untouched while on Peers");
 
     // Tab / Left / Right switch the focused column.
     app.handle_key(press(KeyCode::Tab));
-    assert_eq!(app.net_col, NetColumn::Nodes);
+    assert_eq!(app.net.column, NetColumn::Nodes);
     app.handle_key(press(KeyCode::Down));
-    assert_eq!(app.node_selected, 1);
+    assert_eq!(app.net.selected, 1);
     assert_eq!(app.selected, 1, "peer cursor untouched while on Nodes");
     app.handle_key(press(KeyCode::Left));
-    assert_eq!(app.net_col, NetColumn::Peers);
+    assert_eq!(app.net.column, NetColumn::Peers);
     app.handle_key(press(KeyCode::Right));
-    assert_eq!(app.net_col, NetColumn::Nodes);
+    assert_eq!(app.net.column, NetColumn::Nodes);
 }
 
 #[test]
 fn enter_on_peer_opens_its_conversation() {
     let mut app = App::new();
     app.active = Tool::Network;
-    app.net_col = NetColumn::Peers;
+    app.net.column = NetColumn::Peers;
     app.selected = 1; // "bob"
     app.handle_key(press(KeyCode::Enter));
     assert_eq!(app.active, Tool::Conversations);
@@ -534,10 +534,10 @@ fn p_queues_path_probe_for_focused_selection() {
     let mut app = App::new();
     app.active = Tool::Network;
     let n0 = "cc".repeat(16);
-    app.nodes = vec![node(&n0, None)];
+    app.net.nodes = vec![node(&n0, None)];
 
     // On the Peers column: probes the selected peer's key.
-    app.net_col = NetColumn::Peers;
+    app.net.column = NetColumn::Peers;
     app.selected = 0;
     let peer = app.conversations[0].peer.clone();
     app.handle_key(press(KeyCode::Char('p')));
@@ -547,7 +547,7 @@ fn p_queues_path_probe_for_focused_selection() {
     );
 
     // On the Nodes column: probes the selected node's hash.
-    app.net_col = NetColumn::Nodes;
+    app.net.column = NetColumn::Nodes;
     app.handle_key(press(KeyCode::Char('p')));
     assert_eq!(app.commands.pop_front(), Some(NetCommand::RequestPath(n0)));
 }
@@ -562,7 +562,7 @@ fn upsert_peer_stamps_last_seen() {
 
     let nodehash = "ee".repeat(16);
     app.upsert_peer(PeerKind::Propagation, nodehash.clone(), None);
-    let n = app.nodes.iter().find(|n| n.hash == nodehash).unwrap();
+    let n = app.net.nodes.iter().find(|n| n.hash == nodehash).unwrap();
     assert!(n.last_seen > 0, "propagation node stamped");
 }
 
@@ -571,7 +571,7 @@ fn record_path_stores_probe_and_logs() {
     let mut app = App::new();
     let hash = "ff".repeat(16);
     app.record_path(hash.clone(), Some(3), Some("AutoInterface".to_string()));
-    let p = app.path_probes.get(&hash).expect("probe stored");
+    let p = app.net.path_probes.get(&hash).expect("probe stored");
     assert_eq!(p.hops, Some(3));
     assert!(
         app.syslog
@@ -584,8 +584,8 @@ fn record_path_stores_probe_and_logs() {
 #[test]
 fn set_interfaces_replaces_snapshot_and_link_count() {
     let mut app = App::new();
-    assert!(app.interfaces.is_empty());
-    assert_eq!(app.link_count, 0);
+    assert!(app.net.interfaces.is_empty());
+    assert_eq!(app.net.link_count, 0);
 
     let mk = |name: &str, online| Interface {
         name: name.to_string(),
@@ -595,14 +595,14 @@ fn set_interfaces_replaces_snapshot_and_link_count() {
         tx_bytes: 2_650_000,
     };
     app.set_interfaces(vec![mk("AutoInterface", true), mk("TCP hub", true)], 4);
-    assert_eq!(app.interfaces.len(), 2);
-    assert_eq!(app.link_count, 4);
+    assert_eq!(app.net.interfaces.len(), 2);
+    assert_eq!(app.net.link_count, 4);
 
     // A later snapshot replaces wholesale (not an upsert).
     app.set_interfaces(vec![mk("AutoInterface", false)], 0);
-    assert_eq!(app.interfaces.len(), 1);
-    assert!(!app.interfaces[0].online);
-    assert_eq!(app.link_count, 0);
+    assert_eq!(app.net.interfaces.len(), 1);
+    assert!(!app.net.interfaces[0].online);
+    assert_eq!(app.net.link_count, 0);
 }
 
 #[test]

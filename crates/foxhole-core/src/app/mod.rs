@@ -52,6 +52,7 @@ pub use boot::{AppState, Scroll};
 pub use boot::{Boot, BootStep};
 pub use intel::IntelReview;
 pub use map::{GotoMgrs, MapState};
+pub use network::NetworkState;
 pub use share::ShareZone;
 
 // Re-exported so the renderer (and the binary) reach the CoT model through
@@ -310,13 +311,8 @@ pub struct App {
     pub conversations: Vec<Conversation>,
     /// Index of the selected conversation within `conversations`.
     pub selected: usize,
-    /// Discovered propagation nodes (Network tab).
-    pub nodes: Vec<Node>,
-    /// Highlighted row in the Network tab's propagation-node list.
-    pub node_selected: usize,
-    /// Which Network-tab column has focus (Peers reuses `selected`, Nodes
-    /// reuses `node_selected` for the in-column cursor).
-    pub net_col: NetColumn,
+    /// Network tool state (discovered nodes, probes, interface telemetry).
+    pub net: NetworkState,
     /// World Map tool state (viewport, layers, and its modal).
     pub map: MapState,
     /// Live received CoT intel applied to the map (from Trusted peers, or all
@@ -335,12 +331,6 @@ pub struct App {
     /// Set when the live/staged intel layer changed this iteration; `main` drains
     /// it and persists the encrypted intel store. Keeps `App` free of I/O.
     pub intel_dirty: bool,
-    /// Latest rnpath-style path probe per hex destination hash (Network tab).
-    pub path_probes: HashMap<String, PathProbe>,
-    /// Live interface status (Interfaces tab); empty until the stack reports.
-    pub interfaces: Vec<Interface>,
-    /// Active link count reported alongside the interface snapshot.
-    pub link_count: u32,
     /// Discovered Nomad Network nodes (Browser tab).
     pub nomad_nodes: Vec<NomadNode>,
     /// Highlighted row in the Browser tab's node list.
@@ -426,9 +416,7 @@ impl App {
             transmit_field: TransmitField::Body,
             conversations,
             selected: 0,
-            nodes: Vec::new(),
-            node_selected: 0,
-            net_col: NetColumn::Peers,
+            net: NetworkState::new(),
             map: MapState::new(),
             intel: Vec::new(),
             intel_staged: Vec::new(),
@@ -436,9 +424,6 @@ impl App {
             share_zone: None,
             author: None,
             intel_dirty: false,
-            path_probes: HashMap::new(),
-            interfaces: Vec::new(),
-            link_count: 0,
             nomad_nodes: Vec::new(),
             browser_selected: 0,
             browser_pane: BrowserPane::Nodes,
