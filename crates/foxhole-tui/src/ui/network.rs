@@ -65,10 +65,11 @@ pub(super) fn render_network(frame: &mut Frame, app: &App, area: Rect) {
 /// Left column: known `lxmf.delivery` peers (the conversations roster).
 fn render_peer_column(frame: &mut Frame, app: &App, area: Rect) {
     let focused = app.net.column == NetColumn::Peers;
-    let lines: Vec<Line> = if app.conversations.is_empty() {
+    let lines: Vec<Line> = if app.convs.items.is_empty() {
         vec![Line::raw("  (none discovered)")]
     } else {
-        app.conversations
+        app.convs
+            .items
             .iter()
             .enumerate()
             .map(|(i, c)| {
@@ -79,7 +80,7 @@ fn render_peer_column(frame: &mut Frame, app: &App, area: Rect) {
                     String::new(),
                     probe_hops(app, &c.peer),
                     Some(c.trust),
-                    i == app.selected,
+                    i == app.convs.selected,
                     focused,
                 )
             })
@@ -87,7 +88,7 @@ fn render_peer_column(frame: &mut Frame, app: &App, area: Rect) {
     };
     let para = Paragraph::new(lines).block(tactical_block(
         "PEERS (lxmf.delivery)",
-        Some(count_tag(app.conversations.len())),
+        Some(count_tag(app.convs.items.len())),
         focused,
     ));
     frame.render_widget(para, area);

@@ -128,7 +128,8 @@ impl App {
     /// The operator-assigned trust for a peer hash, defaulting to
     /// [`Trust::Unknown`] for a source we have no conversation with.
     fn peer_trust(&self, source: &str) -> Trust {
-        self.conversations
+        self.convs
+            .items
             .iter()
             .find(|c| c.peer == source)
             .map(|c| c.trust)
@@ -309,7 +310,7 @@ mod tests {
         assert!(app.intel.staged.is_empty());
 
         // A second, unknown peer's intel is staged for review, not applied.
-        app.conversations.push(Conversation::new("bb")); // defaults to Unknown
+        app.convs.items.push(Conversation::new("bb")); // defaults to Unknown
         app.apply_cot("bb".into(), event("u2", "a-h-G", 1000));
         assert_eq!(app.intel.live.len(), 1);
         assert_eq!(app.intel.staged.len(), 1);
@@ -349,7 +350,7 @@ mod tests {
         // The same uid from a *different* source is kept separately (attributed).
         let mut c = Conversation::new("bb");
         c.trust = Trust::Trusted;
-        app.conversations.push(c);
+        app.convs.items.push(c);
         app.apply_cot("bb".into(), event("u1", "a-h-G", 1000));
         assert_eq!(app.intel.live.len(), 2);
     }

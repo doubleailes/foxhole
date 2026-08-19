@@ -67,7 +67,7 @@ impl App {
                 intel_key: None,
             });
         }
-        for c in &self.conversations {
+        for c in &self.convs.items {
             if let Some(pos) = c.location {
                 out.push(MapMarker {
                     label: c.label(),
@@ -217,7 +217,7 @@ mod tests {
         app.config.lat = Some(48.0);
         app.config.lon = Some(2.0);
         app.config.display_name = "base".to_string();
-        app.conversations[0].location = Some(GeoPos::new(51.5, -0.1));
+        app.convs.items[0].location = Some(GeoPos::new(51.5, -0.1));
 
         let markers = app.map_markers();
         assert_eq!(markers.len(), 2);
@@ -229,13 +229,13 @@ mod tests {
     #[test]
     fn telemetry_creates_a_peer_marker_and_refreshes_it() {
         let mut app = App::new();
-        app.conversations.clear();
+        app.convs.items.clear();
         let log_before = app.syslog.len();
 
         // A fix from a peer we have never messaged still plots (the conversation
         // is created on first contact) and is logged.
         app.set_location("a1b2c3", GeoPos::new(51.5, -0.12));
-        assert_eq!(app.conversations.len(), 1);
+        assert_eq!(app.convs.items.len(), 1);
         let markers = app.map_markers();
         assert_eq!(markers.len(), 1);
         assert_eq!(markers[0].kind, MarkerKind::Peer);
@@ -244,27 +244,27 @@ mod tests {
 
         // A later fix refreshes the same peer in place (no duplicate).
         app.set_location("a1b2c3", GeoPos::new(40.0, -74.0));
-        assert_eq!(app.conversations.len(), 1);
+        assert_eq!(app.convs.items.len(), 1);
         assert_eq!(app.map_markers()[0].pos, GeoPos::new(40.0, -74.0));
     }
 
     #[test]
     fn empty_inbound_message_is_not_recorded() {
         let mut app = App::new();
-        app.conversations.clear();
+        app.convs.items.clear();
         // A body-less (telemetry/command-only) message creates nothing.
         app.deliver("peer", "");
-        assert!(app.conversations.is_empty());
+        assert!(app.convs.items.is_empty());
         // A real message is still delivered normally.
         app.deliver("peer", "hi");
-        assert_eq!(app.conversations.len(), 1);
-        assert_eq!(app.conversations[0].messages.len(), 1);
+        assert_eq!(app.convs.items.len(), 1);
+        assert_eq!(app.convs.items[0].messages.len(), 1);
     }
 
     #[test]
     fn repeated_identical_telemetry_logs_only_once() {
         let mut app = App::new();
-        app.conversations.clear();
+        app.convs.items.clear();
         app.syslog.clear();
         let pos = GeoPos::new(51.5, -0.12);
 
@@ -308,7 +308,7 @@ mod tests {
         app.config = Config::default();
         app.config.lat = Some(0.0);
         app.config.lon = Some(0.0);
-        app.conversations[0].location = Some(GeoPos::new(10.0, 20.0));
+        app.convs.items[0].location = Some(GeoPos::new(10.0, 20.0));
         // Zoom in so the latitude band is wide enough to shift the centre onto a
         // marker (at full-globe zoom the band collapses to the equator).
         app.map.view.span = 40.0;
@@ -372,7 +372,7 @@ mod tests {
     fn centering_from_the_globe_zooms_in_to_frame() {
         let mut app = App::new();
         app.config = Config::default();
-        app.conversations[0].location = Some(GeoPos::new(40.0, 30.0));
+        app.convs.items[0].location = Some(GeoPos::new(40.0, 30.0));
         // Whole-globe default view: centring would otherwise be a no-op, so it
         // zooms to a regional scale and the view jumps to the marker. (The 60°
         // regional span is `MapView`'s CENTER_ZOOM_SPAN.)

@@ -31,7 +31,7 @@ impl App {
             self.push_log("[SYS] intel: no local zones to share (add to zones.conf)".to_string());
             return;
         }
-        let Some(conv) = self.conversations.get(self.selected) else {
+        let Some(conv) = self.convs.items.get(self.convs.selected) else {
             return;
         };
         self.intel.share_zone = Some(ShareZone {
@@ -100,7 +100,7 @@ impl App {
 
         let id = self.next_id();
         // Echo into the recipient's thread so the operator sees what was shared.
-        if let Some(conv) = self.conversations.iter_mut().find(|c| c.peer == peer) {
+        if let Some(conv) = self.convs.items.iter_mut().find(|c| c.peer == peer) {
             let mut entry = Entry::now(format!("[TX] shared intel: {label}"));
             entry.id = id;
             entry.status = MsgStatus::Sending;
@@ -142,7 +142,7 @@ impl App {
         let xml = event.to_xml();
 
         let id = self.next_id();
-        if let Some(conv) = self.conversations.iter_mut().find(|c| c.peer == peer) {
+        if let Some(conv) = self.convs.items.iter_mut().find(|c| c.peer == peer) {
             let mut entry = Entry::now(format!("[TX] revoked intel: {label}"));
             entry.id = id;
             entry.status = MsgStatus::Sending;
@@ -183,9 +183,9 @@ mod tests {
     #[test]
     fn share_zone_enqueues_a_cot_event_and_echoes() {
         let mut app = App::new();
-        app.conversations.clear();
-        app.conversations.push(Conversation::new("aa11"));
-        app.selected = 0;
+        app.convs.items.clear();
+        app.convs.items.push(Conversation::new("aa11"));
+        app.convs.selected = 0;
         app.map.zones = vec![crate::domain::Zone::new("AO ALPHA", 50.4, 30.5, 400.0)];
 
         app.share_zone(0, "aa11");
@@ -204,7 +204,7 @@ mod tests {
         assert_eq!(event.radius_m, Some(400_000.0));
         assert_eq!(event.point.lat, 50.4);
         assert!(
-            app.conversations[0]
+            app.convs.items[0]
                 .messages
                 .last()
                 .unwrap()
@@ -218,9 +218,9 @@ mod tests {
     fn revoke_shared_zone_sends_a_revocation_that_drops_on_the_receiver() {
         // Sender: build a revocation for a local zone addressed to peer "aa11".
         let mut sender = App::new();
-        sender.conversations.clear();
-        sender.conversations.push(Conversation::new("aa11"));
-        sender.selected = 0;
+        sender.convs.items.clear();
+        sender.convs.items.push(Conversation::new("aa11"));
+        sender.convs.selected = 0;
         sender.map.zones = vec![crate::domain::Zone::new("AO ALPHA", 50.4, 30.5, 400.0)];
         sender.revoke_shared_zone(0, "aa11");
 
@@ -231,7 +231,7 @@ mod tests {
         assert!(event.is_revocation(), "stale<=time is a revocation");
         let revoke_uid = event.uid.clone();
         assert!(
-            sender.conversations[0]
+            sender.convs.items[0]
                 .messages
                 .last()
                 .unwrap()
@@ -243,11 +243,11 @@ mod tests {
         // Receiver: first holds the shared object (same source+uid), then the
         // revocation removes it via apply_cot's revoke path.
         let mut rx = App::new();
-        rx.conversations.clear();
+        rx.convs.items.clear();
         rx.intel.live.clear();
         let mut trusted = Conversation::new("sender-hash");
         trusted.trust = Trust::Trusted;
-        rx.conversations.push(trusted);
+        rx.convs.items.push(trusted);
         let mut shared = CotEvent::zone(
             &revoke_uid,
             "AO ALPHA",
@@ -269,7 +269,7 @@ mod tests {
     #[test]
     fn share_picker_opens_only_with_a_peer_and_zone() {
         let mut app = App::new();
-        app.conversations.clear();
+        app.convs.items.clear();
         app.map.zones.clear();
         // No zones → no picker (logs a hint instead).
         app.open_share_zone();
@@ -280,8 +280,8 @@ mod tests {
         app.open_share_zone();
         assert!(app.intel.share_zone.is_none());
 
-        app.conversations.push(Conversation::new("bb22"));
-        app.selected = 0;
+        app.convs.items.push(Conversation::new("bb22"));
+        app.convs.selected = 0;
         app.open_share_zone();
         assert!(app.intel.share_zone.is_some());
         assert_eq!(app.intel.share_zone.as_ref().unwrap().peer, "bb22");
