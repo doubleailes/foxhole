@@ -85,7 +85,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         render_sync_popup(frame, status);
     }
     // The New Conversation modal is on top of everything when open.
-    if let Some(ref nc) = app.new_conv {
+    if let Some(ref nc) = app.modals.new_conv {
         render_new_conv_popup(frame, nc);
     }
     // The incoming-intel review modal.
@@ -105,11 +105,11 @@ pub fn render(frame: &mut Frame, app: &App) {
         render_goto_mgrs_popup(frame, goto);
     }
     // The read-only mnemonic phrase modal.
-    if let Some(ref m) = app.mnemonic_view {
+    if let Some(ref m) = app.modals.mnemonic_view {
         render_mnemonic_popup(frame, m);
     }
     // The burn notice sits above all else — it's the most consequential action.
-    if let Some(ref b) = app.burn_confirm {
+    if let Some(ref b) = app.modals.burn_confirm {
         render_burn_popup(frame, b);
     }
 }

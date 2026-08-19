@@ -127,6 +127,23 @@ pub struct MnemonicView {
     pub phrase: String,
 }
 
+/// The program-global modal overlays — the ones reachable from any tool
+/// (Ctrl+O, Ctrl+K) or from a peer roster, as opposed to the per-tool modals,
+/// which live with their tool's state ([`MapState::goto_mgrs`],
+/// [`IntelState::review`], [`IntelState::share_zone`], [`IntelState::author`]).
+///
+/// At most one of these is open at a time; [`App::open_modal`] gives the
+/// precedence order.
+#[derive(Default)]
+pub struct Modals {
+    /// When `Some`, the New Conversation popup is open (and captures all input).
+    pub new_conv: Option<NewConv>,
+    /// When `Some`, the burn-confirmation modal is open (captures all input).
+    pub burn_confirm: Option<BurnConfirm>,
+    /// When `Some`, the read-only mnemonic-phrase modal is open (any key closes).
+    pub mnemonic_view: Option<MnemonicView>,
+}
+
 /// A top-level tool, rendered as a tab in the menu strip. Each tool owns its
 /// own body layout and key handling (see `ui` and [`App::handle_tool_key`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -335,12 +352,9 @@ pub struct App {
     pub local_address: Option<String>,
     /// When `Some`, a propagation sync is running and the pop-up shows this text.
     pub sync_status: Option<String>,
-    /// When `Some`, the New Conversation popup is open (and captures all input).
-    pub new_conv: Option<NewConv>,
-    /// When `Some`, the burn-confirmation modal is open (captures all input).
-    pub burn_confirm: Option<BurnConfirm>,
-    /// When `Some`, the read-only mnemonic-phrase modal is open (any key closes).
-    pub mnemonic_view: Option<MnemonicView>,
+    /// The program-global modal overlays (New Conversation, burn confirmation,
+    /// mnemonic view). See [`Modals`].
+    pub modals: Modals,
     /// Set once the operator confirms a burn; `main` shreds the config dir and
     /// exits. (The wipe itself is I/O — done outside `App`.)
     pub burn: bool,
@@ -403,9 +417,7 @@ impl App {
             thread_scroll: Scroll::bottom(),
             local_address: None,
             sync_status: None,
-            new_conv: None,
-            burn_confirm: None,
-            mnemonic_view: None,
+            modals: Modals::default(),
             burn: false,
             config: Config::default(),
             notes: Notes::default(),
@@ -499,11 +511,11 @@ impl App {
     /// time; the order here is the precedence when (however briefly) more than
     /// one state is set.
     fn open_modal(&self) -> Option<Modal> {
-        if self.mnemonic_view.is_some() {
+        if self.modals.mnemonic_view.is_some() {
             Some(Modal::Mnemonic)
-        } else if self.burn_confirm.is_some() {
+        } else if self.modals.burn_confirm.is_some() {
             Some(Modal::Burn)
-        } else if self.new_conv.is_some() {
+        } else if self.modals.new_conv.is_some() {
             Some(Modal::NewConv)
         } else if self.intel.review.is_some() {
             Some(Modal::IntelReview)
@@ -522,7 +534,7 @@ impl App {
     fn handle_modal_key(&mut self, modal: Modal, ctrl: bool, key: KeyEvent) {
         match modal {
             // Read-only: dismissed by any key.
-            Modal::Mnemonic => self.mnemonic_view = None,
+            Modal::Mnemonic => self.modals.mnemonic_view = None,
             Modal::Burn => self.handle_burn_key(key),
             Modal::NewConv => self.handle_new_conv_key(ctrl, key),
             Modal::IntelReview => self.handle_intel_review_key(key),
@@ -546,7 +558,7 @@ impl App {
 
     /// Open the New Conversation popup (Ctrl+O), focused on the address field.
     fn open_new_conv(&mut self) {
-        self.new_conv = Some(NewConv {
+        self.modals.new_conv = Some(NewConv {
             address: String::new(),
             alias: String::new(),
             field: NewConvField::Address,
@@ -573,7 +585,7 @@ impl App {
             "[ID] MNEMONIC {}.. -> {phrase}",
             crate::domain::short_hash(&bytes)
         )));
-        self.mnemonic_view = Some(MnemonicView {
+        self.modals.mnemonic_view = Some(MnemonicView {
             hash: bytes,
             phrase,
         });
@@ -581,7 +593,7 @@ impl App {
 
     /// Open the burn-confirmation modal (Ctrl+K).
     fn open_burn(&mut self) {
-        self.burn_confirm = Some(BurnConfirm {
+        self.modals.burn_confirm = Some(BurnConfirm {
             input: String::new(),
             error: false,
         });
@@ -590,17 +602,17 @@ impl App {
     /// Key handling while the burn modal is open: type the token, Enter to
     /// confirm (only when it exactly matches), Esc to cancel.
     fn handle_burn_key(&mut self, key: KeyEvent) {
-        let Some(b) = &mut self.burn_confirm else {
+        let Some(b) = &mut self.modals.burn_confirm else {
             return;
         };
         match key.code {
-            KeyCode::Esc => self.burn_confirm = None,
+            KeyCode::Esc => self.modals.burn_confirm = None,
             KeyCode::Enter => {
                 if b.input == BURN_TOKEN {
                     // Confirmed — `main` shreds the config dir and exits.
                     self.burn = true;
                     self.should_quit = true;
-                    self.burn_confirm = None;
+                    self.modals.burn_confirm = None;
                 } else {
                     b.error = true;
                 }
@@ -620,15 +632,16 @@ impl App {
     /// Key handling while the New Conversation modal is open.
     fn handle_new_conv_key(&mut self, ctrl: bool, key: KeyEvent) {
         match (ctrl, key.code) {
-            (_, KeyCode::Esc) => self.new_conv = None,
+            (_, KeyCode::Esc) => self.modals.new_conv = None,
             (_, KeyCode::Tab) => {
-                if let Some(nc) = self.new_conv.as_mut() {
+                if let Some(nc) = self.modals.new_conv.as_mut() {
                     nc.field = nc.field.next();
                 }
             }
             (_, KeyCode::Enter) => {
                 // Read the fields without holding the borrow across the create.
                 let Some((addr, alias)) = self
+                    .modals
                     .new_conv
                     .as_ref()
                     .map(|nc| (nc.address.clone(), nc.alias.clone()))
@@ -636,19 +649,19 @@ impl App {
                     return;
                 };
                 if self.start_conversation(&addr, &alias) {
-                    self.new_conv = None;
-                } else if let Some(nc) = self.new_conv.as_mut() {
+                    self.modals.new_conv = None;
+                } else if let Some(nc) = self.modals.new_conv.as_mut() {
                     nc.error = true;
                 }
             }
             (false, KeyCode::Backspace) => {
-                if let Some(nc) = self.new_conv.as_mut() {
+                if let Some(nc) = self.modals.new_conv.as_mut() {
                     nc.error = false;
                     nc.current_mut().pop();
                 }
             }
             (false, KeyCode::Char(c)) => {
-                if let Some(nc) = self.new_conv.as_mut() {
+                if let Some(nc) = self.modals.new_conv.as_mut() {
                     nc.error = false;
                     nc.current_mut().push(c);
                 }
