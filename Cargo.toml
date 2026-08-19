@@ -21,7 +21,7 @@ members = ["crates/foxhole-micron", "crates/foxhole-cot", "crates/foxhole-map", 
 # `is_multiple_of` (stable 1.87), but the dependency tree (ratatui 0.30, time)
 # raises the effective floor, so the declared MSRV is 1.88.
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.88"
 license = "AGPL-3.0-or-later"
