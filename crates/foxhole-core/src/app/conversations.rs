@@ -78,7 +78,7 @@ impl App {
             (true, KeyCode::Char('g')) => self.open_share_zone(),
             (true, KeyCode::Char('x')) => self.purge(),
             // On-demand propagation sync (off-grid: no automatic polling).
-            (true, KeyCode::Char('r')) => self.commands.push_back(NetCommand::SyncNow),
+            (true, KeyCode::Char('r')) => self.outbox.commands.push_back(NetCommand::SyncNow),
             // Set/edit the outbound message title (Nomadnet's Ctrl+T): focus the
             // Transmit pane and toggle between the title and the body field.
             (true, KeyCode::Char('t')) => {
@@ -186,8 +186,8 @@ impl App {
     /// Flag a conversation as needing a re-save (deduplicated). `main` drains
     /// `dirty` and persists; `App` itself never touches the disk.
     pub(super) fn mark_dirty(&mut self, peer: &str) {
-        if !self.dirty.iter().any(|p| p == peer) {
-            self.dirty.push(peer.to_string());
+        if !self.outbox.dirty.iter().any(|p| p == peer) {
+            self.outbox.dirty.push(peer.to_string());
         }
     }
 
@@ -247,8 +247,8 @@ impl App {
         conv.draft.clear();
         conv.draft_title.clear();
         let peer = conv.peer.clone();
-        // `conv`'s borrow ends above; safe to touch `self.outbound`/`dirty` now.
-        self.outbound.push_back(Outbound {
+        // `conv`'s borrow ends above; safe to touch `self.outbox.outbound`/`dirty` now.
+        self.outbox.outbound.push_back(Outbound {
             id,
             peer: peer.clone(),
             title,
@@ -262,8 +262,8 @@ impl App {
 
     /// Next correlation id for an outbound message.
     pub(super) fn next_id(&mut self) -> u64 {
-        let id = self.next_msg_id;
-        self.next_msg_id += 1;
+        let id = self.outbox.next_msg_id;
+        self.outbox.next_msg_id += 1;
         id
     }
 
@@ -295,7 +295,7 @@ impl App {
             "[SYS] [WRN] comms pipe choked — msg #{} to {} held, retrying (queue full)",
             out.id, out.peer
         ));
-        self.outbound.push_front(out);
+        self.outbox.outbound.push_front(out);
     }
 
     /// The transport pipe is closed: the network task is gone, so this message

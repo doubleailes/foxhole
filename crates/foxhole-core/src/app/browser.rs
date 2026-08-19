@@ -264,7 +264,7 @@ impl App {
             self.browser.history.push((p.node.clone(), p.path.clone()));
         }
         self.browser.scroll.to_top(); // each navigation opens at the top
-        self.commands.push_back(NetCommand::FetchPage {
+        self.outbox.commands.push_back(NetCommand::FetchPage {
             identity: identity.clone(),
             path: path.clone(),
             fields,
