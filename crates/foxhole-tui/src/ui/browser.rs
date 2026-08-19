@@ -25,7 +25,7 @@ pub(super) fn render_browser(frame: &mut Frame, app: &App, area: Rect) {
         .split(area);
 
     // Header: which page, and how the fetch is going.
-    let header = match &app.page {
+    let header = match &app.browser.page {
         Some(p) => {
             let status = match &p.status {
                 PageStatus::Fetching => "fetching...",
@@ -53,7 +53,7 @@ pub(super) fn render_browser(frame: &mut Frame, app: &App, area: Rect) {
     render_nomad_list(frame, app, cols[0]);
     render_page(frame, app, cols[1]);
 
-    let legend = match app.browser_pane {
+    let legend = match app.browser.pane {
         BrowserPane::Nodes => "[Tab] page  [Up/Dn] node  [Enter] open  [r] reload",
         BrowserPane::Page => {
             "[Up/Dn] field/link  type to edit  [Enter] follow/submit  [Bksp] back  [PgUp/PgDn] scroll"
@@ -67,14 +67,15 @@ pub(super) fn render_browser(frame: &mut Frame, app: &App, area: Rect) {
 
 /// The discovered Nomad node list, with a last-seen UTC stamp per row.
 fn render_nomad_list(frame: &mut Frame, app: &App, area: Rect) {
-    let lines: Vec<Line> = if app.nomad_nodes.is_empty() {
+    let lines: Vec<Line> = if app.browser.nodes.is_empty() {
         vec![Line::raw("  (none discovered)")]
     } else {
-        app.nomad_nodes
+        app.browser
+            .nodes
             .iter()
             .enumerate()
             .map(|(i, n)| {
-                let selected = i == app.browser_selected;
+                let selected = i == app.browser.selected;
                 let marker = if selected { SEL } else { NOSEL };
                 let ts = match n.last_seen {
                     0 => "--:--:--".to_string(),
@@ -91,11 +92,11 @@ fn render_nomad_list(frame: &mut Frame, app: &App, area: Rect) {
             })
             .collect()
     };
-    let focused = app.browser_pane == BrowserPane::Nodes;
+    let focused = app.browser.pane == BrowserPane::Nodes;
     frame.render_widget(
         Paragraph::new(lines).block(tactical_block(
             "NODES",
-            Some(count_tag(app.nomad_nodes.len())),
+            Some(count_tag(app.browser.nodes.len())),
             focused,
         )),
         area,
@@ -105,8 +106,8 @@ fn render_nomad_list(frame: &mut Frame, app: &App, area: Rect) {
 /// The page viewport: rendered micron (with the selected link highlighted while
 /// the Page pane holds focus), or the fetch state.
 fn render_page(frame: &mut Frame, app: &App, area: Rect) {
-    let focused = app.browser_pane == BrowserPane::Page;
-    let lines: Vec<Line> = match &app.page {
+    let focused = app.browser.pane == BrowserPane::Page;
+    let lines: Vec<Line> = match &app.browser.page {
         None => vec![Line::styled("  no page loaded", ts_style())],
         Some(p) => match &p.status {
             PageStatus::Fetching => vec![Line::styled("  fetching page...", ts_style())],
@@ -118,5 +119,5 @@ fn render_page(frame: &mut Frame, app: &App, area: Rect) {
             }
         },
     };
-    render_scroll(frame, "PAGE", lines, focused, &app.page_scroll, area);
+    render_scroll(frame, "PAGE", lines, focused, &app.browser.scroll, area);
 }
