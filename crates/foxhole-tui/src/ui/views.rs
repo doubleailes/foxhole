@@ -38,7 +38,7 @@ const NO_INTERFACES: &str = "(networking offline — rebuild with --features net
 /// summarising the interface and active-link counts. Fed by
 /// [`crate::app::App::set_interfaces`] from the transport's interface-stats RPC.
 pub(super) fn render_interfaces(frame: &mut Frame, app: &App, area: Rect) {
-    if app.interfaces.is_empty() {
+    if app.net.interfaces.is_empty() {
         render_scrollback(
             frame,
             "INTERFACES",
@@ -50,7 +50,7 @@ pub(super) fn render_interfaces(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     // Header, then one row per interface, then a blank line + summary footer.
-    let mut lines: Vec<Line<'static>> = Vec::with_capacity(app.interfaces.len() + 3);
+    let mut lines: Vec<Line<'static>> = Vec::with_capacity(app.net.interfaces.len() + 3);
     lines.push(Line::styled(
         format!(
             "{:<16} {:<4} {:>10} {:>10} {:>10}",
@@ -58,12 +58,12 @@ pub(super) fn render_interfaces(frame: &mut Frame, app: &App, area: Rect) {
         ),
         ts_style(),
     ));
-    for iface in &app.interfaces {
+    for iface in &app.net.interfaces {
         lines.push(iface_row(iface));
     }
     lines.push(Line::raw(""));
-    let n = app.interfaces.len();
-    let links = app.link_count;
+    let n = app.net.interfaces.len();
+    let links = app.net.link_count;
     lines.push(Line::styled(
         format!(
             "{n} interface{}  *  {links} link{}",

@@ -52,6 +52,7 @@ pub use boot::{AppState, Scroll};
 pub use boot::{Boot, BootStep};
 pub use intel::IntelReview;
 pub use map::{GotoMgrs, MapState};
+pub use network::NetworkState;
 pub use share::ShareZone;
 
 // Re-exported so the renderer (and the binary) reach the CoT model through
@@ -248,10 +249,12 @@ impl TransmitField {
     }
 }
 
-/// The two columns of the Network tab; `net_col` tracks which has focus.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// The two columns of the Network tab; [`NetworkState::col`] tracks which has
+/// focus.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum NetColumn {
     /// Known `lxmf.delivery` peers (the conversations roster).
+    #[default]
     Peers,
     /// `lxmf.propagation` store-and-forward nodes.
     Nodes,
@@ -310,13 +313,9 @@ pub struct App {
     pub conversations: Vec<Conversation>,
     /// Index of the selected conversation within `conversations`.
     pub selected: usize,
-    /// Discovered propagation nodes (Network tab).
-    pub nodes: Vec<Node>,
-    /// Highlighted row in the Network tab's propagation-node list.
-    pub node_selected: usize,
-    /// Which Network-tab column has focus (Peers reuses `selected`, Nodes
-    /// reuses `node_selected` for the in-column cursor).
-    pub net_col: NetColumn,
+    /// Network tool state: the propagation-node registry, the focused column,
+    /// and the reachability readouts. See [`NetworkState`].
+    pub net: NetworkState,
     /// World Map tool state: viewport, marker selection, the local zone/city
     /// layers, and its "go to MGRS" modal. See [`MapState`].
     pub map: MapState,
@@ -336,12 +335,6 @@ pub struct App {
     /// Set when the live/staged intel layer changed this iteration; `main` drains
     /// it and persists the encrypted intel store. Keeps `App` free of I/O.
     pub intel_dirty: bool,
-    /// Latest rnpath-style path probe per hex destination hash (Network tab).
-    pub path_probes: HashMap<String, PathProbe>,
-    /// Live interface status (Interfaces tab); empty until the stack reports.
-    pub interfaces: Vec<Interface>,
-    /// Active link count reported alongside the interface snapshot.
-    pub link_count: u32,
     /// Discovered Nomad Network nodes (Browser tab).
     pub nomad_nodes: Vec<NomadNode>,
     /// Highlighted row in the Browser tab's node list.
@@ -427,9 +420,7 @@ impl App {
             transmit_field: TransmitField::Body,
             conversations,
             selected: 0,
-            nodes: Vec::new(),
-            node_selected: 0,
-            net_col: NetColumn::Peers,
+            net: NetworkState::default(),
             map: MapState::default(),
             intel: Vec::new(),
             intel_staged: Vec::new(),
@@ -437,9 +428,6 @@ impl App {
             share_zone: None,
             author: None,
             intel_dirty: false,
-            path_probes: HashMap::new(),
-            interfaces: Vec::new(),
-            link_count: 0,
             nomad_nodes: Vec::new(),
             browser_selected: 0,
             browser_pane: BrowserPane::Nodes,

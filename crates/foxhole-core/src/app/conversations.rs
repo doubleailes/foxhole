@@ -25,13 +25,13 @@ impl App {
                 }
             }
             PeerKind::Propagation => {
-                if let Some(node) = self.nodes.iter_mut().find(|n| n.hash == hash) {
+                if let Some(node) = self.net.nodes.iter_mut().find(|n| n.hash == hash) {
                     if name.is_some() {
                         node.name = name;
                     }
                     node.last_seen = now;
                 } else {
-                    self.nodes.push(Node {
+                    self.net.nodes.push(Node {
                         hash,
                         name,
                         last_seen: now,

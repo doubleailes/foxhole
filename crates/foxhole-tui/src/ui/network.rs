@@ -15,7 +15,7 @@ use super::widgets::{NOSEL, SEL, count_tag, tactical_block};
 
 /// Network tool: known delivery peers and propagation nodes in two keyboard-
 /// navigable columns, each row carrying a last-seen UTC stamp. The focused
-/// column (`net_col`) gets the reversed border + an active row highlight.
+/// column (`net.col`) gets the reversed border + an active row highlight.
 /// Offline (no `net`) the lists stay seeded/empty until live discovery feeds
 /// them. See [`crate::app::App::handle_network_key`] for the bindings.
 pub(super) fn render_network(frame: &mut Frame, app: &App, area: Rect) {
@@ -64,7 +64,7 @@ pub(super) fn render_network(frame: &mut Frame, app: &App, area: Rect) {
 
 /// Left column: known `lxmf.delivery` peers (the conversations roster).
 fn render_peer_column(frame: &mut Frame, app: &App, area: Rect) {
-    let focused = app.net_col == NetColumn::Peers;
+    let focused = app.net.col == NetColumn::Peers;
     let lines: Vec<Line> = if app.conversations.is_empty() {
         vec![Line::raw("  (none discovered)")]
     } else {
@@ -95,12 +95,13 @@ fn render_peer_column(frame: &mut Frame, app: &App, area: Rect) {
 
 /// Right column: `lxmf.propagation` store-and-forward nodes.
 fn render_node_column(frame: &mut Frame, app: &App, area: Rect) {
-    let focused = app.net_col == NetColumn::Nodes;
+    let focused = app.net.col == NetColumn::Nodes;
     let active = app.config.propagation_node.as_deref();
-    let lines: Vec<Line> = if app.nodes.is_empty() {
+    let lines: Vec<Line> = if app.net.nodes.is_empty() {
         vec![Line::raw("  (none discovered)")]
     } else {
-        app.nodes
+        app.net
+            .nodes
             .iter()
             .enumerate()
             .map(|(i, n)| {
@@ -117,7 +118,7 @@ fn render_node_column(frame: &mut Frame, app: &App, area: Rect) {
                     tail,
                     probe_hops(app, &n.hash),
                     None,
-                    i == app.node_selected,
+                    i == app.net.selected,
                     focused,
                 )
             })
@@ -125,7 +126,7 @@ fn render_node_column(frame: &mut Frame, app: &App, area: Rect) {
     };
     let para = Paragraph::new(lines).block(tactical_block(
         "PROPAGATION NODES",
-        Some(count_tag(app.nodes.len())),
+        Some(count_tag(app.net.nodes.len())),
         focused,
     ));
     frame.render_widget(para, area);
@@ -157,7 +158,7 @@ fn meter_style(hops: Option<u8>) -> Style {
 /// The last probe's hop count for `hash`: `None` = never probed; `Some(None)` =
 /// probed but no path; `Some(Some(n))` = `n` hops away.
 fn probe_hops(app: &App, hash: &str) -> Option<Option<u8>> {
-    app.path_probes.get(hash).map(|p| p.hops)
+    app.net.path_probes.get(hash).map(|p| p.hops)
 }
 
 /// One roster row: `▶ <trust> name   hash8.. HH:MM:SSZ <tail>  ▰▰▱▱ 3h`. Peers
@@ -220,7 +221,7 @@ fn net_row(
 
 /// The most recent path probe, formatted for the Network footer (or blank).
 fn last_probe_line(app: &App) -> Line<'static> {
-    match app.path_probes.iter().max_by_key(|(_, p)| p.at) {
+    match app.net.path_probes.iter().max_by_key(|(_, p)| p.at) {
         Some((hash, p)) => {
             let h8 = hash.get(..8).unwrap_or(hash);
             let summary = path_summary(p.hops, p.iface.as_deref());
