@@ -18,10 +18,14 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use foxhole_cot::{CotEvent, Point};
-use rns_crypto::token;
 
 use foxhole_core::app::IntelRecord;
 use foxhole_core::config::config_dir;
+
+use crate::wire::{
+    Reader, Sealed, put_f64, put_opt_f64, put_opt_i64, put_opt_str, put_opt_text, put_str, seal,
+    unseal,
+};
 
 /// File-format magic + version.
 const MAGIC: &[u8; 4] = b"FXI1";
@@ -53,27 +57,20 @@ fn save_to(
     live: &[IntelRecord],
     staged: &[IntelRecord],
 ) -> io::Result<()> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let blob = serialize(live, staged);
-    let token =
-        token::encrypt(&blob, key).map_err(|e| io::Error::other(format!("encrypt: {e}")))?;
-    foxhole_core::storage::atomic_write(path, &token)
+    seal(path, key, &serialize(live, staged))
 }
 
 /// Returns `((live, staged), skipped)` where `skipped` is true if a present file
 /// could not be read/decrypted/decoded (so the caller can log it).
 fn load_from(path: &Path, key: &[u8; 64]) -> ((Vec<IntelRecord>, Vec<IntelRecord>), bool) {
-    let Ok(bytes) = std::fs::read(path) else {
-        return ((Vec::new(), Vec::new()), false); // no store yet
-    };
-    match token::decrypt(&bytes, key)
-        .ok()
-        .and_then(|plain| deserialize(&plain))
-    {
-        Some(lists) => (lists, false),
-        None => ((Vec::new(), Vec::new()), true),
+    let empty = || (Vec::new(), Vec::new());
+    match unseal(path, key) {
+        Sealed::Missing => (empty(), false), // no store yet
+        Sealed::Corrupt => (empty(), true),
+        Sealed::Plain(plain) => match deserialize(&plain) {
+            Some(lists) => (lists, false),
+            None => (empty(), true),
+        },
     }
 }
 
@@ -159,148 +156,6 @@ fn get_record(r: &mut Reader) -> Option<IntelRecord> {
         event,
         received_at,
     })
-}
-
-/// `u16` length-prefixed string.
-fn put_str(b: &mut Vec<u8>, s: &str) {
-    let bytes = s.as_bytes();
-    b.extend_from_slice(&(bytes.len() as u16).to_be_bytes());
-    b.extend_from_slice(bytes);
-}
-
-/// `u32` length-prefixed text (remarks may be long).
-fn put_text(b: &mut Vec<u8>, s: &str) {
-    let bytes = s.as_bytes();
-    b.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
-    b.extend_from_slice(bytes);
-}
-
-fn put_f64(b: &mut Vec<u8>, v: f64) {
-    b.extend_from_slice(&v.to_bits().to_be_bytes());
-}
-
-/// Presence byte (`0`/`1`) then, if present, the value — preserving `Option`.
-fn put_opt_i64(b: &mut Vec<u8>, v: Option<i64>) {
-    match v {
-        Some(x) => {
-            b.push(1);
-            b.extend_from_slice(&x.to_be_bytes());
-        }
-        None => b.push(0),
-    }
-}
-
-fn put_opt_f64(b: &mut Vec<u8>, v: Option<f64>) {
-    match v {
-        Some(x) => {
-            b.push(1);
-            put_f64(b, x);
-        }
-        None => b.push(0),
-    }
-}
-
-fn put_opt_str(b: &mut Vec<u8>, v: Option<&str>) {
-    match v {
-        Some(s) => {
-            b.push(1);
-            put_str(b, s);
-        }
-        None => b.push(0),
-    }
-}
-
-fn put_opt_text(b: &mut Vec<u8>, v: Option<&str>) {
-    match v {
-        Some(s) => {
-            b.push(1);
-            put_text(b, s);
-        }
-        None => b.push(0),
-    }
-}
-
-/// Bounds-checked sequential reader; any out-of-range read yields `None`.
-struct Reader<'a> {
-    data: &'a [u8],
-    pos: usize,
-}
-
-impl<'a> Reader<'a> {
-    fn new(data: &'a [u8]) -> Self {
-        Self { data, pos: 0 }
-    }
-
-    fn take(&mut self, n: usize) -> Option<&'a [u8]> {
-        let end = self.pos.checked_add(n)?;
-        let slice = self.data.get(self.pos..end)?;
-        self.pos = end;
-        Some(slice)
-    }
-
-    fn u8(&mut self) -> Option<u8> {
-        self.take(1).map(|s| s[0])
-    }
-
-    fn u16(&mut self) -> Option<u16> {
-        Some(u16::from_be_bytes(self.take(2)?.try_into().ok()?))
-    }
-
-    fn u32(&mut self) -> Option<u32> {
-        Some(u32::from_be_bytes(self.take(4)?.try_into().ok()?))
-    }
-
-    fn u64(&mut self) -> Option<u64> {
-        Some(u64::from_be_bytes(self.take(8)?.try_into().ok()?))
-    }
-
-    fn i64(&mut self) -> Option<i64> {
-        Some(i64::from_be_bytes(self.take(8)?.try_into().ok()?))
-    }
-
-    fn f64(&mut self) -> Option<f64> {
-        Some(f64::from_bits(u64::from_be_bytes(
-            self.take(8)?.try_into().ok()?,
-        )))
-    }
-
-    fn str(&mut self) -> Option<String> {
-        let len = self.u16()? as usize;
-        Some(String::from_utf8_lossy(self.take(len)?).into_owned())
-    }
-
-    fn text(&mut self) -> Option<String> {
-        let len = self.u32()? as usize;
-        Some(String::from_utf8_lossy(self.take(len)?).into_owned())
-    }
-
-    fn opt_i64(&mut self) -> Option<Option<i64>> {
-        match self.u8()? {
-            0 => Some(None),
-            _ => Some(Some(self.i64()?)),
-        }
-    }
-
-    fn opt_f64(&mut self) -> Option<Option<f64>> {
-        match self.u8()? {
-            0 => Some(None),
-            _ => Some(Some(self.f64()?)),
-        }
-    }
-
-    fn opt_str(&mut self) -> Option<Option<String>> {
-        match self.u8()? {
-            0 => Some(None),
-            _ => Some(Some(self.str()?)),
-        }
-    }
-
-    fn opt_text(&mut self) -> Option<Option<String>> {
-        match self.u8()? {
-            0 => Some(None),
-            _ => Some(Some(self.text()?)),
-        }
-    }
 }
 
 #[cfg(test)]
