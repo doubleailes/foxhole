@@ -150,6 +150,35 @@ impl Modals {
     }
 }
 
+/// The UI→network/disk handoff: what `App` queues and `main` drains after each
+/// key or network event, keeping `App` itself free of I/O. Touched from every
+/// tool *by design* — a send queue is shared — so this grouping names the four
+/// fields that move together rather than reducing coupling.
+pub struct Outbox {
+    /// Commands queued for the network task.
+    pub commands: VecDeque<NetCommand>,
+    /// Messages accepted for transmission, awaiting handoff to the protocol
+    /// task. FIFO so ordering on the wire matches operator intent.
+    pub outbound: VecDeque<Outbound>,
+    /// Peer keys whose on-disk copy is stale; each changed conversation is
+    /// persisted when drained.
+    pub dirty: Vec<String>,
+    /// Monotonic id source for correlating outbound messages with their status.
+    pub next_msg_id: u64,
+}
+
+impl Outbox {
+    /// Empty queues; message ids start at 1.
+    fn new() -> Self {
+        Self {
+            commands: VecDeque::new(),
+            outbound: VecDeque::new(),
+            dirty: Vec::new(),
+            next_msg_id: 1,
+        }
+    }
+}
+
 /// A top-level tool, rendered as a tab in the menu strip. Each tool owns its
 /// own body layout and key handling (see `ui` and [`App::handle_tool_key`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -372,16 +401,8 @@ pub struct App {
     pub note_selected: usize,
     /// Set when a note slot changed; `main` drains it and persists the buffer.
     pub notes_dirty: bool,
-    /// Commands queued for the network task; drained by `main` after key input.
-    pub commands: VecDeque<NetCommand>,
-    /// Monotonic id source for correlating outbound messages with their status.
-    pub next_msg_id: u64,
-    /// Peer keys whose on-disk copy is stale; `main` drains this and persists
-    /// each changed conversation. Keeps `App` itself free of I/O.
-    pub dirty: Vec<String>,
-    /// Messages accepted for transmission, awaiting handoff to the protocol
-    /// task. FIFO so ordering on the wire matches operator intent.
-    pub outbound: VecDeque<Outbound>,
+    /// The UI→network/disk handoff queues, drained by `main` each iteration.
+    pub outbox: Outbox,
     /// System log scrollback shown by the Log tool (`[SYS]` lines, diagnostics),
     /// each timestamped (UTC). Bounded to the most recent [`SYSLOG_MAX`] entries
     /// (see [`App::push_log`]) so a chatty source — e.g. frequent location
@@ -441,10 +462,7 @@ impl App {
             notes: Notes::default(),
             note_selected: 0,
             notes_dirty: false,
-            commands: VecDeque::new(),
-            next_msg_id: 1,
-            dirty: Vec::new(),
-            outbound: VecDeque::new(),
+            outbox: Outbox::new(),
             syslog: Vec::new(),
             should_quit: false,
             // Cold-boot through the splash unless it's compiled out, suppressed,
@@ -491,7 +509,7 @@ impl App {
         // re-asserting the pop-up on the matching `CancelSync`.
         if self.sync_status.is_some() && key.code == KeyCode::Esc {
             self.sync_status = None;
-            self.commands.push_back(NetCommand::CancelSync);
+            self.outbox.commands.push_back(NetCommand::CancelSync);
             return;
         }
 
