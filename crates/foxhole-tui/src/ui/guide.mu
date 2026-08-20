@@ -99,6 +99,31 @@ The UI has two focus tiers, mirroring Nomad Network:
   local hazard zone to a peer with Ctrl+G in the Conversations tool (and `!r`! in
   that picker revokes it — peers drop the object from their map).
 
+>>Telemetry  (peer positions)
+
+Positions ride LXMF telemetry fields, Sideband-compatible in both directions:
+
+  `!FIELD_TELEMETRY`!    A single fix — what a handset normally sends
+  `!FIELD_TELEMETRY_STREAM`!  A relayed batch — what a *collector* answers with
+  `!FIELD_COMMANDS`!     The "request telemetry" command (`!0x01`!), both ways
+
+FoxHole answers a telemetry request with its own position (set `!lat`!/`!lon`! in
+`*foxhole.conf`*, or it logs that it had nothing to answer with), and Ctrl+L in
+Conversations pulls the selected peer's position rather than waiting to be told.
+
+If a peer's position never appears, the gate is usually on the *sending* side.
+Sideband embeds telemetry only when all of these hold:
+
+  - Telemetry is enabled in its settings, and
+  - that conversation's own telemetry toggle is on, `!or`! this node is marked
+    Trusted there with "send to trusted" enabled, and
+  - its current fix is newer than the last one it delivered to this node.
+
+Until then it sends messages with no telemetry field at all. To see exactly what
+arrives, start with `!FOXHOLE_DEBUG_TELEMETRY=1`! — the Log then lists every
+inbound message's field ids and dumps the raw telemetry bytes, so a missing fix
+is distinguishable from a fix that failed to decode.
+
 >>Message status
 
 Outbound messages carry a delivery marker that updates as the network confirms
