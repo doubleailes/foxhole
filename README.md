@@ -196,6 +196,19 @@ Two-tier layout. **Tools** along the top; **panes** within each.
 reference, `r` reset the view, `i` review staged intel, `a`/`e`/`x` author /
 edit / remove the selected intel object.
 
+**Peer positions** ride Sideband-compatible LXMF telemetry, in both directions.
+FoxHole answers a telemetry request with its own position (needs `lat`/`lon` in
+`foxhole.conf`), reads both the single-fix `FIELD_TELEMETRY` and a collector's
+relayed `FIELD_TELEMETRY_STREAM`, and `Ctrl+L` pulls the selected peer's position
+instead of waiting to be told. If a position never arrives, the gate is usually
+on the sending side — Sideband embeds telemetry only when telemetry is enabled,
+*and* that conversation's telemetry toggle is on (or this node is Trusted there
+with "send to trusted"), *and* its current fix is newer than the last one it
+delivered here; until then its messages carry no telemetry field at all. Start
+with `FOXHOLE_DEBUG_TELEMETRY=1` to have the Log list each inbound message's
+field ids and dump the raw telemetry bytes — that separates "never sent" from
+"failed to decode".
+
 The **Browser** tool reads Nomad Network ████ pages: it lists discovered
 `nomadnetwork.node` stations and fetches `index.mu` over a Reticulum link,
 rendering the ████ micron markup. Two panes (`Tab` to switch): a node list, and
