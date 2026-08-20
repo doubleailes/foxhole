@@ -47,9 +47,18 @@ impl Endpoint {
         let identity = if id_path.exists() {
             Identity::from_file(id_path).map_err(|e| format!("load identity: {e:?}"))?
         } else {
+            // Create the config dir 0700 first so the identity key never lands in a
+            // world-traversable directory, even briefly.
+            if let Some(dir) = id_path.parent() {
+                foxhole_core::storage::create_dir_private(dir)
+                    .map_err(|e| format!("create config dir: {e}"))?;
+            }
             let id = Identity::new();
             id.to_file(id_path)
                 .map_err(|e| format!("save identity: {e:?}"))?;
+            // The identity's private key is the root secret (it derives every store
+            // key); make sure it is owner-only on disk.
+            restrict_to_owner(id_path);
             id
         };
         let delivery = Destination::new(
@@ -240,3 +249,16 @@ impl Endpoint {
         }
     }
 }
+
+/// Best-effort tighten a just-created file to owner read/write only (`0600`) on
+/// Unix. Used for the identity key, whose confidentiality the whole at-rest
+/// story depends on. A failure here is non-fatal (the file still exists); other
+/// platforms rely on their default per-user ACLs.
+#[cfg(unix)]
+fn restrict_to_owner(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+}
+
+#[cfg(not(unix))]
+fn restrict_to_owner(_path: &Path) {}

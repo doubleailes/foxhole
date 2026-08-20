@@ -25,6 +25,13 @@ pub(crate) type KnownKeys = HashMap<String, [u8; 64]>;
 /// message's next attempt so the router doesn't re-emit it every tick.
 pub(crate) const PATH_REQUEST_WAIT: f64 = 30.0;
 
+/// Upper bound on cached peers. Announces are free to mint, so an unbounded cache
+/// is a memory-and-disk-exhaustion vector (the key map is persisted to
+/// `known_identities`). Past this the least-recently-learned identity is evicted.
+/// ~4k peers is far more than any real off-grid deployment while capping the map
+/// (and its on-disk file) to a fraction of a megabyte.
+pub(crate) const MAX_PEERS: usize = 4096;
+
 /// What we know about how to reach our peers.
 pub(crate) struct PeerCache {
     /// Identity keys, hex-keyed (the shape `lxmf_core` wants back).
@@ -33,6 +40,12 @@ pub(crate) struct PeerCache {
     hops: HashMap<[u8; 16], u8>,
     /// Last path request per destination, for the [`PATH_REQUEST_WAIT`] throttle.
     last_request: HashMap<[u8; 16], f64>,
+    /// Monotonic learn order per identity (hex), for least-recently-learned
+    /// eviction once [`MAX_PEERS`] is reached. Not persisted — recency is only a
+    /// runtime eviction hint.
+    order: HashMap<String, u64>,
+    /// Next value handed out to `order` on a learn.
+    seq: u64,
     /// Backing file for `keys`, and whether it has diverged from disk.
     path: PathBuf,
     dirty: bool,
@@ -46,6 +59,8 @@ impl PeerCache {
             keys,
             hops: HashMap::new(),
             last_request: HashMap::new(),
+            order: HashMap::new(),
+            seq: 0,
             path,
             dirty: false,
         }
@@ -64,7 +79,31 @@ impl PeerCache {
     /// Record an identity key, flagging the cache dirty only when it changed (so
     /// the periodic persist writes on real updates, not every re-announce).
     pub(crate) fn learn(&mut self, dest: [u8; 16], pk: [u8; 64]) {
-        if self.keys.insert(hex::encode(dest), pk) != Some(pk) {
+        let hex = hex::encode(dest);
+        if self.keys.insert(hex.clone(), pk) != Some(pk) {
+            self.dirty = true;
+        }
+        // Refresh recency and evict the least-recently-learned identity once over
+        // the cap, so an announce flood can't grow the (persisted) cache without
+        // bound. Eviction also drops the matching transient hop entry.
+        self.seq += 1;
+        self.order.insert(hex, self.seq);
+        while self.keys.len() > MAX_PEERS {
+            let Some(victim) = self
+                .order
+                .iter()
+                .min_by_key(|&(_, &s)| s)
+                .map(|(k, _)| k.clone())
+            else {
+                break;
+            };
+            self.keys.remove(&victim);
+            self.order.remove(&victim);
+            if let Ok(bytes) = hex::decode(&victim)
+                && let Ok(d) = <[u8; 16]>::try_from(bytes.as_slice())
+            {
+                self.hops.remove(&d);
+            }
             self.dirty = true;
         }
     }
@@ -112,6 +151,20 @@ impl PeerCache {
     /// fires its own request directly and must not be suppressed by the window.
     pub(crate) fn note_path_request(&mut self, dest: [u8; 16], now: f64) {
         self.last_request.insert(dest, now);
+        // Bound the throttle map (a probe can target any dest, learned or not).
+        // Dropping the oldest entry only lifts a stale throttle, which is safe —
+        // at worst one extra path request is allowed for that destination.
+        while self.last_request.len() > MAX_PEERS {
+            let Some(oldest) = self
+                .last_request
+                .iter()
+                .min_by(|a, b| a.1.total_cmp(b.1))
+                .map(|(k, _)| *k)
+            else {
+                break;
+            };
+            self.last_request.remove(&oldest);
+        }
     }
 
     /// Persist the identity keys if they changed since the last flush.
@@ -189,6 +242,26 @@ mod tests {
         assert!(peers.dirty, "rotated key is a change");
         assert!(peers.knows(&[1u8; 16]));
         assert_eq!(peers.key_for(&[1u8; 16]), Some(&[3u8; 64]));
+    }
+
+    #[test]
+    fn learn_evicts_least_recently_learned_over_the_cap() {
+        let mut peers = cache();
+        let dest = |n: u32| {
+            let mut d = [0u8; 16];
+            d[..4].copy_from_slice(&n.to_be_bytes());
+            d
+        };
+        // Fill to the cap, then learn one more: the map stays capped and the
+        // first-learned identity is the one evicted.
+        for n in 0..(MAX_PEERS as u32) {
+            peers.learn(dest(n), [1u8; 64]);
+        }
+        assert_eq!(peers.len(), MAX_PEERS);
+        peers.learn(dest(MAX_PEERS as u32), [1u8; 64]);
+        assert_eq!(peers.len(), MAX_PEERS, "still capped after the extra learn");
+        assert!(!peers.knows(&dest(0)), "the oldest identity was evicted");
+        assert!(peers.knows(&dest(MAX_PEERS as u32)), "the newest is kept");
     }
 
     #[test]

@@ -29,7 +29,7 @@ pub(crate) enum Sealed {
 /// the parent directory if needed.
 pub(crate) fn seal(path: &Path, key: &[u8; 64], blob: &[u8]) -> io::Result<()> {
     if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
+        foxhole_core::storage::create_dir_private(dir)?;
     }
     let token = token::encrypt(blob, key).map_err(|e| io::Error::other(format!("encrypt: {e}")))?;
     foxhole_core::storage::atomic_write(path, &token)

@@ -18,6 +18,12 @@ const UNKNOWN_ERROR: f64 = 9_999_999.0;
 /// Cap on `callsign`/`remarks` length (chars) — truncate attacker text (§9).
 const MAX_TEXT: usize = 1_024;
 
+/// Cap on a circular zone's radius (metres): half Earth's circumference, so the
+/// largest legal zone still covers a hemisphere. Bounds a hostile `<ellipse>`
+/// (`finite()` already rejects NaN/Inf, but any finite value up to ~1.8e308 would
+/// otherwise paint the whole map at every zoom — a one-message map denial).
+const MAX_RADIUS_M: f64 = 20_037_500.0;
+
 /// A decoded CoT event, or a decode failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CotError {
@@ -265,7 +271,7 @@ pub fn parse(input: &str) -> Result<CotEvent, CotError> {
                     // A circular zone: prefer `major` (== `minor` for a circle).
                     if let Some(r) = get(attrs, "major").and_then(|v| v.trim().parse::<f64>().ok())
                     {
-                        radius_m = Some(finite(r, 0.0).max(0.0));
+                        radius_m = Some(finite(r, 0.0).clamp(0.0, MAX_RADIUS_M));
                     }
                 }
                 "remarks" => in_remarks = matches!(tok, Token::Open { .. }),
@@ -392,6 +398,17 @@ mod tests {
         assert_eq!(e.stale, iso8601::parse("2026-06-15T13:00:00Z"));
         assert!(!e.is_stale(e.time.unwrap()));
         assert!(e.is_stale(e.stale.unwrap()));
+    }
+
+    #[test]
+    fn oversized_zone_radius_is_clamped() {
+        // A hostile `<ellipse major="1e300">` would otherwise paint the whole map;
+        // the parser clamps it to the physical ceiling.
+        let xml = "<event uid=\"z\" type=\"a-h-G-U-C\">\
+            <point lat=\"0\" lon=\"0\"/>\
+            <detail><shape><ellipse major=\"1e300\" minor=\"1e300\"/></shape></detail></event>";
+        let e = parse(xml).unwrap();
+        assert_eq!(e.radius_m, Some(MAX_RADIUS_M));
     }
 
     #[test]

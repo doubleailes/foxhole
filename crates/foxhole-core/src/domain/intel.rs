@@ -10,6 +10,15 @@ use foxhole_cot::{Affiliation, CotEvent, Kind};
 
 use super::GeoPos;
 
+/// Hard ceiling on how long any received object stays valid, measured from when
+/// we ingested it (30 days). A peer's CoT `stale` is otherwise honoured verbatim,
+/// so a hostile (or buggy) far-future `stale`/`time` — the ISO-8601 codec accepts
+/// up to year 9999 — would pin a marker on the map forever and defeat the periodic
+/// sweep. Clamping `effective_stale` to `received_at + this` guarantees every
+/// record eventually expires regardless of what the wire claims. Well above any
+/// legitimate validity window (operator-shared intel defaults to a 6-hour TTL).
+pub const MAX_INTEL_LIFETIME_SECS: i64 = 30 * 24 * 3600;
+
 /// One received CoT object plus the provenance and bookkeeping foxhole needs to
 /// gate, attribute, and expire it.
 #[derive(Clone, Debug, PartialEq)]
@@ -41,9 +50,12 @@ impl IntelRecord {
 
     /// When this object stops being valid: the CoT `stale`, or `time + ttl` for a
     /// stale-less event so map-flooding intel still expires (`ttl` is the
-    /// configured default).
+    /// configured default). Capped at `received_at + `[`MAX_INTEL_LIFETIME_SECS`]
+    /// so an attacker-supplied far-future `stale`/`time` can't defeat the sweep.
     pub fn effective_stale(&self, ttl: u64) -> i64 {
-        self.event.stale.unwrap_or_else(|| self.time() + ttl as i64)
+        let raw = self.event.stale.unwrap_or_else(|| self.time() + ttl as i64);
+        let ceiling = (self.received_at as i64).saturating_add(MAX_INTEL_LIFETIME_SECS);
+        raw.min(ceiling)
     }
 
     /// Whether the object has expired at `now` (epoch seconds), given the default
@@ -118,6 +130,19 @@ mod tests {
         assert_eq!(record(Some(5_000), 0).effective_stale(3_600), 5_000);
         // Without one, it is `time + ttl` — a stale-less event still expires.
         assert_eq!(record(None, 0).effective_stale(3_600), 1_000 + 3_600);
+    }
+
+    #[test]
+    fn effective_stale_is_capped_at_the_max_lifetime() {
+        // A hostile far-future stale can't outlive received_at + the ceiling, so
+        // the sweep can always reclaim it.
+        let r = record(Some(253_402_300_799), 1_000); // year-9999 stale
+        assert_eq!(
+            r.effective_stale(3_600),
+            1_000 + MAX_INTEL_LIFETIME_SECS,
+            "far-future stale is clamped to the ceiling"
+        );
+        assert!(r.is_expired(1_000 + MAX_INTEL_LIFETIME_SECS, 3_600));
     }
 
     #[test]

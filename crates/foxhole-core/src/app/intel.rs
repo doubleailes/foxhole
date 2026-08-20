@@ -294,6 +294,13 @@ pub(super) fn upsert(layer: &mut Vec<IntelRecord>, record: IntelRecord) -> bool 
         return false;
     }
     layer.push(record);
+    // Bound the layer against a flood of distinct `(source, uid)` objects: once
+    // over the cap, drop the oldest (front) entries. The TTL sweep still reclaims
+    // expired intel; this is the hard ceiling for the window before it runs.
+    if layer.len() > INTEL_MAX_PER_LAYER {
+        let overflow = layer.len() - INTEL_MAX_PER_LAYER;
+        layer.drain(0..overflow);
+    }
     true
 }
 
@@ -353,6 +360,25 @@ mod tests {
         app.convs.items.push(c);
         app.apply_cot("bb".into(), event("u1", "a-h-G", 1000));
         assert_eq!(app.intel.live.len(), 2);
+    }
+
+    #[test]
+    fn layer_is_capped_against_a_flood() {
+        let mut app = app_with_peer("aa", Trust::Trusted);
+        // A trusted source minting more distinct uids than the cap can't grow the
+        // live layer without bound; the oldest are dropped.
+        for n in 0..(INTEL_MAX_PER_LAYER + 50) {
+            app.apply_cot("aa".into(), event(&format!("u{n}"), "a-h-G", 1000));
+        }
+        assert_eq!(app.intel.live.len(), INTEL_MAX_PER_LAYER);
+        // The oldest uid was evicted; a recent one survives.
+        assert!(!app.intel.live.iter().any(|r| r.event.uid == "u0"));
+        assert!(
+            app.intel
+                .live
+                .iter()
+                .any(|r| r.event.uid == format!("u{}", INTEL_MAX_PER_LAYER + 49))
+        );
     }
 
     #[test]

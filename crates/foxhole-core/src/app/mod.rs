@@ -109,6 +109,23 @@ pub const BURN_TOKEN: &str = "BURN";
 /// as frequent location telemetry.
 pub(crate) const SYSLOG_MAX: usize = 4000;
 
+/// Cap on messages retained per conversation. The thread view is bottom-pinned,
+/// so trimming the head is invisible; the bound stops a chatty (or hostile) peer
+/// from growing a single thread — and its encrypted store file — without limit.
+pub(crate) const MESSAGES_MAX: usize = 5000;
+
+/// Cap on the peer roster ([`ConversationsState::items`]). Announces are cheap to
+/// forge, so an unbounded roster is a memory/disk-exhaustion vector; past this we
+/// evict the least-recently-heard *discovery-only* conversations (see
+/// [`Conversation::should_persist`]) and never anything the operator acted on.
+pub(crate) const ROSTER_MAX: usize = 4000;
+
+/// Cap on each received-intel layer ([`IntelState::live`]/[`IntelState::staged`]).
+/// A single source can mint unlimited distinct `(source, uid)` objects; past this
+/// the oldest are dropped so the layer — and the encrypted intel store — stays
+/// bounded even before the TTL sweep reclaims expired entries.
+pub(crate) const INTEL_MAX_PER_LAYER: usize = 4000;
+
 /// Modal state for the burn confirmation (Ctrl+K). Destroying all session data
 /// is gated behind typing [`BURN_TOKEN`] so it can't fire by accident.
 pub struct BurnConfirm {

@@ -27,8 +27,20 @@ pub(crate) const NOMAD_NODE: &str = "nomadnetwork.node";
 /// Overall timeout for one page fetch (link + request + response).
 const PAGE_FETCH_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Upper bound on an accepted page body. A hostile `nomadnetwork.node` could
+/// otherwise serve a multi-hundred-MB page that we copy into a `String` and hand
+/// to the renderer every frame. 512 KiB is far above any real micron page; a
+/// larger response is rejected rather than truncated (a truncated page could cut
+/// a multi-byte sequence or a markup token and is not worth rendering).
+const MAX_PAGE_BYTES: usize = 512 * 1024;
+
 /// Hop count used for a page link when the node's announce hop count is unknown.
 const DEFAULT_PAGE_HOPS: u8 = 8;
+
+/// Upper bound on the per-node hop cache. Node announces are free to mint, so this
+/// stops the (transient) map growing without limit; an evicted entry just falls
+/// back to [`DEFAULT_PAGE_HOPS`] on the next fetch, so eviction is harmless.
+const MAX_NODES: usize = 4096;
 
 /// The Browser tab's half of the stack: known Nomad Network nodes and the link
 /// client that fetches their pages.
@@ -74,6 +86,14 @@ impl Nomad {
             let id_hash = truncated_hash(&pk);
             let identity = hex::encode(id_hash);
             let name = nomad_name_from_app_data(e.app_data.as_deref());
+            // Bound the transient hop cache against a node-announce flood; an
+            // evicted entry just re-defaults on its next fetch.
+            if self.hops.len() >= MAX_NODES
+                && !self.hops.contains_key(&identity)
+                && let Some(k) = self.hops.keys().next().cloned()
+            {
+                self.hops.remove(&k);
+            }
             // Log the first time we see each node.
             if self.hops.insert(identity.clone(), e.hops).is_none() {
                 // Cross-check: the destination a fetch addresses should equal the
@@ -167,9 +187,16 @@ impl Nomad {
                 Err(e) => format!("[SYS] page fetch {path}: FAILED — {e}"),
             };
             let _ = events.send(NetEvent::Sys(log)).await;
-            let body = result
-                .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-                .map_err(|e| e.to_string());
+            let body = result.map_err(|e| e.to_string()).and_then(|bytes| {
+                if bytes.len() > MAX_PAGE_BYTES {
+                    Err(format!(
+                        "page too large: {} bytes (limit {MAX_PAGE_BYTES})",
+                        bytes.len()
+                    ))
+                } else {
+                    Ok(String::from_utf8_lossy(&bytes).into_owned())
+                }
+            });
             let _ = events
                 .send(NetEvent::Page {
                     identity,
