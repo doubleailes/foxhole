@@ -31,6 +31,12 @@ use ratatui::text::{Line, Span};
 const DEFAULT_FG: Color = Color::Rgb(0xdd, 0xdd, 0xdd);
 /// Section-content indent per depth level (NomadNet `SECTION_INDENT`).
 const SECTION_INDENT: usize = 2;
+/// Upper bound on section depth. NomadNet only meaningfully uses three heading
+/// levels (`heading_palette` collapses everything ≥3 to one palette), so this is
+/// invisible to real pages — but it caps the per-line indent allocation, so a
+/// hostile page whose line begins with a huge run of `>` cannot force multi-MB
+/// `" ".repeat(indent)` allocations on every rendered frame (a memory/CPU DoS).
+const MAX_SECTION_DEPTH: usize = 8;
 /// Default horizontal-divider glyph (NomadNet uses U+2500); a page's `-X`
 /// overrides it.
 const DIVIDER_CH: char = '\u{2500}';
@@ -196,8 +202,11 @@ fn render_line(
         }
         '>' => {
             let d = chars.iter().take_while(|&&c| c == '>').count();
-            *depth = d;
-            render_heading(&chars[d..], d, width, walk)
+            // Clamp the persisted depth so downstream indent math (body/heading/
+            // divider) can't be driven to a huge allocation by a pathological run
+            // of `>`. Slice past the raw count so all markers are still consumed.
+            *depth = d.min(MAX_SECTION_DEPTH);
+            render_heading(&chars[d..], *depth, width, walk)
         }
         '-' => render_divider(&chars, *depth, width),
         _ => body_line(&chars, false, *depth, walk),
@@ -667,6 +676,23 @@ mod tests {
         // A depth-2 heading sets the section; the following body line indents 2.
         let lines = render_sel(">>Sec\nbody text", 40, None, &HashMap::new());
         assert!(text_of(&lines[1]).starts_with("  body text"));
+    }
+
+    #[test]
+    fn pathological_heading_depth_is_clamped() {
+        // A hostile page whose line is a huge run of `>` must not drive the
+        // section indent (and its per-line allocation) without bound.
+        let mut src = ">".repeat(100_000);
+        src.push_str("\nbody");
+        let lines = render_sel(&src, 80, None, &HashMap::new());
+        let body = text_of(&lines[1]);
+        let indent = body.chars().take_while(|&c| c == ' ').count();
+        let max_indent = super::MAX_SECTION_DEPTH.saturating_sub(1) * super::SECTION_INDENT;
+        assert!(
+            indent <= max_indent,
+            "body indent {indent} exceeds the clamp {max_indent}"
+        );
+        assert!(body.trim_start().starts_with("body"));
     }
 
     #[test]

@@ -148,10 +148,9 @@ impl Config {
         }
     }
 
-    /// Atomically persist the config, creating the config dir if needed.
+    /// Atomically persist the config, creating the config dir (0700) if needed.
     pub fn save(&self) -> std::io::Result<()> {
-        let dir = config_dir();
-        std::fs::create_dir_all(&dir)?;
+        crate::storage::create_dir_private(&config_dir())?;
         crate::storage::atomic_write(&Self::path(), self.serialize().as_bytes())
     }
 }

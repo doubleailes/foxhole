@@ -979,7 +979,7 @@ dependencies = [
 [[package]]
 name = "lxmf-core"
 version = "1.2.0"
-source = "git+https://github.com/ratspeak/rsLXMF?tag=v1.2.0#d58ea180118c0cb5f92692bfd96337193ef8bb91"
+source = "git+https://github.com/ratspeak/rsLXMF?rev=d58ea180118c0cb5f92692bfd96337193ef8bb91#d58ea180118c0cb5f92692bfd96337193ef8bb91"
 dependencies = [
  "base64",
  "bytes",
@@ -1589,7 +1589,7 @@ dependencies = [
 [[package]]
 name = "rns-crypto"
 version = "1.2.0"
-source = "git+https://github.com/ratspeak/rsReticulum?tag=v1.2.0#dc6bc4ee82daf66b3b40386f9777dbe62b08fec2"
+source = "git+https://github.com/ratspeak/rsReticulum?rev=dc6bc4ee82daf66b3b40386f9777dbe62b08fec2#dc6bc4ee82daf66b3b40386f9777dbe62b08fec2"
 dependencies = [
  "aes",
  "cbc",
@@ -1608,7 +1608,7 @@ dependencies = [
 [[package]]
 name = "rns-identity"
 version = "1.2.0"
-source = "git+https://github.com/ratspeak/rsReticulum?tag=v1.2.0#dc6bc4ee82daf66b3b40386f9777dbe62b08fec2"
+source = "git+https://github.com/ratspeak/rsReticulum?rev=dc6bc4ee82daf66b3b40386f9777dbe62b08fec2#dc6bc4ee82daf66b3b40386f9777dbe62b08fec2"
 dependencies = [
  "hex",
  "rand",
@@ -1627,7 +1627,7 @@ dependencies = [
 [[package]]
 name = "rns-interface"
 version = "1.2.0"
-source = "git+https://github.com/ratspeak/rsReticulum?tag=v1.2.0#dc6bc4ee82daf66b3b40386f9777dbe62b08fec2"
+source = "git+https://github.com/ratspeak/rsReticulum?rev=dc6bc4ee82daf66b3b40386f9777dbe62b08fec2#dc6bc4ee82daf66b3b40386f9777dbe62b08fec2"
 dependencies = [
  "bytes",
  "hex",
@@ -1655,7 +1655,7 @@ dependencies = [
 [[package]]
 name = "rns-link"
 version = "1.2.0"
-source = "git+https://github.com/ratspeak/rsReticulum?tag=v1.2.0#dc6bc4ee82daf66b3b40386f9777dbe62b08fec2"
+source = "git+https://github.com/ratspeak/rsReticulum?rev=dc6bc4ee82daf66b3b40386f9777dbe62b08fec2#dc6bc4ee82daf66b3b40386f9777dbe62b08fec2"
 dependencies = [
  "hex",
  "rand",
@@ -1671,7 +1671,7 @@ dependencies = [
 [[package]]
 name = "rns-protocol"
 version = "1.2.0"
-source = "git+https://github.com/ratspeak/rsReticulum?tag=v1.2.0#dc6bc4ee82daf66b3b40386f9777dbe62b08fec2"
+source = "git+https://github.com/ratspeak/rsReticulum?rev=dc6bc4ee82daf66b3b40386f9777dbe62b08fec2#dc6bc4ee82daf66b3b40386f9777dbe62b08fec2"
 dependencies = [
  "bzip2",
  "hex",
@@ -1688,7 +1688,7 @@ dependencies = [
 [[package]]
 name = "rns-runtime"
 version = "1.2.0"
-source = "git+https://github.com/ratspeak/rsReticulum?tag=v1.2.0#dc6bc4ee82daf66b3b40386f9777dbe62b08fec2"
+source = "git+https://github.com/ratspeak/rsReticulum?rev=dc6bc4ee82daf66b3b40386f9777dbe62b08fec2#dc6bc4ee82daf66b3b40386f9777dbe62b08fec2"
 dependencies = [
  "bytes",
  "hex",
@@ -1715,7 +1715,7 @@ dependencies = [
 [[package]]
 name = "rns-transport"
 version = "1.2.0"
-source = "git+https://github.com/ratspeak/rsReticulum?tag=v1.2.0#dc6bc4ee82daf66b3b40386f9777dbe62b08fec2"
+source = "git+https://github.com/ratspeak/rsReticulum?rev=dc6bc4ee82daf66b3b40386f9777dbe62b08fec2#dc6bc4ee82daf66b3b40386f9777dbe62b08fec2"
 dependencies = [
  "bytes",
  "hex",
@@ -1735,7 +1735,7 @@ dependencies = [
 [[package]]
 name = "rns-wire"
 version = "1.2.0"
-source = "git+https://github.com/ratspeak/rsReticulum?tag=v1.2.0#dc6bc4ee82daf66b3b40386f9777dbe62b08fec2"
+source = "git+https://github.com/ratspeak/rsReticulum?rev=dc6bc4ee82daf66b3b40386f9777dbe62b08fec2#dc6bc4ee82daf66b3b40386f9777dbe62b08fec2"
 dependencies = [
  "rns-crypto",
  "sha2",

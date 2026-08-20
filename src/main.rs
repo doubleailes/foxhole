@@ -159,6 +159,14 @@ async fn run(
                     // the intel layer before the live event is applied.
                     store.adopt(app, &ev);
                     apply_net_event(app, ev);
+                    // Drain the rest of the ready backlog before flushing, so a
+                    // burst of inbound events (telemetry/CoT floods) coalesces into
+                    // a single store rewrite this iteration instead of one full
+                    // re-encrypt per event (write amplification against flash).
+                    while let Ok(ev) = net_rx.try_recv() {
+                        store.adopt(app, &ev);
+                        apply_net_event(app, ev);
+                    }
                 }
             },
         }
