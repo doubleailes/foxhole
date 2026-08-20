@@ -124,6 +124,36 @@ arrives, start with `!FOXHOLE_DEBUG_TELEMETRY=1`! — the Log then lists every
 inbound message's field ids and dumps the raw telemetry bytes, so a missing fix
 is distinguishable from a fix that failed to decode.
 
+One more trap is worth knowing: Sideband will not send a *second* telemetry
+update until the first one is confirmed. It latches the send per peer and clears
+the latch only when the message reaches `![delivered]`! or `![failed]`!, with no
+timeout — so a single unacknowledged send silently blocks every later one until
+Sideband restarts. That is why telemetry can look like it "arrives once, then
+never again". Delivery is acknowledged by a link-packet proof; to watch those go
+out, start with `!FOXHOLE_TRACE=link_manager`! (see Diagnostics).
+
+>>Diagnostics
+
+Two opt-in switches, both off by default and both writing only where BURN can
+still destroy it:
+
+  `!FOXHOLE_DEBUG_TELEMETRY=1`!   Log each inbound message's field ids, and the
+                              raw bytes of any telemetry field
+  `!FOXHOLE_TRACE=<targets>`!     Capture the mesh stack's own diagnostics to
+                              `*trace.log*` in the config dir. `!1`! or `!all`! takes
+                              everything; otherwise a comma-separated list of
+                              target substrings, e.g. `!link_manager,router`!
+  `!FOXHOLE_TRACE_LEVEL=<level>`! Cap the trace at error/warn/info/debug/trace
+                              (default `!debug`!)
+
+The Log names the trace file on start. It records link establishment, delivery
+proofs, routing decisions and path resolution — the layer beneath the `![SYS]`!
+lines — so a peer that goes quiet can be told apart from a peer whose messages
+are arriving unacknowledged.
+
+A trace carries peer destination hashes. It lives inside the config dir, so
+Ctrl+K (BURN) zero-overwrites it along with everything else.
+
 >>Message status
 
 Outbound messages carry a delivery marker that updates as the network confirms

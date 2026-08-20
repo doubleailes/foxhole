@@ -39,3 +39,11 @@ hex = { workspace = true }
 
 # Encode Nomad Network form submissions as the msgpack request map.
 rmpv = { workspace = true }
+
+# Capture the mesh stack's `tracing` diagnostics into an opt-in trace file.
+tracing-core = { workspace = true }
+
+[dev-dependencies]
+# The `tracing` facade (already in the tree via the `rns-*` crates) so the trace
+# sink can be exercised end-to-end against a real emitted event.
+tracing = { workspace = true }

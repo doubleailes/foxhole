@@ -11,6 +11,8 @@
 //! - [`store`] — encrypted, atomic, per-conversation history store.
 //! - [`intel_store`] — encrypted, atomic persistence for the received-intel
 //!   layer (live + staged records).
+//! - [`trace`] — opt-in capture of the stack's own `tracing` diagnostics, so
+//!   link/delivery-proof faults are visible instead of silent.
 //!
 //! Both stores share their framing and their encrypt-then-atomically-write
 //! envelope through the internal `wire` module, so they cannot drift apart on
@@ -19,4 +21,5 @@
 pub mod intel_store;
 pub mod net;
 pub mod store;
+pub mod trace;
 mod wire;
