@@ -25,6 +25,7 @@ use rns_transport::messages::{OutboundRequest, TransportMessage};
 use foxhole_core::app::{MsgStatus, NetEvent, Outbound};
 use foxhole_core::config::Config;
 
+use super::codec::parse_hash;
 use super::endpoint::Endpoint;
 use super::now_secs;
 use super::peers::{PATH_REQUEST_WAIT, PeerCache};
@@ -173,6 +174,26 @@ impl Dispatcher {
                     .await;
             }
             Err(e) => self.sys(format!("[SYS] telemetry reply: {e}")).await,
+        }
+    }
+
+    /// Ask `peer` (a hex destination hash) for its latest telemetry — the mirror
+    /// of [`Dispatcher::answer_telemetry`]. Without this a terminal is purely
+    /// passive: Sideband volunteers telemetry only to a configured collector, so
+    /// a peer that merely *answers* requests would never appear on the map.
+    pub(crate) async fn request_telemetry(&mut self, endpoint: &Endpoint, peer: &str) {
+        let dest = match parse_hash(peer) {
+            Ok(d) => d,
+            Err(e) => return self.sys(format!("[SYS] telemetry request: {e}")).await,
+        };
+        match endpoint.build_telemetry_request(dest) {
+            Ok(msg) => {
+                self.route(msg).await;
+                self.dispatch().await;
+                self.sys(format!("[SYS] requested telemetry from {peer}"))
+                    .await;
+            }
+            Err(e) => self.sys(format!("[SYS] telemetry request: {e}")).await,
         }
     }
 

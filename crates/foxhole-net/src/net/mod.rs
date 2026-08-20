@@ -371,7 +371,7 @@ async fn run_inner(
                 tx.send(&endpoint, &out).await;
             }
             Some(cmd) = command_rx.recv() => {
-                handle_command(cmd, &mut tx, &mut probes, &nomad, &mut banner, events).await;
+                handle_command(cmd, &endpoint, &mut tx, &mut probes, &nomad, &mut banner, events).await;
             }
             _ = send_tick.tick() => {
                 ticks = ticks.wrapping_add(1);
@@ -579,6 +579,7 @@ async fn seed_from_announce_cache(handle: &reticulum::ReticulumHandle, tx: &mut 
 /// Act on one command from the UI.
 async fn handle_command(
     cmd: NetCommand,
+    endpoint: &Endpoint,
     tx: &mut Dispatcher,
     probes: &mut PathProbes,
     nomad: &Nomad,
@@ -602,6 +603,7 @@ async fn handle_command(
         }
         NetCommand::SyncNow => tx.try_sync().await,
         NetCommand::CancelSync => banner.cancel(tx.sync_phase(), events).await,
+        NetCommand::RequestTelemetry(peer) => tx.request_telemetry(endpoint, &peer).await,
         NetCommand::RequestPath(hex) => match parse_hash(&hex) {
             Ok(dest) => {
                 // Operator-initiated: fire the path request directly (bypass the

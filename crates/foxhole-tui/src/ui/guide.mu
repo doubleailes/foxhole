@@ -48,6 +48,7 @@ The UI has two focus tiers, mirroring Nomad Network:
   `!Ctrl+T`!            Edit the message title (toggle title / body)
   `!Ctrl+S`!            Send the draft to the selected peer
   `!Ctrl+G`!            Share / revoke a hazard zone to this peer (CoT intel)
+  `!Ctrl+L`!            Request this peer's position (Sideband telemetry)
   `!Ctrl+X`!            Purge the compose buffer (discard title + draft)
   `!Ctrl+R`!            Sync now from the propagation node (on demand)
 

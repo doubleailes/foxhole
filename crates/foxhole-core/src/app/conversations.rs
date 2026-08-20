@@ -110,6 +110,8 @@ impl App {
             (true, KeyCode::Char('x')) => self.purge(),
             // On-demand propagation sync (off-grid: no automatic polling).
             (true, KeyCode::Char('r')) => self.outbox.commands.push_back(NetCommand::SyncNow),
+            // Pull the selected peer's position (Sideband's "Request telemetry").
+            (true, KeyCode::Char('l')) => self.request_telemetry(),
             // Set/edit the outbound message title (Nomadnet's Ctrl+T): focus the
             // Transmit pane and toggle between the title and the body field.
             (true, KeyCode::Char('t')) => {
@@ -373,6 +375,23 @@ impl App {
             self.convs.items[idx].unread += 1;
         }
         self.mark_dirty(peer);
+    }
+
+    /// Ask the selected peer for its latest position (Ctrl+L) — the mirror of the
+    /// telemetry request foxhole already *answers*.
+    ///
+    /// Sideband pushes telemetry only to a configured collector, so a handset
+    /// that merely answers requests never appears on the map unless we pull it.
+    /// Offline (no `net`) the command is queued and drained by nobody, exactly
+    /// like every other [`NetCommand`].
+    pub(super) fn request_telemetry(&mut self) {
+        let Some(peer) = self.selected_conv().map(|c| c.peer.clone()) else {
+            self.push_log("[SYS] telemetry request: no peer selected".to_string());
+            return;
+        };
+        self.outbox
+            .commands
+            .push_back(NetCommand::RequestTelemetry(peer));
     }
 
     /// Record a peer's shared position from LXMF telemetry (Sideband-style),

@@ -26,6 +26,11 @@ use super::telemetry;
 /// LXMF inbox aspect — the full dotted destination name.
 pub(crate) const LXMF_DELIVERY: &str = "lxmf.delivery";
 
+/// How far back a telemetry request lets the peer reach (seconds). Sideband
+/// bounds its answer by the request's timebase; a day covers a handset that has
+/// not moved (or not had a fix) recently without inviting a long backlog.
+const TELEMETRY_REQUEST_HISTORY: f64 = 24.0 * 60.0 * 60.0;
+
 /// This terminal's LXMF identity and inbox.
 pub(crate) struct Endpoint {
     identity: Identity,
@@ -169,6 +174,25 @@ impl Endpoint {
         let mut msg = LxMessage::new(dest, self.hash, "", "", DeliveryMethod::Direct);
         let blob = telemetry::pack_location(lat, lon, now_secs() as u64);
         msg.set_field(lxmf_core::constants::FIELD_TELEMETRY, blob);
+        self.seal(msg)
+    }
+
+    /// Build a signed, command-only LXMF message asking `dest` for its latest
+    /// telemetry. Mirrors [`Endpoint::build_telemetry_reply`] in the other
+    /// direction: empty title/body, the request rides in `FIELD_COMMANDS`.
+    ///
+    /// The request carries a *timebase* — the oldest fix the peer may answer
+    /// with, which Sideband bounds its reply by. We ask for
+    /// [`TELEMETRY_REQUEST_HISTORY`] back from now: recent enough that the answer
+    /// is a current position, old enough to tolerate a handset that has not had a
+    /// fix in a while.
+    pub(crate) fn build_telemetry_request(&self, dest: [u8; 16]) -> Result<LxMessage, String> {
+        let mut msg = LxMessage::new(dest, self.hash, "", "", DeliveryMethod::Direct);
+        let timebase = (now_secs() - TELEMETRY_REQUEST_HISTORY).max(0.0);
+        msg.set_field(
+            lxmf_core::constants::FIELD_COMMANDS,
+            telemetry::pack_request(timebase),
+        );
         self.seal(msg)
     }
 
