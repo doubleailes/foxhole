@@ -10,13 +10,21 @@
 use std::path::PathBuf;
 
 /// Where FoxHole keeps its identity, Reticulum config, and this file.
-/// Overridable with `FOXHOLE_CONFIG_DIR`; defaults to `~/.config/foxhole`.
+/// Overridable with `FOXHOLE_CONFIG_DIR`; defaults to `~/.config/foxhole`
+/// (`HOME`, falling back to Windows' `USERPROFILE` since it has no `HOME` by
+/// default).
 pub fn config_dir() -> PathBuf {
     if let Ok(d) = std::env::var("FOXHOLE_CONFIG_DIR") {
         return PathBuf::from(d);
     }
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home).join(".config").join("foxhole")
+    PathBuf::from(home_dir()).join(".config").join("foxhole")
+}
+
+/// The user's home directory: `HOME`, else Windows' `USERPROFILE`, else `.`.
+fn home_dir() -> String {
+    std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| ".".to_string())
 }
 
 /// Persisted operator settings.
