@@ -53,6 +53,7 @@ impl App {
                     conv.display_name = name;
                     conv.last_seen = now;
                     self.convs.items.push(conv);
+                    self.prune_roster();
                 }
             }
             PeerKind::Propagation => {
@@ -273,6 +274,7 @@ impl App {
         entry.id = id;
         entry.status = MsgStatus::Sending;
         conv.messages.push(entry);
+        trim_messages(&mut conv.messages);
         conv.draft.clear();
         conv.draft_title.clear();
         let peer = conv.peer.clone();
@@ -371,10 +373,12 @@ impl App {
         self.convs.items[idx]
             .messages
             .push(Entry::now(format!("[RX] {body}")));
+        trim_messages(&mut self.convs.items[idx].messages);
         if idx != self.convs.selected {
             self.convs.items[idx].unread += 1;
         }
         self.mark_dirty(peer);
+        self.prune_roster();
     }
 
     /// Ask the selected peer for its latest position (Ctrl+L) — the mirror of the
@@ -403,7 +407,12 @@ impl App {
         let idx = match self.convs.items.iter().position(|c| c.peer == peer) {
             Some(i) => i,
             None => {
-                self.convs.items.push(Conversation::new(peer));
+                let mut conv = Conversation::new(peer);
+                // A fix means we just heard from this peer; stamp it so a flood of
+                // forged-telemetry conversations evicts oldest-first (below) rather
+                // than dropping this freshly-heard one.
+                conv.last_seen = now_secs();
+                self.convs.items.push(conv);
                 self.convs.items.len() - 1
             }
         };
@@ -417,6 +426,33 @@ impl App {
                 "[SYS] telemetry: {label} @ {:.4}, {:.4}",
                 pos.lat, pos.lon
             ));
+        }
+        self.prune_roster();
+    }
+
+    /// Evict the least-recently-heard *discovery-only* conversations once the
+    /// roster grows past [`ROSTER_MAX`]. Announces/telemetry are cheap to forge,
+    /// so this bounds a roster-flood DoS — but it only ever drops entries the
+    /// operator never acted on ([`Conversation::should_persist`] is false: no
+    /// messages, no assigned trust, not hand-added) and never the current
+    /// selection, so nothing worth keeping is lost.
+    fn prune_roster(&mut self) {
+        while self.convs.items.len() > ROSTER_MAX {
+            // Pick the evictable entry (discovery-only, not selected) heard longest
+            // ago. If none qualifies, the roster is all real work — stop pruning.
+            let victim = self
+                .convs
+                .items
+                .iter()
+                .enumerate()
+                .filter(|(i, c)| *i != self.convs.selected && !c.should_persist())
+                .min_by_key(|(_, c)| c.last_seen)
+                .map(|(i, _)| i);
+            let Some(i) = victim else { break };
+            self.convs.items.remove(i);
+            if i < self.convs.selected {
+                self.convs.selected -= 1;
+            }
         }
     }
 
@@ -436,6 +472,16 @@ impl App {
         } else {
             self.deliver("(direct)", &line);
         }
+    }
+}
+
+/// Bound a conversation's scrollback to [`MESSAGES_MAX`], dropping the oldest
+/// (front) entries. The thread view is bottom-pinned, so trimming the head is
+/// invisible; this caps memory and the on-disk store against a message flood.
+fn trim_messages(messages: &mut Vec<Entry>) {
+    if messages.len() > MESSAGES_MAX {
+        let overflow = messages.len() - MESSAGES_MAX;
+        messages.drain(0..overflow);
     }
 }
 

@@ -31,6 +31,48 @@ pub(super) fn app_with_peer(hash: &str, trust: Trust) -> App {
     app
 }
 
+#[test]
+fn deliver_caps_a_conversation_thread() {
+    let mut app = app_with_peer("aa", Trust::Unknown);
+    for n in 0..(MESSAGES_MAX + 25) {
+        app.deliver("aa", &format!("msg {n}"));
+    }
+    let conv = app.convs.items.iter().find(|c| c.peer == "aa").unwrap();
+    assert_eq!(conv.messages.len(), MESSAGES_MAX, "thread is bounded");
+    // The oldest line was dropped, the newest kept.
+    assert!(conv.messages.iter().all(|m| m.text != "[RX] msg 0"));
+    assert!(
+        conv.messages
+            .iter()
+            .any(|m| m.text == format!("[RX] msg {}", MESSAGES_MAX + 24))
+    );
+}
+
+#[test]
+fn roster_prunes_discovery_only_peers_but_keeps_real_ones() {
+    let mut app = App::new();
+    app.convs.items.clear();
+    // A hand-added (pinned) peer the operator cares about — must survive pruning.
+    app.convs.items.push({
+        let mut c = Conversation::new("pinned-peer");
+        c.pinned = true;
+        c
+    });
+    // Flood the roster with discovery-only peers past the cap.
+    for n in 0..(ROSTER_MAX + 20) {
+        app.upsert_peer(PeerKind::Delivery, format!("peer{n}"), None);
+    }
+    assert!(
+        app.convs.items.len() <= ROSTER_MAX,
+        "roster stays bounded: {}",
+        app.convs.items.len()
+    );
+    assert!(
+        app.convs.items.iter().any(|c| c.peer == "pinned-peer"),
+        "the operator's pinned peer is never evicted"
+    );
+}
+
 /// Build a press event with no modifiers.
 fn press(code: KeyCode) -> KeyEvent {
     KeyEvent {

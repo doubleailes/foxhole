@@ -29,7 +29,7 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
 
     // Write + durably flush to disk before we expose the file via rename.
     let write_res = (|| -> io::Result<()> {
-        let mut f = File::create(&tmp)?;
+        let mut f = create_private(&tmp)?;
         f.write_all(bytes)?;
         f.flush()?;
         f.sync_all()?; // fsync: contents on stable storage before the rename
@@ -51,6 +51,47 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
         let _ = dir_handle.sync_all();
     }
 
+    Ok(())
+}
+
+/// Create (truncating) a file owner-readable/writable only (`0600`) on Unix.
+/// FoxHole's stores hold the operator's history, position, and peer keys, so they
+/// must not be world- or group-readable on a shared host. Other platforms fall
+/// back to a plain create (their default ACLs are not world-readable).
+#[cfg(unix)]
+fn create_private(path: &Path) -> io::Result<File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)
+}
+
+#[cfg(not(unix))]
+fn create_private(path: &Path) -> io::Result<File> {
+    File::create(path)
+}
+
+/// Create `dir` (and parents) and, on Unix, tighten it to `0700` so the config
+/// directory holding the identity, stores, and notes is not traversable by other
+/// local users.
+///
+/// The tightening applies only to a directory we actually create here, and is
+/// best-effort: we never re-`chmod` a pre-existing directory (it may be one the
+/// operator pointed us at deliberately — e.g. a shared temp dir in tests — that
+/// we do not own, where `set_permissions` would fail with `EPERM`). The files
+/// inside are created `0600` regardless (see `create_private`), so confidentiality
+/// does not depend on the directory mode.
+pub fn create_dir_private(dir: &Path) -> io::Result<()> {
+    let existed = dir.exists();
+    fs::create_dir_all(dir)?;
+    #[cfg(unix)]
+    if !existed {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(dir, fs::Permissions::from_mode(0o700));
+    }
     Ok(())
 }
 

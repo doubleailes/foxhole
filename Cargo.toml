@@ -70,20 +70,23 @@ tracing-core = "0.1"
 tracing = "0.1"
 
 # --- Live-protocol git deps (consumed only by foxhole-net, behind `net`) ------
-# LXMF messaging over Reticulum, and the Reticulum crates it builds on, pinned
-# by tag for reproducibility (an AGPL combined work). The `[patch]` block at the
-# bottom redirects rsLXMF's sibling-path `rns-*` deps to this same tag.
+# LXMF messaging over Reticulum, and the Reticulum crates it builds on, pinned by
+# immutable commit (an AGPL combined work). A git *tag* can be re-pointed to a
+# different commit by the upstream repo owner, so a `cargo update` (or any build
+# that ignores the committed Cargo.lock, e.g. `cargo install`) could silently pull
+# unreviewed code; a commit hash cannot move. The `[patch]` block at the bottom
+# redirects rsLXMF's sibling-path `rns-*` deps to this same rsReticulum commit.
 #
-# Floor: v1.2.0 is the first rsReticulum *release* carrying the role-safe
-# packet-proof fix (`f7ae0274c`), without which DIRECT delivery is never
-# acknowledged — see docs/rsreticulum-delivery-proof-issue.md. Do not pin back
-# below it.
-lxmf-core     = { git = "https://github.com/ratspeak/rsLXMF",      tag = "v1.2.0" }
-rns-crypto    = { git = "https://github.com/ratspeak/rsReticulum", tag = "v1.2.0" }
-rns-wire      = { git = "https://github.com/ratspeak/rsReticulum", tag = "v1.2.0" }
-rns-identity  = { git = "https://github.com/ratspeak/rsReticulum", tag = "v1.2.0" }
-rns-transport = { git = "https://github.com/ratspeak/rsReticulum", tag = "v1.2.0" }
-rns-runtime   = { git = "https://github.com/ratspeak/rsReticulum", tag = "v1.2.0" }
+# These revs are release v1.2.0 of each repo — the first rsReticulum release
+# carrying the role-safe packet-proof fix (`f7ae0274c`), without which DIRECT
+# delivery is never acknowledged (see docs/rsreticulum-delivery-proof-issue.md).
+# Do not pin back below it; bump both repos' revs together when moving forward.
+lxmf-core     = { git = "https://github.com/ratspeak/rsLXMF",      rev = "d58ea180118c0cb5f92692bfd96337193ef8bb91" }
+rns-crypto    = { git = "https://github.com/ratspeak/rsReticulum", rev = "dc6bc4ee82daf66b3b40386f9777dbe62b08fec2" }
+rns-wire      = { git = "https://github.com/ratspeak/rsReticulum", rev = "dc6bc4ee82daf66b3b40386f9777dbe62b08fec2" }
+rns-identity  = { git = "https://github.com/ratspeak/rsReticulum", rev = "dc6bc4ee82daf66b3b40386f9777dbe62b08fec2" }
+rns-transport = { git = "https://github.com/ratspeak/rsReticulum", rev = "dc6bc4ee82daf66b3b40386f9777dbe62b08fec2" }
+rns-runtime   = { git = "https://github.com/ratspeak/rsReticulum", rev = "dc6bc4ee82daf66b3b40386f9777dbe62b08fec2" }
 
 [dependencies]
 # --- FoxHole's own layers (workspace member crates) ---------------------------
@@ -138,16 +141,17 @@ net = [
 
 # `rsLXMF`'s crates depend on the `rns-*` libraries via sibling-checkout paths
 # (`../rsReticulum/...`), which don't exist when `rsLXMF` is fetched from git.
-# Redirect those to the same pinned `rsReticulum` tag so cargo can unify the
+# Redirect those to the same pinned `rsReticulum` commit so cargo can unify the
 # whole stack on one Reticulum source. The patch key must be the *source being
 # replaced* — the rsLXMF git URL, since that is where cargo looks for those
-# path deps. (Only consulted under `--features net`.)
+# path deps. (Only consulted under `--features net`.) Keep these revs in lockstep
+# with the `[workspace.dependencies]` rsReticulum rev above.
 [patch."https://github.com/ratspeak/rsLXMF"]
-rns-crypto    = { git = "https://github.com/ratspeak/rsReticulum", tag = "v1.2.0" }
-rns-wire      = { git = "https://github.com/ratspeak/rsReticulum", tag = "v1.2.0" }
-rns-identity  = { git = "https://github.com/ratspeak/rsReticulum", tag = "v1.2.0" }
-rns-link      = { git = "https://github.com/ratspeak/rsReticulum", tag = "v1.2.0" }
-rns-protocol  = { git = "https://github.com/ratspeak/rsReticulum", tag = "v1.2.0" }
-rns-transport = { git = "https://github.com/ratspeak/rsReticulum", tag = "v1.2.0" }
-rns-runtime   = { git = "https://github.com/ratspeak/rsReticulum", tag = "v1.2.0" }
-rns-interface = { git = "https://github.com/ratspeak/rsReticulum", tag = "v1.2.0" }
+rns-crypto    = { git = "https://github.com/ratspeak/rsReticulum", rev = "dc6bc4ee82daf66b3b40386f9777dbe62b08fec2" }
+rns-wire      = { git = "https://github.com/ratspeak/rsReticulum", rev = "dc6bc4ee82daf66b3b40386f9777dbe62b08fec2" }
+rns-identity  = { git = "https://github.com/ratspeak/rsReticulum", rev = "dc6bc4ee82daf66b3b40386f9777dbe62b08fec2" }
+rns-link      = { git = "https://github.com/ratspeak/rsReticulum", rev = "dc6bc4ee82daf66b3b40386f9777dbe62b08fec2" }
+rns-protocol  = { git = "https://github.com/ratspeak/rsReticulum", rev = "dc6bc4ee82daf66b3b40386f9777dbe62b08fec2" }
+rns-transport = { git = "https://github.com/ratspeak/rsReticulum", rev = "dc6bc4ee82daf66b3b40386f9777dbe62b08fec2" }
+rns-runtime   = { git = "https://github.com/ratspeak/rsReticulum", rev = "dc6bc4ee82daf66b3b40386f9777dbe62b08fec2" }
+rns-interface = { git = "https://github.com/ratspeak/rsReticulum", rev = "dc6bc4ee82daf66b3b40386f9777dbe62b08fec2" }
