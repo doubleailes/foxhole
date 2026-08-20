@@ -70,6 +70,14 @@ async fn main() -> io::Result<()> {
         Err(_) => { /* no file (or unreadable): keep the seeded demo zones */ }
     }
 
+    // Capture the mesh stack's own `tracing` diagnostics if the operator asked
+    // for them (`FOXHOLE_TRACE`). Installed before the network task starts so
+    // bring-up is covered, and reported into the Log so the file is findable.
+    #[cfg(feature = "net")]
+    if let Some(path) = foxhole_net::trace::install(&config::config_dir()) {
+        app.push_log(format!("[SYS] tracing mesh stack to {}", path.display()));
+    }
+
     let link = spawn_network(net_tx, &app.config);
 
     // Live discovery replaces the offline demo peers; start from an empty list.

@@ -204,10 +204,20 @@ instead of waiting to be told. If a position never arrives, the gate is usually
 on the sending side — Sideband embeds telemetry only when telemetry is enabled,
 *and* that conversation's telemetry toggle is on (or this node is Trusted there
 with "send to trusted"), *and* its current fix is newer than the last one it
-delivered here; until then its messages carry no telemetry field at all. Start
-with `FOXHOLE_DEBUG_TELEMETRY=1` to have the Log list each inbound message's
-field ids and dump the raw telemetry bytes — that separates "never sent" from
-"failed to decode".
+delivered here; until then its messages carry no telemetry field at all. Note also
+that Sideband will not send a second telemetry update until the first is
+confirmed `[delivered]`/`[failed]` — it latches per peer with no timeout, so one
+unacknowledged send silently blocks every later one until the app restarts, which
+reads as "arrived once, then never again".
+
+Two opt-in diagnostics, both off by default: `FOXHOLE_DEBUG_TELEMETRY=1` makes
+the Log list each inbound message's field ids and dump the raw telemetry bytes —
+separating "never sent" from "failed to decode" — and `FOXHOLE_TRACE=<targets>`
+captures the mesh stack's own `tracing` diagnostics (link establishment,
+delivery proofs, routing) to `trace.log` in the config dir, where `BURN`
+destroys it with everything else. `1`/`all` takes every target, otherwise pass
+comma-separated substrings such as `link_manager,router`; cap verbosity with
+`FOXHOLE_TRACE_LEVEL` (default `debug`).
 
 The **Browser** tool reads Nomad Network ████ pages: it lists discovered
 `nomadnetwork.node` stations and fetches `index.mu` over a Reticulum link,

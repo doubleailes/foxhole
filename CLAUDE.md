@@ -198,6 +198,20 @@ and `foxhole-cot` (inbound intel decode).
   (reusing the identity store key), loaded at boot and re-saved when
   `app.intel_dirty` is set. `Option` timestamps are preserved so a stale-less
   event reloads stale-less; a corrupt/foreign file loads empty.
+- `src/trace.rs` — opt-in sink (`FOXHOLE_TRACE`) for the mesh stack's own
+  `tracing` diagnostics, written to `{cfgdir}/trace.log` (inside the tree BURN
+  destroys, since a trace carries peer hashes). Nothing is installed unless the
+  env var is set, so the default build keeps the no-op global dispatcher. A
+  hand-rolled `Subscriber` on `tracing-core` alone — spans are no-ops because the
+  stack carries its payload in event *fields* — rather than pulling
+  `tracing-subscriber` into a dependency-conscious tree. This exists because the
+  three link delivery-proof events (`delivery proof queued…` / `could not sign…`
+  / `…could not be retained`) decide whether a peer's send is ever acknowledged,
+  and with no subscriber they were discarded: a peer whose message arrives
+  unproved is indistinguishable from a peer that went quiet. Sideband is exactly
+  that case — it latches `telemetry.<hash>.update_sending` until DELIVERED or
+  FAILED, with no timeout, so one unacknowledged telemetry send blocks every
+  later one until the app restarts.
 - `src/wire.rs` — the framing both stores share: the bounds-checked `Reader` and
   `put_*` writers, plus the `seal`/`unseal` envelope (encrypt → `atomic_write`,
   and read → decrypt into `Missing`/`Plain`/`Corrupt`). Keeps the two stores from
