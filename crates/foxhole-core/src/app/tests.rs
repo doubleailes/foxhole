@@ -463,6 +463,31 @@ fn network_tab_selects_and_sets_propagation_node() {
 }
 
 #[test]
+fn ctrl_l_requests_the_selected_peers_telemetry() {
+    let mut app = App::new();
+    let peer = app
+        .selected_conv()
+        .expect("the seeded roster has a selection")
+        .peer
+        .clone();
+
+    app.handle_key(ctrl('l'));
+    assert_eq!(
+        app.outbox.commands.pop_front(),
+        Some(NetCommand::RequestTelemetry(peer)),
+        "Ctrl+L pulls the peer's position — Sideband only pushes to a collector"
+    );
+
+    // With no peer to address, the operator gets a log line rather than a
+    // command aimed at nobody.
+    app.convs.items.clear();
+    app.syslog.clear();
+    app.handle_key(ctrl('l'));
+    assert!(app.outbox.commands.is_empty(), "no peer, no command");
+    assert_eq!(app.syslog.len(), 1, "and it says why");
+}
+
+#[test]
 fn esc_cancels_a_running_sync_popup() {
     let mut app = App::new();
     // A sync is in progress (the network task set the progress text).

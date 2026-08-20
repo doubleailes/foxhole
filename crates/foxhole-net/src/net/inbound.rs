@@ -48,13 +48,15 @@ pub(crate) async fn deliver(
 }
 
 /// Forward a decoded inbound message to the UI, plus any location telemetry it
-/// carries (so the World Map can plot the sender). A telemetry-only /
-/// command-only message has no text, so no conversation entry is emitted for it
-/// — only its telemetry (if any) is surfaced.
+/// carries (so the World Map can plot the sender) — a single fix, a relayed
+/// stream of them, or both. A telemetry-only / command-only message has no text,
+/// so no conversation entry is emitted for it — only its telemetry (if any) is
+/// surfaced.
 async fn emit(events: &mpsc::Sender<NetEvent>, msg: LxMessage) {
     debug_dump_fields(events, &msg).await;
     let source = hex::encode(msg.source_hash);
     let location = telemetry::location(&msg);
+    let stream = telemetry::stream(&msg);
     let cot = cot_payload(&msg);
     if has_text_body(&msg) {
         let _ = events
@@ -69,6 +71,19 @@ async fn emit(events: &mpsc::Sender<NetEvent>, msg: LxMessage) {
         let _ = events
             .send(NetEvent::Telemetry {
                 source: source.clone(),
+                lat,
+                lon,
+            })
+            .await;
+    }
+    // A collector-enabled Sideband answers a telemetry request with a *stream*
+    // instead of a single fix, relaying other objects' positions alongside its
+    // own — so each entry is attributed to its own source, falling back to the
+    // sender when an entry carries none.
+    for (entry_source, lat, lon) in stream {
+        let _ = events
+            .send(NetEvent::Telemetry {
+                source: entry_source.map_or_else(|| source.clone(), hex::encode),
                 lat,
                 lon,
             })

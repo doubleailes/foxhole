@@ -1,5 +1,6 @@
-//! Sideband-compatible location telemetry: decode an inbound fix, detect a
-//! telemetry request, and pack our own position for the reply.
+//! Sideband-compatible location telemetry: decode an inbound fix (single or
+//! streamed), detect a telemetry request, pack our own position for the reply,
+//! and pack a request of our own.
 //!
 //! The wire shapes here are all reverse-engineered from a live Sideband handset
 //! (see the per-item docs), so they are kept together and covered by fixtures
@@ -13,6 +14,12 @@ use lxmf_core::message::LxMessage;
 /// id; this is the entry carrying latitude/longitude. (Confirmed against a live
 /// Sideband handset's payload — the time sensor is `0x01`, location `0x02`.)
 pub(crate) const SID_LOCATION: u8 = 0x02;
+
+/// Length of an LXMF destination hash — the width of a stream entry's source
+/// field. Skipping binaries of exactly this width when hunting for the entry's
+/// packed fix costs nothing: a packed location map spends more than 16 bytes on
+/// its two 4-byte coordinate binaries alone, so it can never be this short.
+const DESTINATION_LENGTH: usize = 16;
 
 /// Sideband command id for a telemetry request (`Commands.TELEMETRY_REQUEST`).
 /// Confirmed from a live handset's `FIELD_COMMANDS` payload.
@@ -70,6 +77,66 @@ fn coord(v: &rmpv::Value) -> Option<f64> {
     }
 }
 
+/// Extract every `(source, lat, lon)` fix from a message's *streamed* telemetry
+/// field, if present.
+///
+/// Sideband answers a telemetry request from a collector-enabled handset with
+/// `FIELD_TELEMETRY_STREAM` rather than `FIELD_TELEMETRY`
+/// (`core.py::create_telemetry_collector_response`), so a terminal that only
+/// reads the single-fix field sees nothing at all from such a peer. The stream
+/// relays *other* objects' telemetry too, hence the per-entry source hash.
+pub(crate) fn stream(msg: &LxMessage) -> Vec<(Option<[u8; 16]>, f64, f64)> {
+    match msg.get_field(lxmf_core::constants::FIELD_TELEMETRY_STREAM) {
+        Some(bytes) => parse_stream(bytes),
+        None => Vec::new(),
+    }
+}
+
+/// Pure decode half of [`stream`]. The `FIELD_TELEMETRY_STREAM` value is a
+/// msgpack **array** of entries, each `[source_hash, timestamp, packed_telemetry,
+/// appearance]` — the shape Sideband builds in
+/// `create_telemetry_collector_response`. `packed_telemetry` is the very payload
+/// [`parse_location`] already reads, so each entry is decoded with it and
+/// attributed to its own `source_hash` (16 bytes) rather than to the peer that
+/// relayed it.
+///
+/// Deliberately lenient: entries that carry no source, no usable fix, or an
+/// older two-element `[timestamp, packed]` shape neither abort the batch nor
+/// panic — every entry that *does* decode is returned.
+pub(crate) fn parse_stream(bytes: &[u8]) -> Vec<(Option<[u8; 16]>, f64, f64)> {
+    let Ok(value) = rmpv::decode::read_value(&mut &bytes[..]) else {
+        return Vec::new();
+    };
+    let Some(entries) = value.as_array() else {
+        return Vec::new();
+    };
+    entries
+        .iter()
+        .filter_map(|entry| {
+            let fields = entry.as_array()?;
+            let source = fields.iter().find_map(entry_source);
+            // The packed blob is whichever element decodes as a location fix —
+            // robust against the extra `appearance` element and the older
+            // source-less entry shape alike. See [`DESTINATION_LENGTH`] for why
+            // skipping a source-width binary can never skip the fix.
+            let (lat, lon) = fields.iter().find_map(|f| match f {
+                rmpv::Value::Binary(b) if b.len() != DESTINATION_LENGTH => parse_location(b),
+                _ => None,
+            })?;
+            Some((source, lat, lon))
+        })
+        .collect()
+}
+
+/// A stream entry's originating destination hash: a msgpack binary of exactly
+/// [`DESTINATION_LENGTH`] bytes.
+fn entry_source(field: &rmpv::Value) -> Option<[u8; 16]> {
+    match field {
+        rmpv::Value::Binary(b) => b.as_slice().try_into().ok(),
+        _ => None,
+    }
+}
+
 /// Whether an inbound message is Sideband's "Request telemetry". The
 /// `FIELD_COMMANDS` (0x09) value is a msgpack array of commands, each a map
 /// `{ command_id: params }`; a telemetry request carries
@@ -121,6 +188,29 @@ pub(crate) fn pack_location(lat: f64, lon: f64, time: u64) -> Vec<u8> {
     ]);
     let mut buf = Vec::new();
     rmpv::encode::write_value(&mut buf, &map).expect("encode telemetry");
+    buf
+}
+
+/// Pack a "Request telemetry" command for a peer — the mirror of
+/// [`is_requested`], so a Sideband handset answers us the same way we answer it.
+///
+/// `FIELD_COMMANDS` is a msgpack array of `{ command_id: params }` maps; the
+/// telemetry request's params are `[timebase, collector_request]`. `timebase`
+/// bounds how far back a collector may reach; `collector_request` is left
+/// `false` on purpose — a collector-enabled peer would otherwise dump telemetry
+/// for every object it knows, where all we asked for is the peer's own position
+/// (`core.py::handle_commands`).
+pub(crate) fn pack_request(timebase: f64) -> Vec<u8> {
+    let cmd = rmpv::Value::Map(vec![(
+        rmpv::Value::from(COMMAND_TELEMETRY_REQUEST),
+        rmpv::Value::Array(vec![
+            rmpv::Value::from(timebase),
+            rmpv::Value::Boolean(false),
+        ]),
+    )]);
+    let mut buf = Vec::new();
+    rmpv::encode::write_value(&mut buf, &rmpv::Value::Array(vec![cmd]))
+        .expect("encode telemetry request");
     buf
 }
 
@@ -256,6 +346,106 @@ mod tests {
         let (lat, lon) = parse_location(&blob).expect("a fix");
         assert!((lat - 48.85).abs() < 1e-6);
         assert!((lon - 2.35).abs() < 1e-6);
+    }
+
+    /// One `FIELD_TELEMETRY_STREAM` entry as Sideband builds it in
+    /// `create_telemetry_collector_response`: `[source, timestamp, packed, appearance]`.
+    fn stream_entry(source: [u8; 16], packed: Vec<u8>) -> rmpv::Value {
+        rmpv::Value::Array(vec![
+            rmpv::Value::Binary(source.to_vec()),
+            rmpv::Value::from(1_781_467_583_u64),
+            rmpv::Value::Binary(packed),
+            // The appearance element: `[icon, fg, bg]`, which must not be
+            // mistaken for a packed fix.
+            rmpv::Value::Array(vec![
+                rmpv::Value::from("account"),
+                rmpv::Value::Binary(vec![0x00, 0x7f, 0xff]),
+                rmpv::Value::Binary(vec![0x11, 0x22, 0x33]),
+            ]),
+        ])
+    }
+
+    fn stream_blob(entries: Vec<rmpv::Value>) -> Vec<u8> {
+        let mut buf = Vec::new();
+        rmpv::encode::write_value(&mut buf, &rmpv::Value::Array(entries)).expect("encode");
+        buf
+    }
+
+    #[test]
+    fn parses_streamed_telemetry_attributed_to_each_entrys_source() {
+        // A collector-enabled Sideband answers a telemetry request with a stream
+        // rather than a single fix, relaying other objects' positions too — each
+        // must be attributed to its own source hash, not to the relaying peer.
+        let own = [0xAAu8; 16];
+        let relayed = [0xBBu8; 16];
+        let blob = stream_blob(vec![
+            stream_entry(own, pack_location(48.5342, 3.8325, 1_781_467_583)),
+            stream_entry(relayed, pack_location(-33.86, -70.65, 1_781_467_500)),
+        ]);
+
+        let fixes = parse_stream(&blob);
+        assert_eq!(fixes.len(), 2, "both entries decode");
+        assert_eq!(fixes[0].0, Some(own));
+        assert!((fixes[0].1 - 48.5342).abs() < 1e-6);
+        assert!((fixes[0].2 - 3.8325).abs() < 1e-6);
+        assert_eq!(fixes[1].0, Some(relayed));
+        assert!((fixes[1].1 + 33.86).abs() < 1e-6);
+        assert!((fixes[1].2 + 70.65).abs() < 1e-6);
+
+        // And it is reachable through the field, which lxmf-core hands back
+        // msgpack-re-encoded because the value is an array, not a `bin`.
+        let mut msg = LxMessage::new([0u8; 16], own, "", "", DeliveryMethod::Direct);
+        assert!(stream(&msg).is_empty(), "no stream field, no fixes");
+        msg.set_field(lxmf_core::constants::FIELD_TELEMETRY_STREAM, blob);
+        assert_eq!(stream(&msg).len(), 2);
+    }
+
+    #[test]
+    fn stream_tolerates_partial_and_malformed_entries() {
+        let good = [0xCCu8; 16];
+        let blob = stream_blob(vec![
+            // Source-less two-element entry (the older shape).
+            rmpv::Value::Array(vec![
+                rmpv::Value::from(1_781_467_583_u64),
+                rmpv::Value::Binary(pack_location(51.5, -0.12, 0)),
+            ]),
+            // An entry whose telemetry carries no location sensor at all.
+            stream_entry(good, vec![0x81, 0x04, 0x5f]),
+            // Not an array.
+            rmpv::Value::from(7_u8),
+            stream_entry(good, pack_location(40.0, -74.0, 0)),
+        ]);
+
+        let fixes = parse_stream(&blob);
+        assert_eq!(fixes.len(), 2, "only the decodable entries survive");
+        assert_eq!(fixes[0].0, None, "a source-less entry still yields its fix");
+        assert!((fixes[0].1 - 51.5).abs() < 1e-6);
+        assert_eq!(fixes[1].0, Some(good));
+        assert!((fixes[1].2 + 74.0).abs() < 1e-6);
+
+        // Junk never panics and never invents a fix.
+        assert!(parse_stream(&[0xff, 0x00, 0x13]).is_empty());
+        assert!(parse_stream(&[]).is_empty());
+    }
+
+    #[test]
+    fn packs_a_request_the_detector_recognises() {
+        // Our request must have the shape we already detect inbound — and the
+        // shape a live handset sent us (`91 81 01 92 cb… c2`): a one-element
+        // array holding `{ 0x01: [<float64 timebase>, false] }`.
+        let blob = pack_request(1_781_424_383.0);
+        assert!(parse_request(&blob), "round-trips through the detector");
+        assert_eq!(blob[0], 0x91, "array(1)");
+        assert_eq!(blob[1], 0x81, "map(1)");
+        assert_eq!(blob[2], 0x01, "command id 0x01");
+        assert_eq!(blob[3], 0x92, "params array(2)");
+        assert_eq!(blob[4], 0xcb, "float64 timebase");
+        assert_eq!(
+            *blob.last().expect("non-empty"),
+            0xc2,
+            "collector_request = false, so a collector answers with its own \
+             position rather than dumping every object it knows"
+        );
     }
 
     #[test]

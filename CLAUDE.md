@@ -177,13 +177,18 @@ and `foxhole-cot` (inbound intel decode).
   - `inbound.rs` — decoded message → UI events. Inbound CoT intel is decoded
     from the `FIELD_CUSTOM_TYPE=cot/xml` / `FIELD_CUSTOM_DATA` fields and
     reported as `NetEvent::Cot` (malformed payloads logged + dropped, never
-    fatal).
+    fatal). Location telemetry is read from **both** Sideband fields — the
+    single `FIELD_TELEMETRY` fix and the relayed `FIELD_TELEMETRY_STREAM` batch,
+    each entry attributed to its own source hash.
   - `nomad.rs` — Nomad Network node discovery (recent-announce-cache poll for
     `nomadnetwork.node`) and page fetching via `LinkClient::query` (spawned off
     the select loop), reported as `NetEvent::{NomadNode,Page}`.
   - `discovery.rs` — operator path probes and interface statistics.
   - `codec.rs` / `telemetry.rs` — pure, unit-tested wire-format helpers
-    (address/form/custom-field parsing; the Sideband location-telemetry codec).
+    (address/form/custom-field parsing; the Sideband location-telemetry codec —
+    single fix, relayed stream, and the request command in both directions, so
+    foxhole both answers and *asks*: Sideband pushes telemetry only to a
+    configured collector, so Ctrl+L in Conversations pulls a peer's position).
 - `src/store.rs` — encrypted, atomic, per-conversation history store: `FXC1` blob
   → `rns_crypto::token` (AES-256-CBC + HMAC) → `atomic_write`, key HKDF-derived
   from the identity (`derive_key`, also used by `net`). Corruption/foreign files

@@ -181,6 +181,7 @@ Two-tier layout. **Tools** along the top; **panes** within each.
 | `Ctrl+S`       | Transmit                                            |
 | `Ctrl+R`       | Sync from propagation node (operator-initiated)     |
 | `Ctrl+G`       | Share / revoke a hazard zone to the peer (CoT intel)|
+| `Ctrl+L`       | Request the peer's position (Sideband telemetry)    |
 | `t`            | Cycle selected peer's trust level (Conv / Network)  |
 | `m`            | Show selected address as a mnemonic phrase (Network)|
 | `p`            | Path probe selected peer/node (Network, rnpath)     |

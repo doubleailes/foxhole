@@ -34,6 +34,11 @@ pub enum NetCommand {
     /// Abandon an in-progress propagation sync: stop reporting progress and let
     /// the operator dismiss the pop-up without waiting out the node's timeout.
     CancelSync,
+    /// Ask a peer (hex destination hash) for its latest position telemetry — the
+    /// Sideband `TELEMETRY_REQUEST` command. Sideband only volunteers telemetry
+    /// to a configured collector, so pulling is the only way to place a handset
+    /// that merely answers requests on the map.
+    RequestTelemetry(String),
     /// Operator-initiated path probe (rnpath-style) for a hex destination hash:
     /// request a path, then report the hop count + next-hop interface.
     RequestPath(String),
