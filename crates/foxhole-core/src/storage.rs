@@ -76,13 +76,21 @@ fn create_private(path: &Path) -> io::Result<File> {
 
 /// Create `dir` (and parents) and, on Unix, tighten it to `0700` so the config
 /// directory holding the identity, stores, and notes is not traversable by other
-/// local users. Parent directories keep their existing modes.
+/// local users.
+///
+/// The tightening applies only to a directory we actually create here, and is
+/// best-effort: we never re-`chmod` a pre-existing directory (it may be one the
+/// operator pointed us at deliberately — e.g. a shared temp dir in tests — that
+/// we do not own, where `set_permissions` would fail with `EPERM`). The files
+/// inside are created `0600` regardless (see `create_private`), so confidentiality
+/// does not depend on the directory mode.
 pub fn create_dir_private(dir: &Path) -> io::Result<()> {
+    let existed = dir.exists();
     fs::create_dir_all(dir)?;
     #[cfg(unix)]
-    {
+    if !existed {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(dir, fs::Permissions::from_mode(0o700))?;
+        let _ = fs::set_permissions(dir, fs::Permissions::from_mode(0o700));
     }
     Ok(())
 }
