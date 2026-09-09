@@ -77,6 +77,12 @@ The remainder of Section 1 is withheld under exemption (b)(█).
   before they touch the map. Share a local zone to a peer with one key, and
   **revoke** it later so the peer's map drops the object. Authored in-app or
   ingested off the wire; the received layer is sealed at rest like history.
+- **Voice traffic over the same mesh (LXST).** Opus telephony between operators,
+  point to point, over whatever interfaces the mesh already has — no ████████,
+  no relay, no account. Calls ride the *same* Reticulum transport as messaging,
+  so one node still announces one set of paths. The console carries a call HUD
+  with live TX/RX meters, mute, and profiles from 8 kbps up. Off by default;
+  build with `--features voice`.
 - **Operator-assigned trust.** Every peer carries a trust level
   (`TRUSTED / UNKNOWN / UNTRUSTED / COMPROMISED`), shown as a colour-coded glyph
   on its roster row and persisted across sessions. Trust gates whether inbound
@@ -166,7 +172,7 @@ surface the heavy/double box-drawing and bold nameplates still carry focus.
 Two-tier layout. **Tools** along the top; **panes** within each.
 
 ```
- Conversations | Network | Map | Browser | Log | Interfaces | Notes | Guide
+ Conversations | Network | Map | Browser | Voice | Log | Interfaces | Notes | Guide
 ```
 
 | Key            | Action                                              |
@@ -182,6 +188,7 @@ Two-tier layout. **Tools** along the top; **panes** within each.
 | `Ctrl+R`       | Sync from propagation node (operator-initiated)     |
 | `Ctrl+G`       | Share / revoke a hazard zone to the peer (CoT intel)|
 | `Ctrl+L`       | Request the peer's position (Sideband telemetry)    |
+| `Ctrl+V`       | Place an LXST voice call to the selected peer        |
 | `t`            | Cycle selected peer's trust level (Conv / Network)  |
 | `m`            | Show selected address as a mnemonic phrase (Network)|
 | `p`            | Path probe selected peer/node (Network, rnpath)     |
@@ -190,6 +197,9 @@ Two-tier layout. **Tools** along the top; **panes** within each.
 | `Ctrl+X`       | Purge compose buffer / clear note slot              |
 | `Ctrl+K`       | **BURN** — destroy all session data (confirm `BURN`)|
 | `Ctrl+Q`       | ████████ (terminate session)                        |
+
+**Voice** keys: `Up/Down` select, `Enter` call — or **answer** a ringing call,
+`h`/`Esc` hang up, `m` mute, `p` cycle profile, `a` re-announce.
 
 **World Map** keys: `Arrows` pan, `+`/`-` zoom, `Tab`/`[`/`]` cycle markers,
 `Enter`/`c` centre, `g` toggle the cities layer, `/` go to an MGRS grid
@@ -218,6 +228,22 @@ delivery proofs, routing) to `trace.log` in the config dir, where `BURN`
 destroys it with everything else. `1`/`all` takes every target, otherwise pass
 comma-separated substrings such as `link_manager,router`; cap verbosity with
 `FOXHOLE_TRACE_LEVEL` (default `debug`).
+
+The **Voice** tool places ████ voice calls over
+[LXST](https://github.com/markqvist/LXST), Reticulum's real-time media layer,
+using [rsLXST](https://github.com/ratspeak/rsLXST) — Opus over the *same*
+Reticulum transport the messaging stack already brought up, so one node
+announces one set of paths. Build it with `--features voice` (which implies
+`net`, and on Debian-family systems needs `libasound2-dev` for the ALSA
+backend); it is off by default and the tool then reports the stack as offline.
+
+Note the addressing: a call is placed to a peer's **identity** hash, not the
+`lxmf.delivery` destination hash the Network tab shows — the Voice roster is
+built from `lxst.telephony` announces and holds the former, while `Ctrl+V` in
+Conversations resolves the latter through the announce-learned key cache. A peer
+that announces only `lxmf.delivery` can be messaged but not called. One call at a
+time; Codec2 profiles are signalling-only until upstream ships the codec. Full
+binding in `docs/lxst-voice.md`.
 
 The **Browser** tool reads Nomad Network ████ pages: it lists discovered
 `nomadnetwork.node` stations and fetches `index.mu` over a Reticulum link,

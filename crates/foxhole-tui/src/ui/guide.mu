@@ -24,6 +24,8 @@ The UI has two focus tiers, mirroring Nomad Network:
                    CoT intel; MGRS grid, hazard zones, in-app authoring.
   `!Browser`!         Read Nomad Network pages written in micron markup; follow
                    links and submit form fields.
+  `!Voice`!           LXST voice calls: who can be called, the call HUD, and
+                   the call log. Needs a --features voice build.
   `!Log`!             Timestamped (UTC) system and diagnostic scrollback.
   `!Interfaces`!      Live Reticulum interface status, rnstatus-style.
   `!Notes`!           Ten-slot scratch buffer for hashes, grid refs, anything.
@@ -71,6 +73,27 @@ The UI has two focus tiers, mirroring Nomad Network:
   `!r`!                 Reload the current page (when not editing a field)
   `!(type)`!            Edit the focused page input field
   `!Backspace`!         Delete in a field, else go back to the previous page
+
+>>Voice
+
+Calls ride LXST over the same Reticulum transport as messaging. The roster
+lists peers heard announcing `!lxst.telephony`! — a peer that only announces
+`!lxmf.delivery`! can be messaged but not called.
+
+  `!Up / Down`!         Move the roster selection
+  `!Enter`!             Call the selection — or ANSWER, when a call is ringing
+  `!h`! or `!Esc`!          Hang up, reject, or abandon a call being placed
+  `!m`!                 Mute / unmute the microphone (sends silence)
+  `!p`!                 Cycle the call profile (renegotiates during a call)
+  `!a`!                 Re-announce lxst.telephony now
+  `!Ctrl+V`!            (Conversations) call the selected peer and jump here
+
+The header shows this node's `!identity hash`! — that, not the lxmf.delivery
+address in the Network tool, is what a peer dials to reach you.
+
+One call at a time. The `!p`! key skips the Codec2 profiles: the current LXST
+release carries Opus only, so those cannot pass audio. If no audio device is
+available the call still signals and connects, silently — the HUD says so.
 
 >>World Map
 

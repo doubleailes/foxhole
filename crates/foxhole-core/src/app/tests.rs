@@ -1693,3 +1693,51 @@ fn voice_tool_is_in_the_tab_cycle() {
     app.handle_key(ctrl('p'));
     assert_eq!(app.active, Tool::Browser);
 }
+
+#[test]
+fn voice_alias_labels_a_callable_peer() {
+    // LXST's telephony announce carries no name, so the roster is labelled from
+    // the peer's LXMF announce instead — correlated by identity.
+    let mut app = voice_app(0);
+    let id = "aa".repeat(16);
+    app.apply_voice_event(VoiceEvent::Alias {
+        identity: id.clone(),
+        name: "alice".to_string(),
+    });
+    // An alias alone must NOT make the peer callable.
+    assert!(app.voice.peers.is_empty());
+
+    app.apply_voice_event(VoiceEvent::Peer {
+        identity: id,
+        name: None,
+        hops: Some(1),
+    });
+    assert_eq!(app.voice.peers[0].name.as_deref(), Some("alice"));
+}
+
+#[test]
+fn voice_alias_arriving_late_relabels_roster_and_call() {
+    let mut app = voice_app(0);
+    let id = "bb".repeat(16);
+    app.apply_voice_event(VoiceEvent::Peer {
+        identity: id.clone(),
+        name: None,
+        hops: None,
+    });
+    app.apply_voice_event(VoiceEvent::Call(Some(Call::new(
+        id.clone(),
+        None,
+        CallDirection::Incoming,
+        0,
+    ))));
+    assert!(app.voice.peers[0].name.is_none());
+
+    app.apply_voice_event(VoiceEvent::Alias {
+        identity: id,
+        name: "bob".to_string(),
+    });
+    // Both the roster row and the call in progress pick the name up, so a name
+    // learned mid-call isn't stuck showing a hash until the next announce.
+    assert_eq!(app.voice.peers[0].name.as_deref(), Some("bob"));
+    assert_eq!(app.voice.call.as_ref().unwrap().label(), "bob");
+}

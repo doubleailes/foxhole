@@ -595,19 +595,15 @@ impl Session {
         if hex_identity == self.local {
             return; // our own announce, echoed back
         }
-        let name = ev
-            .app_data
-            .as_deref()
-            .and_then(|d| std::str::from_utf8(d).ok())
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
-        if let Some(n) = &name {
-            self.names.insert(hex_identity.clone(), n.clone());
-        }
+        // No name here on purpose: LXST's telephony announce carries no app
+        // data, so anything in that field is another client's private
+        // convention — not something to render as a peer's name. The Voice
+        // roster gets its labels from `lxmf.delivery` announces instead, which
+        // `foxhole-net` correlates onto the same identity.
         let _ = events
             .send(NetEvent::Voice(VoiceEvent::Peer {
                 identity: hex_identity,
-                name,
+                name: None,
                 hops: Some(ev.hops),
             }))
             .await;

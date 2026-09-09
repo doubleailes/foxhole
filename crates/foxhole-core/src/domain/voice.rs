@@ -367,11 +367,24 @@ pub enum VoiceCommand {
 #[derive(Clone, Debug, PartialEq)]
 pub enum VoiceEvent {
     /// A peer announced an `lxst.telephony` destination (upsert by identity).
+    ///
+    /// `name` is almost always `None`: LXST's telephony announce carries no
+    /// app data, so there is no display name on the wire for this aspect. Names
+    /// arrive separately as [`VoiceEvent::Alias`].
     Peer {
         identity: String,
         name: Option<String>,
         hops: Option<u8>,
     },
+    /// A display name learned for an identity from a *different* aspect — in
+    /// practice the `lxmf.delivery` announce, which does carry one.
+    ///
+    /// This is deliberately not a [`VoiceEvent::Peer`]: hearing a peer's LXMF
+    /// announce says nothing about whether it can take a call, and listing it as
+    /// callable on that basis would be a roster of numbers that never ring. It
+    /// only supplies a label for an identity that may or may not also turn up on
+    /// the telephony aspect.
+    Alias { identity: String, name: String },
     /// Our own hex identity hash — what a peer dials to reach us.
     Local(String),
     /// The call state changed wholesale. `None` means there is no call: the
