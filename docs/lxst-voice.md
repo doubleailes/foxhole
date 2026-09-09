@@ -203,6 +203,16 @@ this task would immediately drain and discard.
 **Mute sends silence** rather than stopping the stream, so packet cadence and the
 negotiated profile survive it and unmuting is instant.
 
+**Stderr is muted around the device calls.** ALSA's C library writes its
+diagnostics straight to stderr, bypassing every Rust logging path — and with no
+sound card, an unusual `.asoundrc`, or inside a container, opening the default
+device produces half a screen of them. FoxHole runs full-screen on the alternate
+buffer, so that output lands on top of the console and corrupts the display with
+no redraw to clean it up. `audio::QuietStderr` redirects fd 2 to `/dev/null` for
+the duration of each device call and restores it after. Losing those lines is the
+right trade: they describe a condition the operator is already told about, in the
+Voice tool's audio status, in terms that mean something.
+
 A missing or unusable device is reported, never fatal — a call still signals and
 connects with no audio path, which is what a headless relay wants.
 

@@ -125,6 +125,9 @@ pub(super) fn tag_style(tag: &str) -> Style {
         "OPS" => base
             .fg(Color::Rgb(158, 166, 154))
             .add_modifier(Modifier::DIM), // Desaturated Grey
+        "VOX" => base
+            .fg(Color::Rgb(140, 198, 196))
+            .add_modifier(Modifier::BOLD), // Signal Teal — voice traffic
         _ => base.fg(Color::Rgb(126, 158, 136)),
     }
 }
@@ -145,7 +148,25 @@ pub(super) fn line_style(text: &str) -> Style {
         // Explicit category tags (future) colour directly; everything else
         // (the `[SYS]` lines) is classified by content.
         Some("SYS") | None => tag_style(sys_category(text)),
+        // Voice lines carry their own severity when they have one — a
+        // `[VOX] [WRN] no audio devices` has to read as a warning, not as
+        // ordinary voice chatter. Keyword classification is deliberately not
+        // applied: it is tuned for the messaging stack's vocabulary and would
+        // mislabel call traffic ("calling", "answering", "hung up").
+        Some("VOX") => tag_style(explicit_severity(text).unwrap_or("VOX")),
         Some(other) => tag_style(other),
+    }
+}
+
+/// The severity an emitter stated outright with a secondary `[WRN]`/`[ERR]`
+/// tag, if any. Honouring it beats guessing from keywords — the emitter knows.
+fn explicit_severity(text: &str) -> Option<&'static str> {
+    if text.contains("[ERR]") {
+        Some("ERR")
+    } else if text.contains("[WRN]") {
+        Some("WRN")
+    } else {
+        None
     }
 }
 
@@ -155,11 +176,8 @@ pub(super) fn line_style(text: &str) -> Style {
 /// keywords (e.g. a "…NOT sent" warning must not be demoted to OPS by the
 /// "sent" heuristic below). Otherwise fall back to keyword classification.
 pub(super) fn sys_category(text: &str) -> &'static str {
-    if text.contains("[ERR]") {
-        return "ERR";
-    }
-    if text.contains("[WRN]") {
-        return "WRN";
+    if let Some(severity) = explicit_severity(text) {
+        return severity;
     }
     let t = text.to_ascii_lowercase();
     if t.contains("delivered") {

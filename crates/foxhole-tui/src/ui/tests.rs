@@ -479,3 +479,21 @@ fn muted_transmit_meter_reads_empty_and_says_so() {
     assert!(text.contains("MUTED"), "mute state shown");
     assert!(text.contains("muted"), "the TX meter is tagged muted");
 }
+
+#[test]
+fn voice_lines_carry_their_own_severity() {
+    use super::style::line_style;
+    // A plain call line gets the voice tint…
+    assert_eq!(line_style("[VOX] calling bravo"), tag_style("VOX"));
+    // …but a stated severity wins, so "no audio devices" reads as a warning
+    // rather than as ordinary call chatter.
+    assert_eq!(
+        line_style("[VOX] [WRN] no audio devices (no input device)"),
+        tag_style("WRN")
+    );
+    assert_eq!(line_style("[VOX] [ERR] voice: boom"), tag_style("ERR"));
+    // Keyword classification must not reach voice lines: "hung up" and
+    // "answering" mean nothing in the messaging stack's vocabulary.
+    assert_eq!(line_style("[VOX] call ended: hung up"), tag_style("VOX"));
+    assert_ne!(line_style("[VOX] calling bravo"), tag_style("SYS"));
+}

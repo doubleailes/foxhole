@@ -713,6 +713,7 @@ dependencies = [
  "cpal",
  "foxhole-core",
  "hex",
+ "libc",
  "lxst-core",
  "lxst-telephony",
  "rns-identity",

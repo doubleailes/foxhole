@@ -34,3 +34,10 @@ tokio = { workspace = true }
 # RawAudioFrame"), so that half lives in `audio.rs`.
 cpal = { workspace = true }
 hex = { workspace = true }
+
+# Unix only, and for exactly one thing: muting fd 2 around the calls that reach
+# into a platform audio library. ALSA's C library writes its diagnostics
+# straight to stderr, which lands on top of the alternate screen and corrupts
+# the TUI (see `audio::QuietStderr`). Already in the tree via `cpal`.
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
