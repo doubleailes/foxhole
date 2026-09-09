@@ -350,3 +350,132 @@ fn dump_world_map() {
     term.draw(|f| crate::ui::render(f, &app)).unwrap();
     println!("{}", term.backend());
 }
+
+// --- Voice tool ------------------------------------------------------------------
+
+/// An app on the Voice tool with one callable peer.
+fn voice_app() -> crate::app::App {
+    use crate::app::{App, AppState, Tool, VoiceEvent};
+    let mut app = App::new();
+    // Force the console, as `map_app` does: under workspace feature unification
+    // core's `cfg!(test)` is false here, so it would otherwise boot to Splash
+    // and the splash would own the whole frame.
+    app.state = AppState::Running;
+    app.convs.items.clear();
+    app.active = Tool::Voice;
+    app.voice.local_identity = Some("ff".repeat(16));
+    app.apply_voice_event(VoiceEvent::Peer {
+        identity: "ab".repeat(16),
+        name: Some("bravo".to_string()),
+        hops: Some(2),
+    });
+    app
+}
+
+#[test]
+fn voice_tool_renders_roster_and_idle_hud() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let app = voice_app();
+    let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    term.draw(|f| crate::ui::render(f, &app)).unwrap();
+    let text = term.backend().to_string();
+
+    assert!(text.contains("Voice"), "tab strip lists the Voice tool");
+    assert!(text.contains("VOICE PEERS"), "roster panel title");
+    assert!(text.contains("bravo"), "roster lists the announced peer");
+    assert!(text.contains("CALL LOG"), "call-log panel title");
+    // The idle HUD must name the identity a peer dials, not the LXMF address —
+    // handing out the wrong one is a call that never connects.
+    assert!(
+        text.contains("lxst.telephony identity"),
+        "this-node header names the identity aspect"
+    );
+    assert!(text.contains("IDLE"), "idle HUD state");
+}
+
+#[test]
+fn voice_tool_renders_an_established_call_with_meters() {
+    use crate::app::{Call, CallDirection, CallPhase, VoiceEvent, VoiceProfile};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let mut app = voice_app();
+    let mut call = Call::new(
+        "ab".repeat(16),
+        Some("bravo".to_string()),
+        CallDirection::Outgoing,
+        0,
+    );
+    call.phase = CallPhase::Established;
+    call.profile = Some(VoiceProfile::QualityHigh);
+    call.connected_at = Some(crate::app::now_secs());
+    app.apply_voice_event(VoiceEvent::Call(Some(call)));
+    app.apply_voice_event(VoiceEvent::Levels { tx: 50, rx: 10 });
+
+    let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    term.draw(|f| crate::ui::render(f, &app)).unwrap();
+    let text = term.backend().to_string();
+
+    assert!(text.contains("ESTABLISHED"), "phase reads as a word");
+    assert!(text.contains("HQ"), "negotiated profile shown");
+    assert!(text.contains("TX"), "transmit meter labelled");
+    assert!(text.contains("RX"), "receive meter labelled");
+    assert!(text.contains("LIVE"), "microphone state shown");
+    // The meter's length carries the level, so it must actually draw blocks.
+    assert!(text.contains('\u{2588}'), "VU meters drew filled cells");
+    // The roster pane is ~38 columns, so the on-call marker is a pip rather
+    // than a word — it has to coexist with the name, hash and hop meter.
+    assert!(
+        text.contains('\u{25cf}'),
+        "roster pips the peer that is on the call"
+    );
+}
+
+#[test]
+fn voice_tool_shows_a_ringing_call_as_answerable() {
+    use crate::app::{Call, CallDirection, VoiceEvent};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let mut app = voice_app();
+    app.apply_voice_event(VoiceEvent::Call(Some(Call::new(
+        "ab".repeat(16),
+        Some("bravo".to_string()),
+        CallDirection::Incoming,
+        0,
+    ))));
+
+    let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    term.draw(|f| crate::ui::render(f, &app)).unwrap();
+    let text = term.backend().to_string();
+
+    assert!(text.contains("RINGING"), "ringing phase is spelled out");
+    // Before media is up the meters would read as a dead line, so they're
+    // replaced by an explicit note.
+    assert!(text.contains("no media yet"), "pre-media note");
+    assert!(text.contains("answer"), "the legend offers the answer key");
+}
+
+#[test]
+fn muted_transmit_meter_reads_empty_and_says_so() {
+    use crate::app::{Call, CallDirection, CallPhase, VoiceEvent};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let mut app = voice_app();
+    let mut call = Call::new("ab".repeat(16), None, CallDirection::Incoming, 0);
+    call.phase = CallPhase::Established;
+    app.apply_voice_event(VoiceEvent::Call(Some(call)));
+    app.voice.muted = true;
+    // A stale level from before the mute must not still light the meter.
+    app.apply_voice_event(VoiceEvent::Levels { tx: 90, rx: 0 });
+
+    let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    term.draw(|f| crate::ui::render(f, &app)).unwrap();
+    let text = term.backend().to_string();
+
+    assert!(text.contains("MUTED"), "mute state shown");
+    assert!(text.contains("muted"), "the TX meter is tagged muted");
+}

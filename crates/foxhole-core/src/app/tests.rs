@@ -1,6 +1,7 @@
 //! Unit tests for the `App` state machine and key routing.
 
 use super::*;
+use crate::app::voice::{VOICE_LOG_MAX, VOICE_PEERS_MAX};
 use crossterm::event::KeyEventState;
 
 /// A test event at a fixed instant (shared with the `intel`/`share`/`author`
@@ -1446,4 +1447,249 @@ fn start_conversation_rejects_bad_mnemonic_phrase() {
     let bad = "noodle payment vivid slogan gas ancient match hammer fever crisp timber crazy";
     assert!(!app.start_conversation(bad, ""));
     assert_eq!(app.convs.items.len(), before);
+}
+
+// --- Voice tool ------------------------------------------------------------------
+
+/// An app on the Voice tool with `n` callable peers and nothing else seeded.
+fn voice_app(n: usize) -> App {
+    let mut app = App::new();
+    app.convs.items.clear();
+    app.active = Tool::Voice;
+    for i in 0..n {
+        app.apply_voice_event(VoiceEvent::Peer {
+            identity: format!("{:02x}", i).repeat(16),
+            name: Some(format!("peer{i}")),
+            hops: Some(i as u8),
+        });
+    }
+    app
+}
+
+/// The voice commands queued so far, in order.
+fn voice_commands(app: &App) -> Vec<VoiceCommand> {
+    app.outbox
+        .commands
+        .iter()
+        .filter_map(|c| match c {
+            NetCommand::Voice(v) => Some(v.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn voice_enter_calls_the_selected_peer() {
+    let mut app = voice_app(2);
+    app.handle_key(press(KeyCode::Down));
+    app.handle_key(press(KeyCode::Enter));
+    assert_eq!(
+        voice_commands(&app),
+        vec![VoiceCommand::Call("01".repeat(16))]
+    );
+}
+
+#[test]
+fn voice_enter_answers_instead_of_dialling_while_ringing() {
+    // The overload is the whole point: a ringing phone must not place a second
+    // call because the cursor happened to be on someone else.
+    let mut app = voice_app(2);
+    app.apply_voice_event(VoiceEvent::Call(Some(Call::new(
+        "01".repeat(16),
+        None,
+        CallDirection::Incoming,
+        0,
+    ))));
+    app.handle_key(press(KeyCode::Enter));
+    assert_eq!(voice_commands(&app), vec![VoiceCommand::Answer]);
+}
+
+#[test]
+fn voice_refuses_a_second_call_while_busy() {
+    let mut app = voice_app(2);
+    app.apply_voice_event(VoiceEvent::Call(Some(Call::new(
+        "00".repeat(16),
+        None,
+        CallDirection::Outgoing,
+        0,
+    ))));
+    // An established call: Enter must not dial the highlighted peer.
+    let mut established = app.voice.call.clone().unwrap();
+    established.phase = CallPhase::Established;
+    app.apply_voice_event(VoiceEvent::Call(Some(established)));
+    app.handle_key(press(KeyCode::Enter));
+    assert!(voice_commands(&app).is_empty());
+}
+
+#[test]
+fn voice_hangup_is_a_noop_when_idle() {
+    // Otherwise every stray Esc would queue a hangup for a call that isn't there.
+    let mut app = voice_app(1);
+    app.handle_key(press(KeyCode::Esc));
+    app.handle_key(press(KeyCode::Char('h')));
+    assert!(voice_commands(&app).is_empty());
+}
+
+#[test]
+fn voice_hangup_covers_ringing_and_established_alike() {
+    for phase in [CallPhase::Ringing, CallPhase::Established] {
+        let mut app = voice_app(1);
+        let mut call = Call::new("00".repeat(16), None, CallDirection::Incoming, 0);
+        call.phase = phase;
+        app.apply_voice_event(VoiceEvent::Call(Some(call)));
+        app.handle_key(press(KeyCode::Char('h')));
+        assert_eq!(
+            voice_commands(&app),
+            vec![VoiceCommand::Hangup],
+            "{phase:?}"
+        );
+    }
+}
+
+#[test]
+fn voice_mute_toggles_and_reports_both_ways() {
+    let mut app = voice_app(1);
+    app.handle_key(press(KeyCode::Char('m')));
+    assert!(app.voice.muted);
+    app.handle_key(press(KeyCode::Char('m')));
+    assert!(!app.voice.muted);
+    assert_eq!(
+        voice_commands(&app),
+        vec![VoiceCommand::SetMuted(true), VoiceCommand::SetMuted(false)]
+    );
+}
+
+#[test]
+fn voice_a_new_call_always_starts_unmuted() {
+    // Carrying a mute across calls is how an operator talks into a dead
+    // microphone for the first ten seconds of the next one.
+    let mut app = voice_app(1);
+    app.handle_key(press(KeyCode::Char('m')));
+    assert!(app.voice.muted);
+    app.apply_voice_event(VoiceEvent::Call(Some(Call::new(
+        "00".repeat(16),
+        None,
+        CallDirection::Incoming,
+        0,
+    ))));
+    assert!(!app.voice.muted);
+}
+
+#[test]
+fn voice_profile_cycle_skips_unsupported_and_requests_it() {
+    let mut app = voice_app(1);
+    let before = app.voice.profile;
+    app.handle_key(press(KeyCode::Char('p')));
+    assert_ne!(app.voice.profile, before);
+    assert!(app.voice.profile.is_supported());
+    assert_eq!(
+        voice_commands(&app),
+        vec![VoiceCommand::SetProfile(app.voice.profile)]
+    );
+}
+
+#[test]
+fn voice_adopts_the_negotiated_profile() {
+    // So the next call opens on what actually worked rather than re-proposing
+    // one the peer already renegotiated away from.
+    let mut app = voice_app(1);
+    let mut call = Call::new("00".repeat(16), None, CallDirection::Outgoing, 0);
+    call.phase = CallPhase::Established;
+    call.profile = Some(VoiceProfile::LatencyLow);
+    app.apply_voice_event(VoiceEvent::Call(Some(call)));
+    assert_eq!(app.voice.profile, VoiceProfile::LatencyLow);
+}
+
+#[test]
+fn voice_peer_upsert_refreshes_without_blanking_a_known_name() {
+    let mut app = voice_app(1);
+    let id = "00".repeat(16);
+    app.apply_voice_event(VoiceEvent::Peer {
+        identity: id.clone(),
+        name: None,
+        hops: Some(4),
+    });
+    assert_eq!(app.voice.peers.len(), 1);
+    let peer = &app.voice.peers[0];
+    assert_eq!(peer.name.as_deref(), Some("peer0"));
+    assert_eq!(peer.hops, Some(4));
+    assert_eq!(peer.identity, id);
+}
+
+#[test]
+fn voice_roster_is_bounded() {
+    let mut app = voice_app(0);
+    for i in 0..(VOICE_PEERS_MAX + 20) {
+        app.apply_voice_event(VoiceEvent::Peer {
+            identity: format!("{i:032x}"),
+            name: None,
+            hops: None,
+        });
+    }
+    assert_eq!(app.voice.peers.len(), VOICE_PEERS_MAX);
+}
+
+#[test]
+fn voice_call_end_clears_the_meters() {
+    // A frozen meter after a hangup reads as a live call at a glance.
+    let mut app = voice_app(1);
+    let mut call = Call::new("00".repeat(16), None, CallDirection::Incoming, 0);
+    call.phase = CallPhase::Established;
+    app.apply_voice_event(VoiceEvent::Call(Some(call)));
+    app.apply_voice_event(VoiceEvent::Levels { tx: 70, rx: 40 });
+    assert_eq!((app.voice.tx_level, app.voice.rx_level), (70, 40));
+
+    app.apply_voice_event(VoiceEvent::Ended("hung up".to_string()));
+    assert!(app.voice.call.is_none());
+    assert_eq!((app.voice.tx_level, app.voice.rx_level), (0, 0));
+}
+
+#[test]
+fn voice_levels_are_clamped() {
+    let mut app = voice_app(1);
+    app.apply_voice_event(VoiceEvent::Levels { tx: 250, rx: 101 });
+    assert_eq!((app.voice.tx_level, app.voice.rx_level), (100, 100));
+}
+
+#[test]
+fn voice_call_log_is_bounded() {
+    let mut app = voice_app(0);
+    for i in 0..(VOICE_LOG_MAX + 50) {
+        app.push_voice_log(format!("[VOX] line {i}"));
+    }
+    assert_eq!(app.voice.log.len(), VOICE_LOG_MAX);
+    // The tail is kept — the newest lines are the ones worth having.
+    assert!(
+        app.voice
+            .log
+            .last()
+            .unwrap()
+            .text
+            .contains(&format!("line {}", VOICE_LOG_MAX + 49))
+    );
+}
+
+#[test]
+fn conversations_ctrl_v_dials_by_destination_hash() {
+    // The Conversations roster only knows an LXMF destination hash, so it must
+    // send `CallPeer` (which the net layer resolves), never `Call`.
+    let dest = "cd".repeat(16);
+    let mut app = app_with_peer(&dest, Trust::Unknown);
+    app.active = Tool::Conversations;
+    app.handle_key(ctrl('v'));
+    assert_eq!(voice_commands(&app), vec![VoiceCommand::CallPeer(dest)]);
+    // …and it jumps to the Voice tool so the HUD is what's on screen.
+    assert_eq!(app.active, Tool::Voice);
+}
+
+#[test]
+fn voice_tool_is_in_the_tab_cycle() {
+    // Ctrl+N from Browser must reach Voice — the tab order is the only place
+    // the tool is discoverable.
+    let mut app = App::new();
+    app.active = Tool::Browser;
+    app.handle_key(ctrl('n'));
+    assert_eq!(app.active, Tool::Voice);
+    app.handle_key(ctrl('p'));
+    assert_eq!(app.active, Tool::Browser);
 }

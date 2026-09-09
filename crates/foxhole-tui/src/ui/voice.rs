@@ -19,8 +19,8 @@ use ratatui::widgets::Paragraph;
 use crate::app::{App, AudioStatus, Call, CallPhase, VoicePeer};
 
 use super::network::signal_meter;
-use super::style::{BORDER_LIVE, INK, base_style, fmt_time, styled_entry, tag_style, ts_style};
-use super::widgets::{NOSEL, SEL, count_tag, render_scrollback, tactical_block};
+use super::style::{BORDER_LIVE, INK, base_style, styled_entry, tag_style, ts_style};
+use super::widgets::{count_tag, render_scrollback, tactical_block};
 
 /// Placeholder for the roster when the voice stack isn't compiled in — distinct
 /// from "nobody has announced yet", which is what a `voice` build shows.
@@ -77,7 +77,7 @@ pub(super) fn render_voice(frame: &mut Frame, app: &App, area: Rect) {
 
     frame.render_widget(
         Paragraph::new(Line::styled(
-            "[Up/Dn] sel  [Enter] call/answer  [h/Esc] hang up  [m] mute  [p] profile  [a] announce",
+            "[Up/Dn] sel  [Enter] call/answer  [h/Esc] hang up  [m] mute  [p] profile  [a] announce  \u{25cf} on call",
             ts_style(),
         ))
         .style(base_style()),
@@ -105,16 +105,17 @@ fn render_roster(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(para, area);
 }
 
-/// One roster row: `▶ name       ident8.. HH:MM:SSZ  ▰▰▱▱ 2h`, with the row for
-/// the peer currently on a call flagged so the operator can see who they are
-/// talking to without reading the HUD.
+/// One roster row: `▶●name       ident8..  ▰▰▱▱ 2h`. The pip after the selection
+/// chevron marks the peer currently on a call.
+///
+/// Unlike the Network tab's peer row this carries no last-seen stamp, and the
+/// omission is deliberate rather than an oversight: the roster pane is ~38
+/// columns, which does not fit a name, a hash, a clock *and* the hop meter, and
+/// LXST re-announces only every three hours — so a last-seen clock is a poor
+/// liveness signal here, while the hop meter is exactly the "will this call
+/// connect" reading the operator is after.
 fn peer_row(peer: &VoicePeer, selected: bool, app: &App) -> Line<'static> {
-    let marker = if selected { SEL } else { NOSEL };
     let id8 = peer.identity.get(..8).unwrap_or(&peer.identity);
-    let ts = match peer.last_seen {
-        0 => "--:--:--".to_string(),
-        t => format!("{}Z", fmt_time(t)),
-    };
     let on_call = app
         .voice
         .call
@@ -126,12 +127,12 @@ fn peer_row(peer: &VoicePeer, selected: bool, app: &App) -> Line<'static> {
         Style::default()
     };
 
+    // Two fixed columns before the name — chevron then pip — so rows stay
+    // aligned whether or not either is lit.
+    let chevron = if selected { '\u{25b6}' } else { ' ' };
+    let pip = if on_call { '\u{25cf}' } else { ' ' };
     let mut spans = vec![Span::styled(
-        format!(
-            "{marker}{:<10.10} {id8}.. {ts}{}",
-            peer.label(),
-            if on_call { " [on call]" } else { "" }
-        ),
+        format!("{chevron}{pip}{:<10.10} {id8}..", peer.label()),
         row_style,
     )];
     // Hop count comes straight off the announce, so unlike the Network tab's
