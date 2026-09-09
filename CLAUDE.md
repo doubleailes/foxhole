@@ -11,8 +11,9 @@ Rust edition 2024. The UI shell is built; live networking is being wired in.
 
 A Cargo **workspace** splits the program into layers by dependency weight: the
 logic and rendering are dependency-light member crates under `crates/`, the heavy
-async/live-protocol stack is the optional `foxhole-net` crate, and the root binary
-only wires them to the tokio runtime. The boundary is compiler-enforced —
+async/live-protocol stacks are the optional `foxhole-net` (LXMF messaging) and
+`foxhole-voice` (LXST telephony + audio) crates, and the root binary only wires
+them to the tokio runtime. The boundary is compiler-enforced —
 `foxhole-core` *cannot* reach for tokio/ratatui/reticulum because they aren't in
 its manifest.
 
@@ -23,8 +24,10 @@ terminal, or networking. Fast to build, fully unit-tested.
 
 - `src/domain/` — the shared model every layer agrees on: `Conversation`,
   `Entry`, `MsgStatus`; the UI↔network events/commands (`NetEvent`,
-  `NetCommand`, `Outbound`, `PeerKind`); the Network/Browser registries (`Node`,
-  `PathProbe`, `NomadNode`, `Page`); and `intel.rs`'s `IntelRecord`/`IntelZone`
+  `NetCommand`, `Outbound`, `PeerKind`); the voice-call model (`Call`,
+  `CallPhase`, `VoiceCommand`/`VoiceEvent`, and `VoiceProfile` — a wire-value
+  mirror of `lxst_core::Profile`, kept here so the core builds without rsLXST);
+  the Network/Browser registries (`Node`, `PathProbe`, `NomadNode`, `Page`); and `intel.rs`'s `IntelRecord`/`IntelZone`
   (one received CoT object plus its provenance, with the derived queries the map,
   the roster, and the encrypted store all read). The geographic types
   `GeoPos`/`Zone` are re-exported here from `foxhole-map`. Carries no UI
@@ -40,7 +43,8 @@ terminal, or networking. Fast to build, fully unit-tested.
   overlays are enumerated as `Modal`, so `handle_key` routes to the open one in a
   single match rather than a hand-ordered chain of `is_some()` branches. `App`'s
   state is grouped into per-tool sub-structs with `pub` fields (`convs`, `net`,
-  `map`, `intel`, `browser`, plus the cross-cutting `Outbox` and `Modals`), each
+  `map`, `intel`, `browser`, `voice`, plus the cross-cutting `Outbox` and
+  `Modals`), each
   owning its defaults in a `new()`, with 14 genuinely top-level fields left flat;
   the measurement behind that split, the decisions taken, and where a new field
   belongs are `docs/app-state-decomposition.md`. Methods spanning groups
@@ -59,6 +63,13 @@ terminal, or networking. Fast to build, fully unit-tested.
     event from a local `zones.conf` zone and enqueues it (with a summary body)
     for a peer; `revoke_shared_zone` (P4) sends a `stale==time` revocation (same
     deterministic uid) so the peer's `apply_cot` revoke path drops it.
+  `voice.rs` is likewise only the App-level *binding* for the Voice tool —
+  the callable-peer roster, the call HUD state, and key→`VoiceCommand` routing.
+  It never invents call state: every transition arrives as `VoiceEvent::Call`
+  from the telephony task, which (via rsLXST's `TelephonyRuntimeCore`) is the
+  single authority on whether the line is busy. Note the addressing split —
+  Conversations dials by LXMF *destination* hash (`CallPeer`), the Voice roster
+  by *identity* hash (`Call`); see `docs/lxst-voice.md` §3.
   - `author.rs` — **what the operator draws** (P4): `AuthorForm` places/edits
     markers & zones of any affiliation into the live intel layer (map keys
     `a`/`e`) with lat/lon↔MGRS mirroring, and `remove_selected_intel` (`x`) drops
@@ -184,6 +195,12 @@ and `foxhole-cot` (inbound intel decode).
     `nomadnetwork.node`) and page fetching via `LinkClient::query` (spawned off
     the select loop), reported as `NetEvent::{NomadNode,Page}`.
   - `discovery.rs` — operator path probes and interface statistics.
+  - `voice.rs` — the LXST bridge. Always compiled: it resolves a
+    `CallPeer(destination hash)` to the identity hash LXST addresses, via the
+    announce-learned key cache (`dest → public key →
+    Identity::from_public_key().hash`), which only exists here. Under `voice` it
+    also owns the `foxhole-voice` task, spawned from `run_inner` because that is
+    the only place a live `transport_tx` and the identity both exist.
   - `codec.rs` / `telemetry.rs` — pure, unit-tested wire-format helpers
     (address/form/custom-field parsing; the Sideband location-telemetry codec —
     single fix, relayed stream, and the request command in both directions, so
@@ -217,6 +234,40 @@ and `foxhole-cot` (inbound intel decode).
   and read → decrypt into `Missing`/`Plain`/`Corrupt`). Keeps the two stores from
   drifting on what a durable — or a corrupt — file means.
 
+### `crates/foxhole-voice` — live LXST voice layer (`voice` feature)
+
+Point-to-point Opus telephony over Reticulum, built on **rsLXST** and pulled in
+only when the binary's `voice` feature reaches it through `foxhole-net`. Depends
+on `foxhole-core` (the voice vocabulary), `lxst-core`/`lxst-telephony`,
+`rns-identity`/`rns-transport`, and `cpal`.
+
+- `src/lib.rs` — one async task: bring up rsLXST's `TelephonyService` on the
+  transport `foxhole-net` already established, then a single `select!` loop
+  translating `VoiceCommand` ↔ `TelephonyControl` and `TelephonyServiceEvent` →
+  `VoiceEvent`. It sits on `TelephonyService` deliberately — rsLXST marks the
+  endpoint/runtime types below it as implementation-level SPI, and re-deriving
+  call state from raw Reticulum traffic would lose the exact-interface binding
+  the service enforces. The `Snapshot` event is the authority for call phase;
+  the discrete events only supply the link id, the remote identity, and log
+  lines. Also owns the roster: `lxst.telephony` announces, each validated by
+  re-deriving the destination hash from the announced key before it is listed.
+- `src/audio.rs` — the half rsLXST leaves to applications ("applications still
+  own capture/playback and resampling into `RawAudioFrame`"). A streaming linear
+  `Resampler` that carries fractional position across callback boundaries (so
+  chunking cannot change the output count and slide the packet cadence against
+  the device clock), a mono fold, peak metering, and one `std::thread` per
+  `cpal::Stream` because `Stream` is `!Send` on some hosts — dropping the handle
+  is what closes the device, so the microphone is open only during a call.
+  Callbacks never block: capture `try_send`s whole frames, playback drains a
+  bounded ring and pads with silence. Pure parts are unit-tested.
+
+Three non-obvious behaviours, all with the reasoning in `docs/lxst-voice.md`:
+no `StartOpusReceiveStream` (rsLXST emits `OpusFramesReceived` unconditionally,
+so registering one clones every frame into a channel we would discard); media
+reopens on a mid-call profile renegotiation (rsLXST stops the old streams, and a
+capture at the previous rate would feed a stream that no longer exists); and an
+answered-but-still-`Ringing` call is shown as `CONNECTING`.
+
 ### `foxhole` (root binary) — runtime wiring
 
 - `src/main.rs` — terminal lifecycle (raw mode, alt screen, panic-safe restore)
@@ -249,13 +300,27 @@ them with `dep.workspace = true`); bump by editing those (and the matching
 mirrors the Ratspeak reference client — see `docs/lxmf-integration.md` for the
 full binding.
 
+## Voice (the `voice` feature)
+
+Off by default and implies `net`: LXST telephony rides the same transport the
+LXMF stack brings up (one node, one set of announced paths), so `foxhole-net`
+owns the `foxhole-voice` task. Adds the `lxst-core`/`lxst-telephony` git deps —
+pinned by **commit** to rsLXST release v0.2.0, whose own `rns-*` sibling-path
+deps are redirected by a second root `[patch."…/rsLXST"]` table onto the same
+pinned rsReticulum commit, exactly as the rsLXMF patch does — plus a bundled
+Opus encoder and `cpal`. **On Debian/Ubuntu/Raspberry Pi OS the ALSA backend
+needs `libasound2-dev` installed to build.** The Voice tool itself is always
+compiled; without the feature it reports the stack as offline. Full binding in
+`docs/lxst-voice.md`.
+
 ## Commands
 
-The `splash`/`net` features are declared on the root binary and forwarded to the
-member crates, so drive everything from the workspace root.
+The `splash`/`net`/`voice` features are declared on the root binary and forwarded
+to the member crates, so drive everything from the workspace root.
 
 - Build: `cargo build` (release: `cargo build --release`)
 - Build with networking: `cargo build --features net` (fetches the pinned `rsReticulum`/`rsLXMF` git revs)
+- Build with voice: `cargo build --features voice` (implies `net`; also fetches `rsLXST` and needs `libasound2-dev` on Debian-family systems)
 - Run: `cargo run` (or `cargo run --features net`)
 - Test: `cargo test --workspace` (single test: `cargo test <name>`)
 - Lint: `cargo clippy --workspace --all-targets -- -D warnings`

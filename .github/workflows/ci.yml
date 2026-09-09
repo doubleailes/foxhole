@@ -1,8 +1,10 @@
 name: CI
 
 # Build, lint, format-check and test FoxHole on every push and PR. The matrix
-# covers both shipping configurations: the dependency-light offline default and
-# the `net` compartment (which fetches the pinned rsReticulum/rsLXMF git revs).
+# covers all three shipping configurations: the dependency-light offline
+# default, the `net` compartment (which fetches the pinned rsReticulum/rsLXMF
+# git revs), and `voice` (which adds rsLXST, a bundled Opus encoder and the
+# ALSA audio backend).
 on:
   push:
     branches: [master]
@@ -39,11 +41,19 @@ jobs:
             flags: ""
           - name: net
             flags: "--features net"
+          - name: voice
+            flags: "--features voice"
+            # cpal's ALSA backend needs the headers; the runner image ships the
+            # runtime library but not the -dev package.
+            apt: libasound2-dev
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      - name: system dependencies
+        if: matrix.apt != ''
+        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.apt }}
       - uses: Swatinem/rust-cache@v2
       - name: clippy
         run: cargo clippy --workspace --all-targets ${{ matrix.flags }} -- -D warnings

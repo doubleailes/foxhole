@@ -359,6 +359,10 @@ async fn run_inner(
                 // Cache the peer's key + hop count so we can reach it later (path
                 // responses carry these too, hence no is_path_response guard here).
                 learn_announce(&mut tx, &ev);
+                // The same announce labels the peer for voice: LXST's telephony
+                // announce carries no name, but this one does and both aspects
+                // hang off the same identity.
+                voice::learn_alias(&ev, events).await;
                 if !ev.is_path_response {
                     let name = ev.app_data.as_deref()
                         .and_then(lxmf_core::handlers::display_name_from_app_data);

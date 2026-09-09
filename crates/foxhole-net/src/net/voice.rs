@@ -20,6 +20,7 @@
 use tokio::sync::mpsc;
 
 use foxhole_core::app::{NetEvent, VoiceCommand, VoiceEvent};
+use rns_transport::messages::AnnounceHandlerEvent;
 
 use super::peers::PeerCache;
 
@@ -128,6 +129,43 @@ impl VoiceLink {
 
 /// What the operator is told when the voice stack isn't in the build.
 const OFFLINE: &str = "[VOX] [WRN] voice offline — rebuild with --features voice";
+
+/// Report a display name heard on an `lxmf.delivery` announce against the
+/// *identity* behind it, so the Voice roster can label a callable peer.
+///
+/// LXST's telephony announce carries no app data — there is no display name on
+/// that aspect at all — but both aspects hang off one key pair, so the name a
+/// peer publishes for messaging is the same peer. This is the only place that
+/// correlation is cheap: the announce carries the public key the identity hash
+/// derives from.
+///
+/// Note this is not a roster entry. Hearing an LXMF announce says nothing about
+/// whether that node can take a call.
+pub(crate) async fn learn_alias(ev: &AnnounceHandlerEvent, events: &mpsc::Sender<NetEvent>) {
+    let Some(pk) = ev.public_key else { return };
+    let Some(name) = ev
+        .app_data
+        .as_deref()
+        .and_then(lxmf_core::handlers::display_name_from_app_data)
+    else {
+        return;
+    };
+    // Peer-supplied text reaching the UI: refuse anything with control
+    // characters rather than letting it near the terminal.
+    let name = name.trim().to_string();
+    if name.is_empty() || name.chars().any(|c| c.is_control()) {
+        return;
+    }
+    let Ok(identity) = rns_identity::identity::Identity::from_public_key(&pk) else {
+        return;
+    };
+    let _ = events
+        .send(NetEvent::Voice(VoiceEvent::Alias {
+            identity: hex::encode(identity.hash),
+            name,
+        }))
+        .await;
+}
 
 /// Resolve an LXMF destination hash (hex) to the owning identity's hash (hex),
 /// via the announce-learned public key. `None` when the hash is malformed or we

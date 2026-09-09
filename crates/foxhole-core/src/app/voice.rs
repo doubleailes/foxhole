@@ -43,6 +43,10 @@ pub struct VoiceState {
     pub rx_level: u8,
     /// Call-history scrollback (`[VOX]` lines), newest last.
     pub log: Vec<Entry>,
+    /// Display names by hex identity hash, learned from `lxmf.delivery`
+    /// announces (LXST's own announce carries none). Kept apart from the roster
+    /// because an alias says a peer *has* a name, not that it can take a call.
+    pub aliases: HashMap<String, String>,
 }
 
 /// Cap on the voice roster. `lxst.telephony` announces are as cheap to mint as
@@ -68,6 +72,7 @@ impl VoiceState {
             tx_level: 0,
             rx_level: 0,
             log: Vec::new(),
+            aliases: HashMap::new(),
         }
     }
 
@@ -234,6 +239,7 @@ impl App {
                 name,
                 hops,
             } => self.upsert_voice_peer(identity, name, hops),
+            VoiceEvent::Alias { identity, name } => self.learn_voice_alias(identity, name),
             VoiceEvent::Local(identity) => self.voice.local_identity = Some(identity),
             VoiceEvent::Call(call) => self.set_call(call),
             VoiceEvent::Ended(reason) => {
@@ -292,12 +298,35 @@ impl App {
         if previous.is_none() && call.is_some() {
             self.voice.muted = false;
         }
+        // Label the call from the alias table when the task had no name for it.
+        let mut call = call;
+        if let Some(c) = call.as_mut()
+            && c.name.is_none()
+        {
+            c.name = self.voice.aliases.get(&c.peer).cloned();
+        }
         // Track the negotiated profile so the next call opens on what actually
         // worked rather than re-proposing one the peer already renegotiated.
         if let Some(p) = call.as_ref().and_then(|c| c.profile) {
             self.voice.profile = p;
         }
         self.voice.call = call;
+    }
+
+    /// Record a display name for an identity and apply it to whatever already
+    /// refers to that identity — the roster entry and the call in progress —
+    /// so a name learned mid-call is not stuck showing a hash until the next
+    /// announce.
+    fn learn_voice_alias(&mut self, identity: String, name: String) {
+        if let Some(peer) = self.voice.peers.iter_mut().find(|p| p.identity == identity) {
+            peer.name = Some(name.clone());
+        }
+        if let Some(call) = self.voice.call.as_mut()
+            && call.peer == identity
+        {
+            call.name = Some(name.clone());
+        }
+        self.voice.aliases.insert(identity, name);
     }
 
     /// Record/refresh a voice-capable peer, keyed by hex identity hash.
@@ -314,6 +343,9 @@ impl App {
             peer.last_seen = now;
             return;
         }
+        // Fall back to a name learned from the peer's LXMF announce, so the
+        // roster reads "alice" rather than a hash whenever we know one.
+        let name = name.or_else(|| self.voice.aliases.get(&identity).cloned());
         self.voice.peers.push(VoicePeer {
             identity,
             name,
