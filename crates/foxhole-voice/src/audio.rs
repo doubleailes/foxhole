@@ -23,7 +23,9 @@
 //!    call to forget.
 //!
 //! A missing or unusable device is reported, never fatal: a call still signals
-//! and connects with no audio path, which is what a headless relay wants.
+//! and connects with no audio path, which is what a headless relay wants — but
+//! see [`QuietStderr`] for what it takes to keep that report from wrecking the
+//! display on the way out.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -47,6 +49,68 @@ const CAPTURE_QUEUE_FRAMES: usize = 8;
 /// the oldest audio is discarded rather than letting one slow patch add
 /// permanent delay to the rest of the call.
 const PLAYBACK_MAX_MS: usize = 400;
+
+/// Silences file descriptor 2 for as long as it is alive, restoring it on drop.
+///
+/// ALSA's C library writes its diagnostics straight to stderr, bypassing every
+/// Rust logging path — and on a machine with no sound card, an unusual
+/// `.asoundrc`, or inside a container, opening the default device produces
+/// half a screen of them. FoxHole runs full-screen on the alternate buffer, so
+/// that output lands directly on top of the console and corrupts the display,
+/// with no redraw to clean it up. Losing those lines is the right trade: they
+/// describe a condition the operator is already told about, in the Voice tool's
+/// audio status, in terms that mean something.
+///
+/// Wrapped around the device calls only, not installed process-wide, so nothing
+/// else FoxHole writes is affected. It does briefly redirect a process-global
+/// descriptor, but the window is one device open and the TUI writes to stdout,
+/// never stderr. On non-Unix this is a no-op — WASAPI and CoreAudio do not do
+/// this.
+struct QuietStderr {
+    /// The saved descriptor to restore, if the redirect took.
+    #[cfg(unix)]
+    saved: Option<libc::c_int>,
+}
+
+impl QuietStderr {
+    #[cfg(unix)]
+    fn new() -> Self {
+        // Every step is best-effort: failing to mute stderr must never stop a
+        // call from being placed.
+        let saved = unsafe {
+            let saved = libc::dup(libc::STDERR_FILENO);
+            if saved < 0 {
+                return Self { saved: None };
+            }
+            let null = libc::open(c"/dev/null".as_ptr(), libc::O_WRONLY);
+            if null < 0 {
+                libc::close(saved);
+                return Self { saved: None };
+            }
+            libc::dup2(null, libc::STDERR_FILENO);
+            libc::close(null);
+            Some(saved)
+        };
+        Self { saved }
+    }
+
+    #[cfg(not(unix))]
+    fn new() -> Self {
+        Self {}
+    }
+}
+
+impl Drop for QuietStderr {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        if let Some(saved) = self.saved.take() {
+            unsafe {
+                libc::dup2(saved, libc::STDERR_FILENO);
+                libc::close(saved);
+            }
+        }
+    }
+}
 
 /// Linear-interpolation resampler for a single mono stream.
 ///
@@ -222,6 +286,7 @@ impl Playback {
 /// without holding a capture stream open on an idle terminal, which is both a
 /// privacy question and a courtesy to whatever else wants the device.
 pub(crate) fn probe() -> Result<(), String> {
+    let _quiet = QuietStderr::new();
     let host = cpal::default_host();
     host.default_output_device()
         .ok_or_else(|| "no output device".to_string())?
@@ -239,6 +304,9 @@ pub(crate) fn probe() -> Result<(), String> {
 pub(crate) fn open_capture(
     profile: Profile,
 ) -> Result<(Capture, mpsc::Receiver<RawAudioFrame>), String> {
+    // Held across `spawn_stream` too — it blocks until the stream thread has
+    // built and started the device, so the guard covers that work as well.
+    let _quiet = QuietStderr::new();
     let host = cpal::default_host();
     let device = host
         .default_input_device()
@@ -291,6 +359,7 @@ pub(crate) fn open_capture(
 
 /// Open the speaker for `profile`.
 pub(crate) fn open_playback(profile: Profile) -> Result<Playback, String> {
+    let _quiet = QuietStderr::new();
     let host = cpal::default_host();
     let device = host
         .default_output_device()
