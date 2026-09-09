@@ -25,7 +25,7 @@
 //! The file is split into a shared toolkit ([`style`] colours/text helpers,
 //! [`widgets`] bordered panes + scroll), the chrome/overlays ([`chrome`],
 //! [`popups`]), and one module per tool body ([`conversations`], [`network`],
-//! [`browser`], [`views`]).
+//! [`browser`], [`voice`], [`views`]).
 
 mod browser;
 mod chrome;
@@ -38,6 +38,7 @@ mod style;
 #[cfg(test)]
 mod tests;
 mod views;
+mod voice;
 mod widgets;
 
 use ratatui::Frame;

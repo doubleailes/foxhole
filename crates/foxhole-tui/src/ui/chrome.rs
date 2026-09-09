@@ -16,6 +16,7 @@ use super::network::render_network;
 use super::notes::render_notes;
 use super::style::{ACCENT, BG, BORDER_LIVE, INK, PANEL, base_style, tag_style, ts_style};
 use super::views::{render_guide, render_interfaces, render_log};
+use super::voice::render_voice;
 use super::widgets::tactical_block;
 
 /// Top menu strip, styled as a HUD mode-selector: a brass `FOXHOLE` callsign
@@ -68,6 +69,7 @@ pub(super) fn render_tool(frame: &mut Frame, app: &App, area: Rect) {
         Tool::Network => render_network(frame, app, area),
         Tool::WorldMap => render_map(frame, app, area),
         Tool::Browser => render_browser(frame, app, area),
+        Tool::Voice => render_voice(frame, app, area),
         Tool::Log => render_log(frame, app, area),
         Tool::Interfaces => render_interfaces(frame, app, area),
         Tool::Notes => render_notes(frame, app, area),

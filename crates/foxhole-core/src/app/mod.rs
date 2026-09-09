@@ -7,18 +7,19 @@
 //! to draw. This keeps the hot render path trivial and the logic unit-testable.
 //!
 //! Two focus tiers mirror Nomadnet's layout:
-//!   * **Tool** — the active top-level tab (Conversations, Network, Log,
-//!     Interfaces, Guide), switched with Ctrl+N / Ctrl+P.
+//!   * **Tool** — the active top-level tab (Conversations, Network, Map,
+//!     Browser, Voice, Log, Interfaces, Notes, Guide), switched with
+//!     Ctrl+N / Ctrl+P.
 //!   * **Pane** — the focusable region *within* a tool, cycled with Tab. The
 //!     Conversations tool has three panes (peer list, thread, transmit); the
 //!     other tools are read-only single views.
 //!
 //! The struct lives here together with program-global key routing and the modal
 //! handlers; the per-tool behaviour is split into sibling modules
-//! ([`conversations`], [`network`], [`browser`], [`map`]) as further `impl App`
-//! blocks, the intel layer into [`intel`] (ingest + review), [`share`] (sending
-//! it out), and [`author`] (drawing it in), and the cold-boot/scroll machinery
-//! into [`boot`].
+//! ([`conversations`], [`network`], [`browser`], [`map`], [`voice`]) as further
+//! `impl App` blocks, the intel layer into [`intel`] (ingest + review),
+//! [`share`] (sending it out), and [`author`] (drawing it in), and the
+//! cold-boot/scroll machinery into [`boot`].
 
 mod author;
 mod boot;
@@ -30,6 +31,7 @@ mod network;
 mod share;
 #[cfg(test)]
 mod tests;
+mod voice;
 
 use std::collections::{HashMap, VecDeque};
 
@@ -37,9 +39,10 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use crate::config::Config;
 pub use crate::domain::{
-    Conversation, Entry, GeoPos, IntelRecord, IntelZone, Interface, MsgStatus, NetCommand,
-    NetEvent, Node, NomadNode, Outbound, Page, PageStatus, PathProbe, PeerKind, Trust, Zone,
-    fmt_bitrate, fmt_bytes, path_summary,
+    AudioStatus, Call, CallDirection, CallPhase, Conversation, Entry, GeoPos, IntelRecord,
+    IntelZone, Interface, MsgStatus, NetCommand, NetEvent, Node, NomadNode, Outbound, Page,
+    PageStatus, PathProbe, PeerKind, Trust, VoiceCommand, VoiceEvent, VoicePeer, VoiceProfile,
+    Zone, fmt_bitrate, fmt_bytes, now_secs, path_summary,
 };
 pub use crate::notes::Notes;
 // World Map domain types, surfaced through `app` so the UI and binary reach them
@@ -56,6 +59,7 @@ pub use intel::{IntelReview, IntelState};
 pub use map::{GotoMgrs, MapState};
 pub use network::NetworkState;
 pub use share::ShareZone;
+pub use voice::VoiceState;
 
 // Re-exported so the renderer (and the binary) reach the CoT model through
 // `crate::app::…` without each crate depending on `foxhole-cot` directly.
@@ -209,6 +213,8 @@ pub enum Tool {
     WorldMap,
     /// Nomad Network page browser (micron pages served by `nomadnetwork.node`).
     Browser,
+    /// LXST voice calls: the telephony roster and the in-call HUD.
+    Voice,
     /// System/application log (banners, diagnostics).
     Log,
     /// Reticulum interface status.
@@ -222,11 +228,12 @@ pub enum Tool {
 impl Tool {
     /// Tab order, left to right. Drives both the menu strip and Ctrl+N/P
     /// cycling, so there is a single source of truth for ordering.
-    pub const ALL: [Tool; 8] = [
+    pub const ALL: [Tool; 9] = [
         Tool::Conversations,
         Tool::Network,
         Tool::WorldMap,
         Tool::Browser,
+        Tool::Voice,
         Tool::Log,
         Tool::Interfaces,
         Tool::Notes,
@@ -240,6 +247,7 @@ impl Tool {
             Tool::Network => "Network",
             Tool::WorldMap => "Map",
             Tool::Browser => "Browser",
+            Tool::Voice => "Voice",
             Tool::Log => "Log",
             Tool::Interfaces => "Interfaces",
             Tool::Notes => "Notes",
@@ -254,6 +262,7 @@ impl Tool {
             Tool::Network => "NET",
             Tool::WorldMap => "MAP",
             Tool::Browser => "WEB",
+            Tool::Voice => "VOX",
             Tool::Log => "LOG",
             Tool::Interfaces => "IFACE",
             Tool::Notes => "NOTE",
@@ -375,6 +384,8 @@ pub struct App {
     pub intel: IntelState,
     /// Browser tool state (Nomad Network nodes, page viewport, history).
     pub browser: BrowserState,
+    /// Voice tool state (LXST telephony roster, the call HUD, the meters).
+    pub voice: VoiceState,
     /// Scroll positions for the overflowing text panes (PageUp/PageDown/Home/End).
     pub guide_scroll: Scroll,
     pub log_scroll: Scroll,
@@ -438,6 +449,7 @@ impl App {
             map: MapState::new(),
             intel: IntelState::new(),
             browser: BrowserState::new(),
+            voice: VoiceState::new(),
             guide_scroll: Scroll::top(),
             log_scroll: Scroll::bottom(),
             local_address: None,
@@ -705,6 +717,7 @@ impl App {
             Tool::Network => self.handle_network_key(ctrl, key),
             Tool::WorldMap => self.handle_map_key(ctrl, key),
             Tool::Browser => self.handle_browser_key(key),
+            Tool::Voice => self.handle_voice_key(ctrl, key),
             Tool::Notes => self.handle_notes_key(ctrl, key),
             _ => {}
         }
