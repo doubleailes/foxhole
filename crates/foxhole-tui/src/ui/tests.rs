@@ -497,3 +497,52 @@ fn voice_lines_carry_their_own_severity() {
     assert_eq!(line_style("[VOX] call ended: hung up"), tag_style("VOX"));
     assert_ne!(line_style("[VOX] calling bravo"), tag_style("SYS"));
 }
+
+#[test]
+fn wrapped_call_log_still_shows_the_newest_entry() {
+    // Bottom-pinning used to count logical lines, not the rows they wrap to,
+    // so one long entry could push newer ones below the fold. Voice lines are
+    // exactly the long kind — "[VOX] [WRN] no audio devices (output config: …)".
+    use crate::app::VoiceEvent;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let mut app = voice_app();
+    for i in 0..4 {
+        app.apply_voice_event(VoiceEvent::Sys(format!(
+            "[VOX] [WRN] entry {i} with a deliberately long tail that will wrap \
+             several times over in a narrow pane, pushing later lines down"
+        )));
+    }
+    app.apply_voice_event(VoiceEvent::Sys("[VOX] NEWEST".to_string()));
+
+    // Narrow enough that the call-log pane wraps hard.
+    let mut term = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    term.draw(|f| crate::ui::render(f, &app)).unwrap();
+    let text = term.backend().to_string();
+
+    assert!(
+        text.contains("NEWEST"),
+        "the newest call-log entry must stay visible when earlier ones wrap"
+    );
+}
+
+#[test]
+fn wrapped_height_counts_word_wrapping_not_just_width() {
+    // Dividing line width by pane width under-counts whenever a word is pushed
+    // to the next row — and an under-count on a bottom-pinned pane hides the
+    // newest entries.
+    //
+    // "aaa bbb ccc" is 11 columns, so the naive count at width 6 is 2. Greedy
+    // word wrapping actually needs 3: "aaa bbb" is 7, so each word gets a row.
+    assert_eq!(wrapped_height(&[Line::raw("aaa bbb ccc")], 6), 3);
+
+    // Words that do fit share a row.
+    assert_eq!(wrapped_height(&[Line::raw("aa bb cc")], 8), 1);
+
+    // A word longer than the pane is split rather than overflowing.
+    assert_eq!(wrapped_height(&[Line::raw("abcdefghij")], 4), 3);
+
+    // Blank lines still occupy a row.
+    assert_eq!(wrapped_height(&[Line::raw("")], 10), 1);
+}

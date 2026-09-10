@@ -103,24 +103,53 @@ impl Drop for QuietStderr {
 }
 /// A running audio device. Dropping it stops the stream and joins its thread.
 struct DeviceThread {
-    /// Dropped to signal the stream thread to tear down; the thread is blocked
-    /// on the matching receiver.
-    _stop: std::sync::mpsc::Sender<()>,
+    /// Closing this is what tells the stream thread to tear down — it is parked
+    /// on the matching receiver, which only returns once every sender is gone.
+    ///
+    /// `Option` so [`Drop`] can *take* it: struct fields are dropped after the
+    /// `Drop::drop` body runs, so simply holding a `Sender` here and joining in
+    /// the body would park the joiner on a thread that is itself waiting for
+    /// that very sender to close. See the regression test at the bottom.
+    stop: Option<std::sync::mpsc::Sender<()>>,
     join: Option<std::thread::JoinHandle<()>>,
 }
 
 impl Drop for DeviceThread {
     fn drop(&mut self) {
-        // `_stop` is dropped with the struct, which wakes the thread's `recv`.
+        // Order matters: close the channel *first* so the thread's `recv`
+        // returns, and only then wait for it.
+        drop(self.stop.take());
         if let Some(join) = self.join.take() {
             let _ = join.join();
         }
     }
 }
 
+/// A slot the realtime error callback can drop a message into without
+/// blocking, for the telephony task to pick up on its next poll.
+///
+/// A device that dies mid-call (unplugged, backend restarted) otherwise leaves
+/// a call that is established, silent, and gives the operator no reason —
+/// indistinguishable from a peer who simply stopped talking. Same rationale as
+/// the mesh stack's delivery-proof tracing: an unreported failure is worse than
+/// a noisy one.
+pub(crate) type FaultSlot = Arc<Mutex<Option<String>>>;
+
+/// Record the first fault only. Later errors on a dying device are usually the
+/// same cause repeating, and the first one is the diagnostic.
+fn record_fault(slot: &FaultSlot, what: &str, err: cpal::StreamError) {
+    if let Ok(mut guard) = slot.lock()
+        && guard.is_none()
+    {
+        *guard = Some(format!("{what}: {err}"));
+    }
+}
+
 /// Live microphone capture for one call. Dropping it closes the device.
 pub(crate) struct Capture {
     _thread: DeviceThread,
+    /// First runtime stream error, if the device has failed.
+    fault: FaultSlot,
     /// Set by the UI's mute key. Read on the audio thread each callback, which
     /// then emits silence — keeping the packet cadence and the negotiated
     /// profile intact, so unmuting resumes instantly instead of renegotiating.
@@ -139,6 +168,11 @@ impl Capture {
     pub(crate) fn level(&self) -> u8 {
         self.level.load(Ordering::Relaxed)
     }
+
+    /// Take the first runtime stream error, if the microphone has failed.
+    pub(crate) fn take_fault(&self) -> Option<String> {
+        self.fault.lock().ok()?.take()
+    }
 }
 
 /// Live speaker playback for one call. Dropping it closes the device.
@@ -153,6 +187,8 @@ pub(crate) struct Playback {
     device_channels: usize,
     /// Most recent playback peak, 0–100, published for the RX meter.
     level: Arc<AtomicU8>,
+    /// First runtime stream error, if the device has failed.
+    fault: FaultSlot,
 }
 
 impl Playback {
@@ -178,13 +214,19 @@ impl Playback {
         let mut resampled = Vec::with_capacity(mono.len() * 2);
         self.resampler.process(&mono, &mut resampled);
 
-        if let Ok(mut ring) = self.ring.lock() {
-            for s in resampled {
-                // Duplicate mono across the device's channels.
-                for _ in 0..self.device_channels {
-                    ring.push_back(s);
-                }
+        // Interleave to the device's channel count *before* taking the lock.
+        // The output callback contends for this mutex on a realtime thread, so
+        // everything that can happen outside the critical section must: what is
+        // left is one extend and a bounded drain.
+        let mut interleaved = Vec::with_capacity(resampled.len() * self.device_channels);
+        for s in resampled {
+            for _ in 0..self.device_channels {
+                interleaved.push(s);
             }
+        }
+
+        if let Ok(mut ring) = self.ring.lock() {
+            ring.extend(interleaved);
             let overflow = ring.len().saturating_sub(self.capacity);
             if overflow > 0 {
                 ring.drain(..overflow);
@@ -196,26 +238,43 @@ impl Playback {
     pub(crate) fn level(&self) -> u8 {
         self.level.load(Ordering::Relaxed)
     }
+
+    /// Take the first runtime stream error, if the speaker has failed.
+    pub(crate) fn take_fault(&self) -> Option<String> {
+        self.fault.lock().ok()?.take()
+    }
 }
 
-/// Check that both a microphone and a speaker exist and report a usable default
+/// Check whether a microphone and a speaker exist and report a usable default
 /// configuration, without opening either.
 ///
 /// Deliberately non-invasive: it answers "will a call have audio?" at startup
 /// without holding a capture stream open on an idle terminal, which is both a
 /// privacy question and a courtesy to whatever else wants the device.
-pub(crate) fn probe() -> Result<(), String> {
+///
+/// Each direction is reported on its own — one missing device does not stop the
+/// other from carrying a call.
+pub(crate) fn probe() -> super::AudioProbe {
     let _quiet = QuietStderr::new();
     let host = cpal::default_host();
-    host.default_output_device()
-        .ok_or_else(|| "no output device".to_string())?
-        .default_output_config()
-        .map_err(|e| format!("output config: {e}"))?;
-    host.default_input_device()
-        .ok_or_else(|| "no input device".to_string())?
-        .default_input_config()
-        .map_err(|e| format!("input config: {e}"))?;
-    Ok(())
+    super::AudioProbe {
+        capture: host
+            .default_input_device()
+            .ok_or_else(|| "no input device".to_string())
+            .and_then(|d| {
+                d.default_input_config()
+                    .map(|_| ())
+                    .map_err(|e| format!("input config: {e}"))
+            }),
+        playback: host
+            .default_output_device()
+            .ok_or_else(|| "no output device".to_string())
+            .and_then(|d| {
+                d.default_output_config()
+                    .map(|_| ())
+                    .map_err(|e| format!("output config: {e}"))
+            }),
+    }
 }
 
 /// Open the microphone for `profile`, returning the capture handle and the
@@ -245,6 +304,8 @@ pub(crate) fn open_capture(
     let (tx, rx) = mpsc::channel::<RawAudioFrame>(CAPTURE_QUEUE_FRAMES);
     let muted = Arc::new(AtomicBool::new(false));
     let level = Arc::new(AtomicU8::new(0));
+    let fault: FaultSlot = Arc::new(Mutex::new(None));
+    let cb_fault = fault.clone();
 
     // Everything the callback owns, moved onto the stream thread.
     let cb = CaptureState {
@@ -260,15 +321,16 @@ pub(crate) fn open_capture(
     };
 
     let thread = spawn_stream("capture", move || match format {
-        SampleFormat::I16 => build_input::<i16>(&device, &config, cb),
-        SampleFormat::U16 => build_input::<u16>(&device, &config, cb),
-        SampleFormat::F32 => build_input::<f32>(&device, &config, cb),
+        SampleFormat::I16 => build_input::<i16>(&device, &config, cb, cb_fault),
+        SampleFormat::U16 => build_input::<u16>(&device, &config, cb, cb_fault),
+        SampleFormat::F32 => build_input::<f32>(&device, &config, cb, cb_fault),
         other => Err(format!("unsupported input sample format {other}")),
     })?;
 
     Ok((
         Capture {
             _thread: thread,
+            fault,
             muted,
             level,
         },
@@ -295,12 +357,14 @@ pub(crate) fn open_playback(profile: Profile) -> Result<Playback, String> {
 
     let ring: Arc<Mutex<VecDeque<f32>>> = Arc::new(Mutex::new(VecDeque::with_capacity(capacity)));
     let level = Arc::new(AtomicU8::new(0));
+    let fault: FaultSlot = Arc::new(Mutex::new(None));
     let cb_ring = ring.clone();
+    let cb_fault = fault.clone();
 
     let thread = spawn_stream("playback", move || match format {
-        SampleFormat::I16 => build_output::<i16>(&device, &config, cb_ring),
-        SampleFormat::U16 => build_output::<u16>(&device, &config, cb_ring),
-        SampleFormat::F32 => build_output::<f32>(&device, &config, cb_ring),
+        SampleFormat::I16 => build_output::<i16>(&device, &config, cb_ring, cb_fault),
+        SampleFormat::U16 => build_output::<u16>(&device, &config, cb_ring, cb_fault),
+        SampleFormat::F32 => build_output::<f32>(&device, &config, cb_ring, cb_fault),
         other => Err(format!("unsupported output sample format {other}")),
     })?;
 
@@ -311,6 +375,7 @@ pub(crate) fn open_playback(profile: Profile) -> Result<Playback, String> {
         resampler: Resampler::new(profile.sample_rate_hz(), device_rate),
         device_channels,
         level,
+        fault,
     })
 }
 
@@ -381,6 +446,7 @@ fn build_input<T>(
     device: &cpal::Device,
     config: &StreamConfig,
     mut state: CaptureState,
+    fault: FaultSlot,
 ) -> Result<cpal::Stream, String>
 where
     T: SizedSample,
@@ -395,11 +461,7 @@ where
                 scratch.extend(data.iter().map(|s| f32::from_sample(*s)));
                 state.feed(&scratch);
             },
-            |err| {
-                // Nothing useful to do from the audio thread; the operator sees
-                // the call itself fail if the device really is gone.
-                let _ = err;
-            },
+            move |err| record_fault(&fault, "microphone", err),
             None,
         )
         .map_err(|e| format!("build input stream: {e}"))
@@ -410,6 +472,7 @@ fn build_output<T>(
     device: &cpal::Device,
     config: &StreamConfig,
     ring: Arc<Mutex<VecDeque<f32>>>,
+    fault: FaultSlot,
 ) -> Result<cpal::Stream, String>
 where
     T: SizedSample + FromSample<f32>,
@@ -429,9 +492,7 @@ where
                     *slot = T::from_sample(sample);
                 }
             },
-            |err| {
-                let _ = err;
-            },
+            move |err| record_fault(&fault, "speaker", err),
             None,
         )
         .map_err(|e| format!("build output stream: {e}"))
@@ -473,7 +534,7 @@ where
 
     match ready_rx.recv() {
         Ok(Ok(())) => Ok(DeviceThread {
-            _stop: stop_tx,
+            stop: Some(stop_tx),
             join: Some(join),
         }),
         Ok(Err(e)) => {
@@ -484,5 +545,43 @@ where
             let _ = join.join();
             Err(format!("{what} thread died during setup"))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn device_thread_drop_does_not_deadlock() {
+        // The teardown handshake is easy to get exactly backwards: struct fields
+        // drop *after* the `Drop::drop` body, so joining before releasing the
+        // stop sender parks the dropper on a thread waiting for that sender to
+        // close. It cost a hang on every hangup once; this pins it.
+        //
+        // No device involved — this exercises the handshake alone, which is the
+        // part that was wrong.
+        let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
+        let join = std::thread::spawn(move || {
+            let _ = stop_rx.recv();
+        });
+        let device = DeviceThread {
+            stop: Some(stop_tx),
+            join: Some(join),
+        };
+
+        // Drop on a worker so a regression fails the test by timeout instead of
+        // hanging the whole suite.
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            drop(device);
+            let _ = done_tx.send(());
+        });
+        assert!(
+            done_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .is_ok(),
+            "dropping a DeviceThread deadlocked: the stop sender must close before the join"
+        );
     }
 }

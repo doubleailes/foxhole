@@ -1,7 +1,7 @@
 //! Unit tests for the `App` state machine and key routing.
 
 use super::*;
-use crate::app::voice::{VOICE_LOG_MAX, VOICE_PEERS_MAX};
+use crate::app::voice::{VOICE_ALIASES_MAX, VOICE_LOG_MAX, VOICE_PEERS_MAX};
 use crossterm::event::KeyEventState;
 
 /// A test event at a fixed instant (shared with the `intel`/`share`/`author`
@@ -1740,4 +1740,94 @@ fn voice_alias_arriving_late_relabels_roster_and_call() {
     // learned mid-call isn't stuck showing a hash until the next announce.
     assert_eq!(app.voice.peers[0].name.as_deref(), Some("bob"));
     assert_eq!(app.voice.call.as_ref().unwrap().label(), "bob");
+}
+
+#[test]
+fn voice_unmuting_for_a_new_call_is_told_to_the_task() {
+    // The task keeps its own mute flag and applies it when capture opens, so
+    // clearing only the UI flag would show a live microphone while the real one
+    // stayed muted.
+    let mut app = voice_app(1);
+    app.handle_key(press(KeyCode::Char('m')));
+    assert!(app.voice.muted);
+    app.outbox.commands.clear();
+
+    app.apply_voice_event(VoiceEvent::Call(Some(Call::new(
+        "00".repeat(16),
+        None,
+        CallDirection::Incoming,
+        0,
+    ))));
+    assert!(!app.voice.muted);
+    assert_eq!(
+        voice_commands(&app),
+        vec![VoiceCommand::SetMuted(false)],
+        "the task must be told the mute was cleared"
+    );
+}
+
+#[test]
+fn voice_new_call_while_unmuted_sends_no_redundant_command() {
+    let mut app = voice_app(1);
+    app.apply_voice_event(VoiceEvent::Call(Some(Call::new(
+        "00".repeat(16),
+        None,
+        CallDirection::Incoming,
+        0,
+    ))));
+    assert!(voice_commands(&app).is_empty());
+}
+
+#[test]
+fn voice_alias_table_is_bounded_but_keeps_what_is_on_screen() {
+    // Aliases come from *every* LXMF announce, not just callable peers, so the
+    // table grows faster than the roster it labels; announces are free to mint.
+    let mut app = voice_app(0);
+    let rostered = "aa".repeat(16);
+    app.apply_voice_event(VoiceEvent::Peer {
+        identity: rostered.clone(),
+        name: None,
+        hops: None,
+    });
+    app.apply_voice_event(VoiceEvent::Alias {
+        identity: rostered.clone(),
+        name: "kept".to_string(),
+    });
+
+    for i in 0..(VOICE_ALIASES_MAX + 50) {
+        app.apply_voice_event(VoiceEvent::Alias {
+            identity: format!("{i:032x}"),
+            name: format!("n{i}"),
+        });
+    }
+
+    assert!(app.voice.aliases.len() <= VOICE_ALIASES_MAX);
+    // The label actually on screen survives the trim.
+    assert_eq!(
+        app.voice.aliases.get(&rostered).map(String::as_str),
+        Some("kept")
+    );
+    assert_eq!(app.voice.peers[0].name.as_deref(), Some("kept"));
+}
+
+#[test]
+fn audio_status_reports_each_direction() {
+    // Collapsing a missing microphone into "no audio" would tell an operator
+    // with working speakers that the call carries nothing.
+    assert!(AudioStatus::Ready.has_audio());
+    assert!(AudioStatus::TransmitOnly("no speaker".into()).has_audio());
+    assert!(AudioStatus::ReceiveOnly("no mic".into()).has_audio());
+    assert!(!AudioStatus::Unavailable("no card".into()).has_audio());
+    assert!(!AudioStatus::Unknown.has_audio());
+
+    assert!(
+        AudioStatus::ReceiveOnly("no input device".into())
+            .summary()
+            .contains("receive only")
+    );
+    assert!(
+        AudioStatus::TransmitOnly("no output device".into())
+            .summary()
+            .contains("transmit only")
+    );
 }

@@ -186,35 +186,74 @@ pub(super) fn render_scrollback(
     active: bool,
     area: Rect,
 ) {
-    // Inner height excludes the top/bottom border rows. Offset so the last
-    // `inner_h` lines are shown (approximate for wrapped lines — fine here).
-    let inner_h = area.height.saturating_sub(2) as usize;
-    let scroll = lines.len().saturating_sub(inner_h) as u16;
-    let content = lines.len().min(u16::MAX as usize) as u16;
+    // Inner area excludes the border rows/columns. The offset counts *visual*
+    // rows, not logical lines: the paragraph wraps, so a single long entry can
+    // occupy several rows, and pinning by line count would leave the newest
+    // entries below the fold — exactly the case a wrapped `[VOX] [WRN] …` line
+    // in a narrow pane produces.
+    let inner_h = area.height.saturating_sub(2);
+    let inner_w = area.width.saturating_sub(2);
+    let content = wrapped_height(&lines, inner_w).min(u16::MAX as usize) as u16;
+    let scroll = content.saturating_sub(inner_h);
 
-    let tag = pos_tag(scroll, inner_h as u16, content);
+    let tag = pos_tag(scroll, inner_h, content);
     let para = Paragraph::new(lines)
         .block(tactical_block(title, Some(tag), active))
         .wrap(Wrap { trim: false })
         .scroll((scroll, 0));
     frame.render_widget(para, area);
-    render_scrollbar(frame, area, content, inner_h as u16, scroll);
+    render_scrollbar(frame, area, content, inner_h, scroll);
 }
 
-/// Total visual rows `lines` occupy once wrapped at `width` — so PageDown/End can
-/// reach the true bottom of wrapped content (line count alone under-counts).
+/// Total visual rows `lines` occupy once wrapped at `width` — so PageDown/End
+/// can reach the true bottom of wrapped content, and so a bottom-pinned pane
+/// pins to the real last row.
+///
+/// Counts the way ratatui's `Wrap` actually breaks: greedily at whitespace,
+/// splitting only words too long to fit on a line of their own. Dividing the
+/// line width by the pane width instead (the obvious approximation) *under*
+/// counts whenever a word is pushed to the next row, and an under-count on a
+/// bottom-pinned pane leaves the newest entries below the fold — which is
+/// precisely what a long `[VOX] [WRN] …` line in a narrow pane produces.
 pub(super) fn wrapped_height(lines: &[Line], width: u16) -> usize {
     if width == 0 {
         return lines.len();
     }
     let w = width as usize;
-    lines
-        .iter()
-        .map(|l| match l.width() {
-            0 => 1,
-            lw => lw.div_ceil(w),
-        })
-        .sum()
+    lines.iter().map(|l| wrapped_rows(&l.to_string(), w)).sum()
+}
+
+/// Rows one logical line occupies under greedy word wrapping at `width`.
+/// Always at least 1, so a blank line still takes a row.
+fn wrapped_rows(text: &str, width: usize) -> usize {
+    let mut rows = 1usize;
+    let mut col = 0usize;
+    for word in text.split_whitespace() {
+        let len = word.chars().count();
+        if col == 0 {
+            // A word wider than the pane is split across rows rather than
+            // overflowing, so it costs the rows it needs.
+            rows += len.saturating_sub(1) / width;
+            col = if len % width == 0 && len > 0 {
+                width
+            } else {
+                len % width
+            };
+            continue;
+        }
+        if col + 1 + len <= width {
+            col += 1 + len;
+        } else {
+            rows += 1;
+            rows += len.saturating_sub(1) / width;
+            col = if len % width == 0 && len > 0 {
+                width
+            } else {
+                len % width
+            };
+        }
+    }
+    rows
 }
 
 /// Render a scrollable text pane: like [`render_scrollback`] but driven by a
