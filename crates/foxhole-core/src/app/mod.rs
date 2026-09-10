@@ -18,13 +18,15 @@
 //! handlers; the per-tool behaviour is split into sibling modules
 //! ([`conversations`], [`network`], [`browser`], [`map`], [`voice`]) as further
 //! `impl App` blocks, the intel layer into [`intel`] (ingest + review),
-//! [`share`] (sending it out), and [`author`] (drawing it in), and the
-//! cold-boot/scroll machinery into [`boot`].
+//! [`share`] (sending it out), and [`author`] (drawing it in), the inbound
+//! network-event fold into [`events`], and the cold-boot/scroll machinery into
+//! [`boot`].
 
 mod author;
 mod boot;
 mod browser;
 mod conversations;
+mod events;
 mod intel;
 mod map;
 mod network;
