@@ -270,6 +270,14 @@ on `foxhole-core` (the voice vocabulary), `lxst-core`/`lxst-telephony`,
   bounded ring and pads with silence. The conversion maths is unit-tested in
   every configuration, backend or not.
 
+The telephony service task is **supervised, not detached**: it decodes inbound
+audio, and a wider-than-negotiated packet panics inside `opus-rs` (an upstream
+bounds bug a peer can trigger — `docs/lxst-voice.md` §9), so the join handle is
+kept and its death clears the call and tells the operator instead of leaving a
+line that never answers. `main`'s panic hook cooperates: a panic on a worker
+thread no longer restores the terminal and prints over the console, because the
+runtime survives it — those go to `{cfgdir}/panic.log`.
+
 Three non-obvious behaviours, all with the reasoning in `docs/lxst-voice.md`:
 no `StartOpusReceiveStream` (rsLXST emits `OpusFramesReceived` unconditionally,
 so registering one clones every frame into a channel we would discard); media

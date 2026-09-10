@@ -95,7 +95,13 @@ async fn run_inner(
         .map_err(|e| format!("register lxst.telephony: {e}"))?;
     let control = parts.control_tx.clone();
     let mut service_events = parts.event_rx;
-    tokio::spawn(parts.service.run());
+    // Kept, not detached. The service decodes inbound audio on this task, and
+    // a malformed or wider-than-negotiated packet can panic inside the Opus
+    // decoder (docs/lxst-voice.md §9) — a fault a peer can induce. Holding the
+    // handle turns that from a silently dead voice stack, whose next command
+    // would simply time out, into something the operator is told about while
+    // the messaging terminal carries on.
+    let mut service = tokio::spawn(parts.service.run());
 
     vox(
         events,
@@ -129,6 +135,10 @@ async fn run_inner(
                 }
             }
             Some(announce) = announces.recv() => session.announce(&announce, events).await,
+            joined = &mut service => {
+                session.service_died(joined.err(), events).await;
+                return Ok(());
+            }
             _ = level_tick.tick() => {
                 session.report_faults(events).await;
                 session.report_levels(events).await;
@@ -586,6 +596,32 @@ impl Session {
         let _ = events
             .send(NetEvent::Voice(VoiceEvent::Ended(reason)))
             .await;
+    }
+
+    /// The telephony service task ended — cleanly, or by panicking inside the
+    /// codec on a packet from the far end. Either way the line is gone: close
+    /// the devices, clear the call so the UI does not hold one it can never
+    /// end, and say plainly what happened.
+    async fn service_died(
+        &mut self,
+        err: Option<tokio::task::JoinError>,
+        events: &mpsc::Sender<NetEvent>,
+    ) {
+        let reason = match &err {
+            // A panic is upstream's, not the operator's; name it as a fault in
+            // the voice stack rather than as something they did, and point at
+            // where the detail was written.
+            Some(e) if e.is_panic() => {
+                "voice stack faulted (see panic.log) — calls unavailable until restart".to_string()
+            }
+            Some(_) => "voice stack cancelled".to_string(),
+            None => "voice stack stopped".to_string(),
+        };
+        if self.call.is_some() {
+            self.end(reason.clone(), events).await;
+        }
+        self.stop_media();
+        vox(events, format!("[VOX] [ERR] {reason}")).await;
     }
 
     /// Surface a device that failed mid-call. The realtime callbacks cannot
