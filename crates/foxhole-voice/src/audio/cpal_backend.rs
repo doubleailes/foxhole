@@ -1,31 +1,19 @@
-//! Platform audio: microphone capture and speaker playback, converted to and
-//! from the `RawAudioFrame`s rsLXST's Opus streams take.
+//! The `cpal` device backend: real microphone capture and speaker playback.
 //!
-//! rsLXST draws its boundary here deliberately — "applications still own
-//! capture/playback and resampling into `RawAudioFrame`" — so everything below
-//! is FoxHole's, and it is the only part of the voice feature that touches a
-//! device.
+//! Built only under the `audio` feature — see the module docs in `mod.rs` for
+//! why that gate exists rather than depending on `cpal` unconditionally.
 //!
-//! Three things make this more than a pair of `cpal` streams:
+//! Two constraints shape everything here:
 //!
-//!  * **Rate and channel conversion.** The negotiated LXST profile fixes the
-//!    codec's sample rate (8/24/48 kHz) and channel count; the device offers
-//!    whatever it offers. Both directions therefore run through [`Resampler`]
-//!    and a mono fold, rather than assuming a 48 kHz stereo device.
 //!  * **Callback discipline.** A `cpal` data callback runs on a realtime audio
 //!    thread: it must not allocate unboundedly, block, or panic. Capture does
-//!    its conversion into a buffer it owns and hands whole frames off with
+//!    its conversion into buffers it owns and hands whole frames off with
 //!    `try_send` (dropping, never blocking, if the consumer stalls); playback
 //!    drains a bounded ring and pads with silence on underrun.
 //!  * **Thread ownership.** `cpal::Stream` is `!Send` on some hosts, so each
 //!    stream lives on its own `std::thread` that parks until its handle drops.
 //!    Dropping the handle is what stops the device — there is no separate stop
-//!    call to forget.
-//!
-//! A missing or unusable device is reported, never fatal: a call still signals
-//! and connects with no audio path, which is what a headless relay wants — but
-//! see [`QuietStderr`] for what it takes to keep that report from wrecking the
-//! display on the way out.
+//!    call to forget, and it is why the microphone is open only during a call.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -35,6 +23,8 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, Sample, SampleFormat, SizedSample, StreamConfig};
 use lxst_core::{Profile, RawAudioFrame};
 use tokio::sync::mpsc;
+
+use super::{Resampler, peak_level, to_mono};
 
 /// How many captured frames may sit in the queue to the telephony task before
 /// the audio callback starts dropping them. Small on purpose: a backlog here is
@@ -111,77 +101,6 @@ impl Drop for QuietStderr {
         }
     }
 }
-
-/// Linear-interpolation resampler for a single mono stream.
-///
-/// Voice-band linear interpolation is not audiophile resampling, but it is
-/// cheap, allocation-free, and streams across callback boundaries — which is
-/// what matters when the alternative is a resampling crate in the hot path of a
-/// realtime thread. It carries the fractional read position and the previous
-/// sample between calls, so consecutive chunks join without a click.
-pub(crate) struct Resampler {
-    /// Input samples consumed per output sample (`from / to`).
-    step: f64,
-    /// Fractional position within the segment from `prev` to the next input.
-    pos: f64,
-    /// Last input sample seen, the left end of the current segment.
-    prev: f32,
-}
-
-impl Resampler {
-    /// A resampler from `from_hz` to `to_hz`. Both must be non-zero; a zero rate
-    /// (which a device should never report) degrades to pass-through rather
-    /// than dividing by zero on the audio thread.
-    pub(crate) fn new(from_hz: u32, to_hz: u32) -> Self {
-        let step = if from_hz == 0 || to_hz == 0 {
-            1.0
-        } else {
-            f64::from(from_hz) / f64::from(to_hz)
-        };
-        Self {
-            step,
-            pos: 0.0,
-            prev: 0.0,
-        }
-    }
-
-    /// Resample `input`, appending to `out`.
-    pub(crate) fn process(&mut self, input: &[f32], out: &mut Vec<f32>) {
-        for &sample in input {
-            // Each input advances virtual time by exactly 1; output samples are
-            // spaced `step` apart, so emit every output landing in [prev, sample).
-            while self.pos < 1.0 {
-                let t = self.pos as f32;
-                out.push(self.prev + (sample - self.prev) * t);
-                self.pos += self.step;
-            }
-            self.pos -= 1.0;
-            self.prev = sample;
-        }
-    }
-}
-
-/// Fold an interleaved device buffer down to one mono sample per frame.
-/// Averaging (rather than taking channel 0) keeps a microphone wired to only the
-/// right channel from coming through silent.
-pub(crate) fn to_mono(interleaved: &[f32], channels: usize, out: &mut Vec<f32>) {
-    if channels <= 1 {
-        out.extend_from_slice(interleaved);
-        return;
-    }
-    for frame in interleaved.chunks_exact(channels) {
-        out.push(frame.iter().sum::<f32>() / channels as f32);
-    }
-}
-
-/// Peak level of a mono buffer as 0–100, for the VU meters. Peak rather than
-/// RMS: a meter is being read at a glance to answer "is my microphone live and
-/// am I clipping", and RMS lags both.
-pub(crate) fn peak_level(samples: &[f32]) -> u8 {
-    let peak = samples.iter().fold(0.0f32, |m, s| m.max(s.abs()));
-    (peak.clamp(0.0, 1.0) * 100.0).round() as u8
-}
-
 /// A running audio device. Dropping it stops the stream and joins its thread.
 struct DeviceThread {
     /// Dropped to signal the stream thread to tear down; the thread is blocked
@@ -565,98 +484,5 @@ where
             let _ = join.join();
             Err(format!("{what} thread died during setup"))
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn resampler_halves_rate() {
-        // 48 kHz -> 24 kHz: one output per two inputs.
-        let mut r = Resampler::new(48_000, 24_000);
-        let mut out = Vec::new();
-        r.process(&[0.0; 100], &mut out);
-        assert_eq!(out.len(), 50);
-    }
-
-    #[test]
-    fn resampler_doubles_rate() {
-        let mut r = Resampler::new(24_000, 48_000);
-        let mut out = Vec::new();
-        r.process(&[0.0; 100], &mut out);
-        assert_eq!(out.len(), 200);
-    }
-
-    #[test]
-    fn resampler_streams_across_chunks_without_drift() {
-        // The whole point of carrying `pos`/`prev` is that chunking the input
-        // must not change the output count — otherwise the packet cadence
-        // slowly slides against the device clock over a long call.
-        let mut whole = Resampler::new(44_100, 24_000);
-        let mut a = Vec::new();
-        whole.process(&[0.5; 4410], &mut a);
-
-        let mut chunked = Resampler::new(44_100, 24_000);
-        let mut b = Vec::new();
-        for chunk in [0.5f32; 4410].chunks(441) {
-            chunked.process(chunk, &mut b);
-        }
-        assert_eq!(a.len(), b.len());
-        assert_eq!(a, b);
-    }
-
-    #[test]
-    fn resampler_interpolates_between_samples() {
-        // Upsampling a step must produce the midpoint, not a repeat — that is
-        // the difference between interpolation and nearest-neighbour.
-        let mut r = Resampler::new(1_000, 2_000);
-        let mut out = Vec::new();
-        r.process(&[1.0], &mut out);
-        // From prev=0.0 toward 1.0: emits 0.0 then 0.5.
-        assert_eq!(out.len(), 2);
-        assert!((out[0] - 0.0).abs() < 1e-6);
-        assert!((out[1] - 0.5).abs() < 1e-6);
-    }
-
-    #[test]
-    fn resampler_survives_a_zero_rate() {
-        // A device reporting 0 Hz would otherwise divide by zero on the audio
-        // thread; degrade to pass-through instead.
-        let mut r = Resampler::new(0, 48_000);
-        let mut out = Vec::new();
-        r.process(&[0.25; 10], &mut out);
-        assert_eq!(out.len(), 10);
-    }
-
-    #[test]
-    fn mono_fold_averages_channels() {
-        let mut out = Vec::new();
-        to_mono(&[1.0, 0.0, 0.5, 0.5], 2, &mut out);
-        assert_eq!(out, vec![0.5, 0.5]);
-
-        // A one-channel device passes straight through.
-        let mut mono = Vec::new();
-        to_mono(&[0.1, 0.2], 1, &mut mono);
-        assert_eq!(mono, vec![0.1, 0.2]);
-    }
-
-    #[test]
-    fn mono_fold_keeps_a_single_hot_channel_audible() {
-        // Taking channel 0 instead of averaging would render this silent.
-        let mut out = Vec::new();
-        to_mono(&[0.0, 1.0], 2, &mut out);
-        assert_eq!(out, vec![0.5]);
-    }
-
-    #[test]
-    fn peak_level_scales_and_clamps() {
-        assert_eq!(peak_level(&[]), 0);
-        assert_eq!(peak_level(&[0.0, 0.0]), 0);
-        assert_eq!(peak_level(&[0.5, -0.25]), 50);
-        // Negative peaks count, and over-unity input clamps rather than wrapping.
-        assert_eq!(peak_level(&[-1.0]), 100);
-        assert_eq!(peak_level(&[4.0]), 100);
     }
 }

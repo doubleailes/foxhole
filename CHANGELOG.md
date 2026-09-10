@@ -23,8 +23,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     peer's **identity** hash, and `Ctrl+V` resolves an `lxmf.delivery`
     destination hash to one through the announce-learned key cache.
   - Microphone capture and speaker playback via `cpal`, with streaming rate and
-    channel conversion to whatever profile is negotiated. On Debian-family
-    systems the ALSA backend needs `libasound2-dev` at build time.
+    channel conversion to whatever profile is negotiated. The backend sits
+    behind `foxhole-voice`'s own default-off `audio` feature, so `--workspace`
+    builds and tests still need no system libraries; only `--features voice`
+    pulls ALSA, which on Debian-family systems needs `libasound2-dev` at build
+    time. Without it voice runs signalling-only.
   - Missing audio devices are reported, not fatal: a call still signals and
     connects with no audio path.
 
