@@ -38,10 +38,14 @@ terminal, or networking. Fast to build, fully unit-tested.
   within a tool (PeerList / Thread / Transmit, cycled with Tab). The struct +
   program-global key routing + modals live in `mod.rs`; per-tool behaviour is
   split into sibling `impl App` blocks (`conversations.rs`, `network.rs`,
-  `browser.rs`, `map.rs`, and the three intel modules below) and the
-  cold-boot/scroll machinery into `boot.rs`. Free of I/O and rendering. Modal
-  overlays are enumerated as `Modal`, so `handle_key` routes to the open one in a
-  single match rather than a hand-ordered chain of `is_some()` branches. `App`'s
+  `browser.rs`, `map.rs`, and the three intel modules below), the inbound
+  network-event fold into `events.rs` (`App::apply_net_event` — the one place a
+  `NetEvent` is routed to the state that owns it, so `main` hands the whole
+  event over and a new variant is a non-exhaustive-match error here rather than
+  in the runtime wiring), and the cold-boot/scroll machinery into `boot.rs`.
+  Free of I/O and rendering. Modal overlays are enumerated as `Modal`, so
+  `handle_key` routes to the open one in a single match rather than a
+  hand-ordered chain of `is_some()` branches. `App`'s
   state is grouped into per-tool sub-structs with `pub` fields (`convs`, `net`,
   `map`, `intel`, `browser`, `voice`, plus the cross-cutting `Outbox` and
   `Modals`), each
@@ -289,7 +293,9 @@ answered-but-still-`Ringing` call is shown as `CONNECTING`.
 
 - `src/main.rs` — terminal lifecycle (raw mode, alt screen, panic-safe restore)
   and the single async `select!` event loop multiplexing keyboard input and
-  inbound network events. Holds no UI or state rules. Re-exports the member crates
+  inbound network events. Holds no UI or state rules — an inbound event goes
+  straight to `App::apply_net_event` (core's `app/events.rs`), never matched on
+  here. Re-exports the member crates
   under `crate::app`/`crate::config`/`crate::burn` and, under `net`, imports
   `foxhole_net::{net, store, intel_store}` so its call sites read unchanged.
   The two things that differ between an offline and a `net` build are isolated
