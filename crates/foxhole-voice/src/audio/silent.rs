@@ -28,6 +28,10 @@ impl Capture {
     pub(crate) fn level(&self) -> u8 {
         0
     }
+
+    pub(crate) fn take_fault(&self) -> Option<String> {
+        None
+    }
 }
 
 /// Stand-in for a speaker. Never constructed; see [`Capture`].
@@ -39,10 +43,17 @@ impl Playback {
     pub(crate) fn level(&self) -> u8 {
         0
     }
+
+    pub(crate) fn take_fault(&self) -> Option<String> {
+        None
+    }
 }
 
-pub(crate) fn probe() -> Result<(), String> {
-    Err(NO_BACKEND.to_string())
+pub(crate) fn probe() -> super::AudioProbe {
+    super::AudioProbe {
+        capture: Err(NO_BACKEND.to_string()),
+        playback: Err(NO_BACKEND.to_string()),
+    }
 }
 
 pub(crate) fn open_capture(

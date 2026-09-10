@@ -46,6 +46,32 @@ pub(crate) use cpal_backend::{Capture, Playback, open_capture, open_playback, pr
 #[cfg(not(feature = "audio"))]
 pub(crate) use silent::{Capture, Playback, open_capture, open_playback, probe};
 
+use foxhole_core::app::AudioStatus;
+
+/// Startup readiness of each direction, kept apart because the telephony task
+/// opens them independently and runs with either one alone.
+pub(crate) struct AudioProbe {
+    /// Microphone readiness, or why not.
+    pub(crate) capture: Result<(), String>,
+    /// Speaker readiness, or why not.
+    pub(crate) playback: Result<(), String>,
+}
+
+impl AudioProbe {
+    /// Collapse to the status the UI shows — but only where the directions
+    /// really do agree.
+    pub(crate) fn into_status(self) -> AudioStatus {
+        match (self.capture, self.playback) {
+            (Ok(()), Ok(())) => AudioStatus::Ready,
+            (Ok(()), Err(why)) => AudioStatus::TransmitOnly(why),
+            (Err(why), Ok(())) => AudioStatus::ReceiveOnly(why),
+            // Both gone: lead with the capture reason. They are usually the
+            // same underlying cause (no card, no backend), and one is enough.
+            (Err(capture), Err(_)) => AudioStatus::Unavailable(capture),
+        }
+    }
+}
+
 /// Linear-interpolation resampler for a single mono stream.
 ///
 /// Voice-band linear interpolation is not audiophile resampling, but it is

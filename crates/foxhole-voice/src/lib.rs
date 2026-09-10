@@ -129,7 +129,10 @@ async fn run_inner(
                 }
             }
             Some(announce) = announces.recv() => session.announce(&announce, events).await,
-            _ = level_tick.tick() => session.report_levels(events).await,
+            _ = level_tick.tick() => {
+                session.report_faults(events).await;
+                session.report_levels(events).await;
+            }
         }
     }
 }
@@ -188,10 +191,13 @@ impl Session {
         // phone is ringing. The probe only queries the devices and their default
         // configurations — it deliberately does not *open* the microphone, so
         // idle FoxHole never holds a capture stream open.
-        let audio = match audio::probe() {
-            Ok(()) => AudioStatus::Ready,
-            Err(e) => AudioStatus::Unavailable(e),
-        };
+        //
+        // The two directions are reported separately because they genuinely are
+        // separate: `start_media` opens capture and playback independently and
+        // runs happily with one of them, so collapsing "no microphone" into
+        // "no audio" would tell an operator with working speakers that a call
+        // carries nothing when it would in fact be receive-only.
+        let audio = audio::probe().into_status();
         Self {
             local,
             call: None,
@@ -397,6 +403,15 @@ impl Session {
                 vox(events, format!("[VOX] [ERR] {message}")).await;
             }
             TelephonyServiceEvent::Stopped => {
+                // Tear the line down before leaving. This task is detached, so
+                // nothing else will publish terminal events on its behalf, and
+                // a UI left holding a call it can never end would refuse the
+                // next one as "line busy" for the rest of the session.
+                if self.call.is_some() {
+                    self.end("telephony service stopped".to_string(), events)
+                        .await;
+                }
+                self.stop_media();
                 vox(events, "[VOX] telephony service stopped".to_string()).await;
                 return Flow::Break;
             }
@@ -444,6 +459,14 @@ impl Session {
         }
         if phase.is_live() && call.connected_at.is_none() {
             call.connected_at = Some(now_secs());
+        }
+
+        // Adopt what was actually negotiated, so the *next* outgoing call
+        // proposes it too. Without this the UI shows the negotiated profile
+        // while the task keeps proposing whatever `SetProfile` last set —
+        // after an incoming call, those are routinely different.
+        if let Some(p) = profile {
+            self.profile = p;
         }
 
         let open_for = self.streaming;
@@ -563,6 +586,23 @@ impl Session {
         let _ = events
             .send(NetEvent::Voice(VoiceEvent::Ended(reason)))
             .await;
+    }
+
+    /// Surface a device that failed mid-call. The realtime callbacks cannot
+    /// report anything themselves, so they park the first error in a slot and
+    /// this poll drains it — otherwise an unplugged microphone gives a call
+    /// that is established, silent, and unexplained.
+    async fn report_faults(&mut self, events: &mpsc::Sender<NetEvent>) {
+        let faults: Vec<String> = [
+            self.capture.as_ref().and_then(|c| c.take_fault()),
+            self.playback.as_ref().and_then(|p| p.take_fault()),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        for fault in faults {
+            vox(events, format!("[VOX] [WRN] audio device failed — {fault}")).await;
+        }
     }
 
     /// Publish the VU meters, but only when they actually moved.

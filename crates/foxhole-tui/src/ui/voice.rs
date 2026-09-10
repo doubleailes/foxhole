@@ -236,15 +236,22 @@ fn active_call_lines(app: &App, call: &Call) -> Vec<Line<'static>> {
 /// HUD body with no call up.
 fn idle_lines(app: &App) -> Vec<Line<'static>> {
     let p = app.voice.profile;
+    // One readout for every state, and it leads with what works: an operator
+    // with speakers but no microphone needs to see "receive only", not a flat
+    // "unavailable" that reads as a dead call.
     let audio = match &app.voice.audio {
-        AudioStatus::Ready => Span::styled("ready", tag_style("DLV")),
-        AudioStatus::Unavailable(why) => {
-            Span::styled(format!("unavailable — {why}"), tag_style("WRN"))
+        AudioStatus::Ready => Span::styled(app.voice.audio.summary(), tag_style("DLV")),
+        AudioStatus::TransmitOnly(_) | AudioStatus::ReceiveOnly(_) => {
+            Span::styled(app.voice.audio.summary(), tag_style("WRN"))
         }
+        AudioStatus::Unavailable(_) => Span::styled(app.voice.audio.summary(), tag_style("WRN")),
         AudioStatus::Unknown if cfg!(feature = "voice") => {
-            Span::styled("starting\u{2026}", ts_style())
+            Span::styled(app.voice.audio.summary(), ts_style())
         }
-        AudioStatus::Unknown => Span::styled("offline — rebuild with --features voice", ts_style()),
+        AudioStatus::Unknown => Span::styled(
+            "offline — rebuild with --features voice".to_string(),
+            ts_style(),
+        ),
     };
     vec![
         Line::styled("IDLE", ts_style().add_modifier(Modifier::BOLD)),

@@ -58,6 +58,15 @@ pub(crate) const VOICE_PEERS_MAX: usize = 512;
 /// head is invisible).
 pub(crate) const VOICE_LOG_MAX: usize = 500;
 
+/// Cap on the identity→name alias table. It is fed by *every* `lxmf.delivery`
+/// announce, not just callable peers, so it grows faster than the roster it
+/// labels — and announces are free to mint. Bounded on the same grounds as the
+/// peer cache and the roster: an announce flood must not grow memory without
+/// limit. Generous relative to [`VOICE_PEERS_MAX`], since an alias is two short
+/// strings and holding one for a peer not yet heard on the telephony aspect is
+/// exactly what makes the roster read with names the moment it is.
+pub(crate) const VOICE_ALIASES_MAX: usize = 4096;
+
 impl VoiceState {
     /// Nothing heard, no call, meters at rest.
     pub(super) fn new() -> Self {
@@ -255,6 +264,10 @@ impl App {
                     AudioStatus::Ready => {
                         self.push_voice_log("[VOX] audio devices ready".to_string())
                     }
+                    // One working direction is a warning, not a failure: the
+                    // call is still useful, and saying "no audio" would be wrong.
+                    AudioStatus::TransmitOnly(_) | AudioStatus::ReceiveOnly(_) => self
+                        .push_voice_log(format!("[VOX] [WRN] audio {}", status.summary())),
                     AudioStatus::Unavailable(why) => self.push_voice_log(format!(
                         "[VOX] [WRN] no audio devices ({why}) — calls will signal but carry no audio"
                     )),
@@ -295,8 +308,14 @@ impl App {
         }
         // A fresh call always starts unmuted; carrying a mute across calls is a
         // classic way to talk into a dead microphone for the first ten seconds.
-        if previous.is_none() && call.is_some() {
+        // The task keeps its own copy and applies it when capture opens, so the
+        // reset has to be *told* to it — clearing only the local flag would
+        // show a live microphone while the task muted the real one.
+        if previous.is_none() && call.is_some() && self.voice.muted {
             self.voice.muted = false;
+            self.outbox
+                .commands
+                .push_back(NetCommand::Voice(VoiceCommand::SetMuted(false)));
         }
         // Label the call from the alias table when the task had no name for it.
         let mut call = call;
@@ -327,6 +346,41 @@ impl App {
             call.name = Some(name.clone());
         }
         self.voice.aliases.insert(identity, name);
+        self.prune_voice_aliases();
+    }
+
+    /// Keep the alias table bounded. Anything still referenced — a roster entry
+    /// or the call in progress — is retained regardless of age, since those are
+    /// precisely the labels on screen; the rest are dropped wholesale once the
+    /// cap is passed. Losing an alias costs nothing permanent: the peer's next
+    /// announce re-learns it.
+    fn prune_voice_aliases(&mut self) {
+        if self.voice.aliases.len() <= VOICE_ALIASES_MAX {
+            return;
+        }
+        let mut keep: std::collections::HashSet<&str> = self
+            .voice
+            .peers
+            .iter()
+            .map(|p| p.identity.as_str())
+            .collect();
+        if let Some(call) = &self.voice.call {
+            keep.insert(call.peer.as_str());
+        }
+        let referenced: Vec<String> = self
+            .voice
+            .aliases
+            .keys()
+            .filter(|k| keep.contains(k.as_str()))
+            .cloned()
+            .collect();
+        let mut kept = std::collections::HashMap::with_capacity(referenced.len());
+        for id in referenced {
+            if let Some(name) = self.voice.aliases.remove(&id) {
+                kept.insert(id, name);
+            }
+        }
+        self.voice.aliases = kept;
     }
 
     /// Record/refresh a voice-capable peer, keyed by hex identity hash.

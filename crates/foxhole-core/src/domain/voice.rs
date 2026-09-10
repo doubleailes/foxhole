@@ -320,19 +320,52 @@ impl VoicePeer {
     }
 }
 
-/// Whether the platform audio backend came up, and why not when it didn't.
-/// A call still signals and connects without audio devices (useful on a headless
-/// relay), so this is reported rather than fatal.
+/// Whether the platform audio devices came up, and why not when they didn't.
+/// A call still signals and connects without them (useful on a headless relay),
+/// so this is reported rather than fatal.
+///
+/// The two directions are tracked separately because they genuinely are: the
+/// telephony task opens capture and playback independently and runs with either
+/// one alone. Collapsing them would tell an operator with working speakers and
+/// no microphone that a call carries no audio, when it would in fact be
+/// perfectly usable in one direction — which on a mesh is often the difference
+/// between hearing a sitrep and hearing nothing.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum AudioStatus {
     /// No voice stack in this build (no `voice` feature), or it hasn't reported.
     #[default]
     Unknown,
-    /// Capture and playback both opened.
+    /// Capture and playback both available.
     Ready,
-    /// Devices unavailable — the reason as the backend reported it. Calls still
-    /// signal; there is simply no audio in or out.
+    /// Microphone only — the string says why there is no playback.
+    TransmitOnly(String),
+    /// Speaker only — the string says why there is no capture.
+    ReceiveOnly(String),
+    /// Neither direction; the string is the more informative of the two
+    /// reasons. Calls still signal, they just carry no audio.
     Unavailable(String),
+}
+
+impl AudioStatus {
+    /// Whether any audio can flow at all.
+    pub fn has_audio(&self) -> bool {
+        matches!(
+            self,
+            AudioStatus::Ready | AudioStatus::TransmitOnly(_) | AudioStatus::ReceiveOnly(_)
+        )
+    }
+
+    /// One-line readout for the HUD and the log. Leads with what *works*, since
+    /// that is the operator's actual question.
+    pub fn summary(&self) -> String {
+        match self {
+            AudioStatus::Unknown => "starting\u{2026}".to_string(),
+            AudioStatus::Ready => "ready".to_string(),
+            AudioStatus::TransmitOnly(why) => format!("transmit only — no speaker ({why})"),
+            AudioStatus::ReceiveOnly(why) => format!("receive only — no microphone ({why})"),
+            AudioStatus::Unavailable(why) => format!("unavailable — {why}"),
+        }
+    }
 }
 
 /// A command from the UI down to the LXST telephony task. Carried inside
