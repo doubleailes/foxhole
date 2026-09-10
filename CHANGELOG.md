@@ -33,6 +33,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Known limitations
 
+- **A peer can fault the voice stack.** `opus-rs` indexes past its output
+  buffer instead of returning an error when an inbound packet decodes to more
+  samples than the local profile expects (libopus returns
+  `OPUS_BUFFER_TOO_SMALL` there), and `lxst-core` sizes that buffer from its
+  own profile rather than the packet. Loud broadband noise from the far end
+  triggers it by pushing that encoder into a wider bandwidth mode. Both fixes
+  belong upstream; FoxHole contains the blast radius — the telephony task is
+  supervised so the call is cleared and the operator told, background panics no
+  longer tear down the terminal, and messaging is unaffected. Voice is lost
+  until restart. See `docs/lxst-voice.md` §9.
 - LXST's Codec2 profiles (the sub-4-kbps ones that would matter most on a
   bandwidth-starved link) are signalling-only — rsLXST ships Opus only so far —
   and the profile cycle skips them.

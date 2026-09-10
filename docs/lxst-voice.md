@@ -302,3 +302,67 @@ to call you.
 - **Voice bypasses the encrypted stores.** Calls are not recorded and nothing
   about them lands on disk beyond the `[VOX]` lines in the log — which BURN
   destroys along with everything else.
+
+## 9. Known upstream defect: a peer can panic the Opus decoder
+
+**Symptom.** A call connects and carries audio; a later one dies with
+
+```
+thread 'tokio-rt-worker' panicked at opus-rs-0.1.29/src/silk/resampler.rs:501:
+index out of bounds: the len is 96 but the index is 96
+  opus_rs::silk::resampler::silk_resampler_private_up2_hq
+  opus_rs::OpusDecoder::decode
+  lxst_core::opus::OpusDecoderState::decode_frame
+  lxst_telephony::TelephonyService::opus_received_events
+```
+
+Observed in the field when the far end produced very loud broadband noise.
+
+**Mechanism.** `SilkResampler::process` hands its `Up2HQ` stage
+`out[fs_out_khz..]` and asks for `2 * (in_len - fs_in_khz)` samples, so the
+caller's buffer must hold `2 * in_len`. Nothing checks that it does. Upstream
+of it, `lxst_core::opus::decode_direct_packet` sizes the buffer from the
+*locally configured profile*:
+
+```rust
+let mut samples = vec![0.0f32; self.sample_frames * usize::from(self.channels)];
+self.decoder.decode(&frame.payload, self.sample_frames, &mut samples)
+```
+
+So a packet that decodes to more samples than the local profile expects indexes
+past the end. libopus returns `OPUS_BUFFER_TOO_SMALL` in exactly this case;
+this port does not. Loud noise is a trigger rather than a cause: it pushes the
+*sender's* encoder into a wider bandwidth mode, and the wider packet no longer
+fits the receiver's buffer.
+
+**It is not clipping.** Encoding full-scale, 4×, and 100× over-scale noise, and
+even all-NaN or all-infinity frames, was tried against every Opus profile and
+none panics. Nor do malformed payloads: every TOC byte alone and with a
+trailing body, truncated packets, empty payloads (the PLC path), and every
+cross-profile encode/decode pairing all return clean errors. The trigger needs
+a genuine bandwidth transition between two endpoints.
+
+**Severity.** The decoder is network-facing and the panic is reachable from
+whatever a peer sends, so any peer that can call you can fault your voice
+stack. That is denial of service, not memory unsafety — the index is checked,
+which is what turns it into a panic rather than a corrupted buffer.
+
+**Where the fix belongs.** Upstream, in two places: `opus-rs` should return an
+error instead of indexing past the output buffer, and `lxst-core` should size
+that buffer from the packet's real duration — it already exports
+`opus_packet_duration_samples_48k`, which is precisely the helper for it.
+FoxHole pins `opus-rs` only transitively (rsLXST pins `=0.1.29`), so neither is
+patchable from here.
+
+**What FoxHole does about it.** Contains it, since it cannot prevent it:
+
+- the telephony service task is *supervised*, not detached, so its death is
+  detected, the call is cleared, and the operator is told the voice stack
+  faulted rather than left with a line that never answers again;
+- the panic hook no longer tears down the terminal for a panic on a worker
+  thread — the runtime survives such a panic, so restoring the alternate
+  screen and printing a backtrace over the console would turn a contained
+  failure into an unusable session. Background panics go to
+  `{cfgdir}/panic.log` instead, inside the tree BURN destroys;
+- messaging, the map, and every other tool keep working; only voice is lost,
+  and only until restart.

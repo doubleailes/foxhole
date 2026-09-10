@@ -225,6 +225,16 @@ mod tests {
     }
 
     #[test]
+    fn peak_level_survives_non_finite_input() {
+        // The capture path clamps before metering, but the meter must not
+        // produce a nonsense reading if anything slips past: NaN compares
+        // false against everything, which is how a max-fold silently keeps 0.
+        assert_eq!(peak_level(&[f32::NAN]), 0);
+        assert_eq!(peak_level(&[f32::INFINITY]), 100);
+        assert_eq!(peak_level(&[f32::NEG_INFINITY]), 100);
+    }
+
+    #[test]
     fn peak_level_scales_and_clamps() {
         assert_eq!(peak_level(&[]), 0);
         assert_eq!(peak_level(&[0.0, 0.0]), 0);

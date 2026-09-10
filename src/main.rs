@@ -487,10 +487,45 @@ impl Drop for TerminalGuard {
 
 /// Chain a terminal restore in front of the default panic hook so the operator
 /// can actually read the panic message on a cleaned-up screen.
+///
+/// Only for a panic that actually ends the program, though. A panic on a
+/// worker thread unwinds *that task* and leaves the runtime — and the console —
+/// running, so tearing down the alternate screen and printing a backtrace over
+/// it would turn a survivable background failure into what looks like a hard
+/// crash, with the operator's session unusable afterwards. A real case: a
+/// malformed inbound voice packet panics deep inside the Opus decoder on a
+/// tokio worker (see `docs/lxst-voice.md` §9); messaging is unaffected and the
+/// voice task reports the loss itself, so the display must survive it.
+///
+/// Background panics are written to `{cfgdir}/panic.log` instead — inside the
+/// tree BURN destroys, since a backtrace can name peers.
 fn install_panic_hook() {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        let _ = restore_terminal();
-        default_hook(info);
+        // `main` is where a fatal panic unwinds out of the program; anything
+        // else is a task that the runtime absorbs.
+        if std::thread::current().name() == Some("main") {
+            let _ = restore_terminal();
+            default_hook(info);
+            return;
+        }
+        record_background_panic(info);
     }));
+}
+
+/// Append a worker-thread panic to `{cfgdir}/panic.log`, best-effort and
+/// without touching the terminal.
+fn record_background_panic(info: &std::panic::PanicHookInfo<'_>) {
+    use std::io::Write;
+    let thread = std::thread::current();
+    let name = thread.name().unwrap_or("<unnamed>").to_string();
+    let entry = format!("[{}] thread '{name}' panicked: {info}\n", now_secs());
+    let path = config::config_dir().join("panic.log");
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = f.write_all(entry.as_bytes());
+    }
 }

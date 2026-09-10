@@ -401,6 +401,19 @@ impl CaptureState {
         self.mono.clear();
         to_mono(input, self.device_channels, &mut self.mono);
 
+        // Opus is specified on normalised samples, and a host is not obliged to
+        // hand us any: a boosted input, a loopback device, or a glitching driver
+        // can deliver magnitudes past 1.0 or a stray NaN. Clamping here means
+        // the codec only ever sees what it is defined for, and costs one pass
+        // over a buffer we have just touched anyway.
+        for s in self.mono.iter_mut() {
+            *s = if s.is_finite() {
+                s.clamp(-1.0, 1.0)
+            } else {
+                0.0
+            };
+        }
+
         if self.muted.load(Ordering::Relaxed) {
             // Keep the cadence: same sample count, no signal. The far end hears
             // silence rather than a stalled stream, and the meter reads 0.
