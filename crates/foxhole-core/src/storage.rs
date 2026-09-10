@@ -85,7 +85,7 @@ fn create_private(path: &Path) -> io::Result<File> {
 /// inside are created `0600` regardless (see `create_private`), so confidentiality
 /// does not depend on the directory mode.
 pub fn create_dir_private(dir: &Path) -> io::Result<()> {
-    let existed = dir.exists();
+    let _existed = dir.exists();
     fs::create_dir_all(dir)?;
     #[cfg(unix)]
     if !existed {
