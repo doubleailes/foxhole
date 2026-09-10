@@ -203,6 +203,17 @@ this task would immediately drain and discard.
 **Mute sends silence** rather than stopping the stream, so packet cadence and the
 negotiated profile survive it and unmuting is instant.
 
+**The backend is behind `foxhole-voice`'s own `audio` feature**, which the
+binary's `voice` feature turns on. That gate is not cosmetic: `cpal`'s Linux
+backend links ALSA through `alsa-sys`, which needs `libasound2-dev` at build
+time, and `cargo build/test --workspace` builds *every* member whatever the
+binary's features are. A non-optional `cpal` would therefore have made that apt
+package a hard prerequisite for the dependency-light offline build too — which
+it is not. Without the feature the module resolves to `audio::silent`, the
+conversion maths stays compiled and unit-tested, and voice runs signalling-only.
+That doubles as a genuinely useful configuration: a headless node that answers
+calls without pulling a platform audio stack in at all.
+
 **Stderr is muted around the device calls.** ALSA's C library writes its
 diagnostics straight to stderr, bypassing every Rust logging path — and with no
 sound card, an unusual `.asoundrc`, or inside a container, opening the default

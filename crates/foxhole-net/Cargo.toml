@@ -53,7 +53,7 @@ tracing-core = { workspace = true }
 # Live LXST voice calls. Pulls the `foxhole-voice` crate (rsLXST + Opus + a
 # platform audio backend) and spawns its task after transport bring-up; without
 # it every voice command is answered with an "offline" notice.
-voice = ["dep:foxhole-voice"]
+voice = ["dep:foxhole-voice", "foxhole-voice/audio"]
 
 [dev-dependencies]
 # The `tracing` facade (already in the tree via the `rns-*` crates) so the trace

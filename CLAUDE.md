@@ -251,15 +251,24 @@ on `foxhole-core` (the voice vocabulary), `lxst-core`/`lxst-telephony`,
   the discrete events only supply the link id, the remote identity, and log
   lines. Also owns the roster: `lxst.telephony` announces, each validated by
   re-deriving the destination hash from the announced key before it is listed.
-- `src/audio.rs` — the half rsLXST leaves to applications ("applications still
-  own capture/playback and resampling into `RawAudioFrame`"). A streaming linear
+- `src/audio/` — the half rsLXST leaves to applications ("applications still
+  own capture/playback and resampling into `RawAudioFrame`"), split by whether
+  it touches a device. `mod.rs` holds the device-free conversion maths and its
+  tests; `cpal_backend.rs` the real devices behind the crate's **`audio`
+  feature**; `silent.rs` the same API reporting no backend. That feature gate is
+  load bearing for the whole workspace: `cpal` links ALSA via `alsa-sys` (needs
+  `libasound2-dev` at build time) and `--workspace` builds every member whatever
+  the binary's features are, so a non-optional `cpal` would make that apt
+  package a prerequisite for the offline build as well. Without it voice runs
+  signalling-only — the headless-relay mode. A streaming linear
   `Resampler` that carries fractional position across callback boundaries (so
   chunking cannot change the output count and slide the packet cadence against
   the device clock), a mono fold, peak metering, and one `std::thread` per
   `cpal::Stream` because `Stream` is `!Send` on some hosts — dropping the handle
   is what closes the device, so the microphone is open only during a call.
   Callbacks never block: capture `try_send`s whole frames, playback drains a
-  bounded ring and pads with silence. Pure parts are unit-tested.
+  bounded ring and pads with silence. The conversion maths is unit-tested in
+  every configuration, backend or not.
 
 Three non-obvious behaviours, all with the reasoning in `docs/lxst-voice.md`:
 no `StartOpusReceiveStream` (rsLXST emits `OpusFramesReceived` unconditionally,
