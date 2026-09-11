@@ -42,9 +42,9 @@ mod cpal_backend;
 mod silent;
 
 #[cfg(feature = "audio")]
-pub(crate) use cpal_backend::{Capture, Playback, open_capture, open_playback, probe};
+pub(crate) use cpal_backend::{Capture, Playback, devices, open_capture, open_playback, probe};
 #[cfg(not(feature = "audio"))]
-pub(crate) use silent::{Capture, Playback, open_capture, open_playback, probe};
+pub(crate) use silent::{Capture, Playback, devices, open_capture, open_playback, probe};
 
 use foxhole_core::app::AudioStatus;
 

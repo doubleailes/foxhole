@@ -24,6 +24,8 @@ use cpal::{FromSample, Sample, SampleFormat, SizedSample, StreamConfig};
 use lxst_core::{Profile, RawAudioFrame};
 use tokio::sync::mpsc;
 
+use foxhole_core::app::DevicePrefs;
+
 use super::{Resampler, peak_level, to_mono};
 
 /// How many captured frames may sit in the queue to the telephony task before
@@ -148,6 +150,8 @@ fn record_fault(slot: &FaultSlot, what: &str, err: cpal::StreamError) {
 /// Live microphone capture for one call. Dropping it closes the device.
 pub(crate) struct Capture {
     _thread: DeviceThread,
+    /// Name of the device actually opened, for the HUD and the call log.
+    name: String,
     /// First runtime stream error, if the device has failed.
     fault: FaultSlot,
     /// Set by the UI's mute key. Read on the audio thread each callback, which
@@ -159,6 +163,11 @@ pub(crate) struct Capture {
 }
 
 impl Capture {
+    /// The device this capture is actually running on.
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
     /// Mute or unmute the microphone.
     pub(crate) fn set_muted(&self, muted: bool) {
         self.muted.store(muted, Ordering::Relaxed);
@@ -178,6 +187,8 @@ impl Capture {
 /// Live speaker playback for one call. Dropping it closes the device.
 pub(crate) struct Playback {
     _thread: DeviceThread,
+    /// Name of the device actually opened; see [`Capture::name`].
+    name: String,
     /// Device-rate, device-channel interleaved samples awaiting the callback.
     ring: Arc<Mutex<VecDeque<f32>>>,
     /// Ceiling on `ring`, in samples — the jitter budget in concrete terms.
@@ -192,6 +203,11 @@ pub(crate) struct Playback {
 }
 
 impl Playback {
+    /// The device this playback is actually running on.
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
     /// Queue one decoded frame for the speaker, converting it to the device's
     /// rate and channel count. The frame's peak is published through
     /// [`Playback::level`] for the RX meter.
@@ -245,6 +261,112 @@ impl Playback {
     }
 }
 
+/// Enumerate the host's capture and playback devices and note which it calls
+/// default.
+///
+/// Names are what the host reports and what the picker shows, so they are also
+/// what a config file stores — see [`find_device`] for how loosely a stored
+/// name is matched back.
+///
+/// A host that refuses to enumerate one direction yields an empty list rather
+/// than an error: the picker showing "system default" alone is a usable answer,
+/// and the real failure surfaces when a device is opened.
+pub(crate) fn devices() -> foxhole_core::app::AudioDevices {
+    let _quiet = QuietStderr::new();
+    let host = cpal::default_host();
+    foxhole_core::app::AudioDevices {
+        inputs: names(host.input_devices().ok()),
+        outputs: names(host.output_devices().ok()),
+        default_input: host.default_input_device().and_then(|d| d.name().ok()),
+        default_output: host.default_output_device().and_then(|d| d.name().ok()),
+        // Filled in by the caller, which is what holds the operator's choice.
+        selected: foxhole_core::app::DevicePrefs::default(),
+    }
+}
+
+/// Collect the names of an enumeration, skipping any device that will not say
+/// what it is called — unnameable devices cannot be selected or persisted.
+fn names<I>(devices: Option<I>) -> Vec<String>
+where
+    I: Iterator<Item = cpal::Device>,
+{
+    devices
+        .map(|it| it.filter_map(|d| d.name().ok()).collect())
+        .unwrap_or_default()
+}
+
+/// Resolve a preferred device name against an enumeration.
+///
+/// Exact match first, then a case-insensitive substring, so a config can hold a
+/// short fragment (`"USB"`) of a long, host-specific string
+/// (`"USB PnP Sound Device: Audio (hw:1,0)"`) that an operator would otherwise
+/// have to transcribe exactly — and that differs between ALSA, WASAPI and
+/// CoreAudio for the same hardware.
+///
+/// A name that matches nothing is an **error**, not a fallback to the default.
+/// Falling back is how a call ends up silently transmitting from the wrong
+/// input: the operator chose a device precisely because the default was wrong,
+/// so quietly reinstating it hides the one fact they need. The message lists
+/// what the host does have, which is the next thing they would go looking for.
+fn find_device<I>(devices: Option<I>, want: &str) -> Result<cpal::Device, String>
+where
+    I: Iterator<Item = cpal::Device>,
+{
+    let all: Vec<cpal::Device> = devices.map(|it| it.collect()).unwrap_or_default();
+    // A device that will not say what it is called can never match a stored
+    // name, so an unreadable name is simply one that matches nothing.
+    let have: Vec<String> = all.iter().map(|d| d.name().unwrap_or_default()).collect();
+    match match_name(&have, want) {
+        Some(i) => Ok(all.into_iter().nth(i).expect("index came from this vec")),
+        None => {
+            let named: Vec<&str> = have
+                .iter()
+                .map(String::as_str)
+                .filter(|n| !n.is_empty())
+                .collect();
+            Err(if named.is_empty() {
+                format!("no device matching \u{201c}{want}\u{201d}")
+            } else {
+                format!(
+                    "no device matching \u{201c}{want}\u{201d} (have: {})",
+                    named.join(", ")
+                )
+            })
+        }
+    }
+}
+
+/// Position of the device `want` names: exact first, then case-insensitive
+/// substring. Split out from [`find_device`] because it is the whole of the
+/// matching rule and the only part testable without a sound card.
+fn match_name(have: &[String], want: &str) -> Option<usize> {
+    have.iter().position(|n| n == want).or_else(|| {
+        let want = want.to_lowercase();
+        have.iter()
+            .position(|n| !n.is_empty() && n.to_lowercase().contains(&want))
+    })
+}
+
+/// The capture device to use: the preferred one, or the host default.
+fn input_device(host: &cpal::Host, preferred: Option<&str>) -> Result<cpal::Device, String> {
+    match preferred {
+        Some(want) => find_device(host.input_devices().ok(), want),
+        None => host
+            .default_input_device()
+            .ok_or_else(|| "no input device".to_string()),
+    }
+}
+
+/// The playback device to use: the preferred one, or the host default.
+fn output_device(host: &cpal::Host, preferred: Option<&str>) -> Result<cpal::Device, String> {
+    match preferred {
+        Some(want) => find_device(host.output_devices().ok(), want),
+        None => host
+            .default_output_device()
+            .ok_or_else(|| "no output device".to_string()),
+    }
+}
+
 /// Check whether a microphone and a speaker exist and report a usable default
 /// configuration, without opening either.
 ///
@@ -254,26 +376,20 @@ impl Playback {
 ///
 /// Each direction is reported on its own — one missing device does not stop the
 /// other from carrying a call.
-pub(crate) fn probe() -> super::AudioProbe {
+pub(crate) fn probe(prefs: &DevicePrefs) -> super::AudioProbe {
     let _quiet = QuietStderr::new();
     let host = cpal::default_host();
     super::AudioProbe {
-        capture: host
-            .default_input_device()
-            .ok_or_else(|| "no input device".to_string())
-            .and_then(|d| {
-                d.default_input_config()
-                    .map(|_| ())
-                    .map_err(|e| format!("input config: {e}"))
-            }),
-        playback: host
-            .default_output_device()
-            .ok_or_else(|| "no output device".to_string())
-            .and_then(|d| {
-                d.default_output_config()
-                    .map(|_| ())
-                    .map_err(|e| format!("output config: {e}"))
-            }),
+        capture: input_device(&host, prefs.input.as_deref()).and_then(|d| {
+            d.default_input_config()
+                .map(|_| ())
+                .map_err(|e| format!("input config: {e}"))
+        }),
+        playback: output_device(&host, prefs.output.as_deref()).and_then(|d| {
+            d.default_output_config()
+                .map(|_| ())
+                .map_err(|e| format!("output config: {e}"))
+        }),
     }
 }
 
@@ -281,14 +397,17 @@ pub(crate) fn probe() -> super::AudioProbe {
 /// stream of frames to hand to `TelephonyControl::StartOpusStream`.
 pub(crate) fn open_capture(
     profile: Profile,
+    preferred: Option<&str>,
 ) -> Result<(Capture, mpsc::Receiver<RawAudioFrame>), String> {
     // Held across `spawn_stream` too — it blocks until the stream thread has
     // built and started the device, so the guard covers that work as well.
     let _quiet = QuietStderr::new();
     let host = cpal::default_host();
-    let device = host
-        .default_input_device()
-        .ok_or_else(|| "no input device".to_string())?;
+    let device = input_device(&host, preferred)?;
+    // What the host actually gave us, which is not always what was asked for
+    // (a substring match, or the unnamed default) — so the HUD can show the
+    // device the microphone is really on.
+    let name = device.name().unwrap_or_else(|_| "?".to_string());
     let supported = device
         .default_input_config()
         .map_err(|e| format!("input config: {e}"))?;
@@ -330,6 +449,7 @@ pub(crate) fn open_capture(
     Ok((
         Capture {
             _thread: thread,
+            name,
             fault,
             muted,
             level,
@@ -339,12 +459,11 @@ pub(crate) fn open_capture(
 }
 
 /// Open the speaker for `profile`.
-pub(crate) fn open_playback(profile: Profile) -> Result<Playback, String> {
+pub(crate) fn open_playback(profile: Profile, preferred: Option<&str>) -> Result<Playback, String> {
     let _quiet = QuietStderr::new();
     let host = cpal::default_host();
-    let device = host
-        .default_output_device()
-        .ok_or_else(|| "no output device".to_string())?;
+    let device = output_device(&host, preferred)?;
+    let name = device.name().unwrap_or_else(|_| "?".to_string());
     let supported = device
         .default_output_config()
         .map_err(|e| format!("output config: {e}"))?;
@@ -370,6 +489,7 @@ pub(crate) fn open_playback(profile: Profile) -> Result<Playback, String> {
 
     Ok(Playback {
         _thread: thread,
+        name,
         ring,
         capacity,
         resampler: Resampler::new(profile.sample_rate_hz(), device_rate),
@@ -564,6 +684,46 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// An exact name wins even when another device's name contains it, so a
+    /// stored full name never resolves to some longer neighbour.
+    #[test]
+    fn an_exact_name_beats_a_substring() {
+        let have = names(&["USB Audio (hw:2,0)", "USB Audio"]);
+        assert_eq!(match_name(&have, "USB Audio"), Some(1));
+    }
+
+    /// The point of the substring rule: an operator stores a memorable fragment
+    /// rather than transcribing a host-specific string, and case is not part of
+    /// the bargain.
+    #[test]
+    fn a_case_insensitive_fragment_matches() {
+        let have = names(&["HDMI 1", "USB PnP Sound Device: Audio (hw:1,0)"]);
+        assert_eq!(match_name(&have, "pnp"), Some(1));
+    }
+
+    /// No match is *not* a fallback to the default device. Silently reinstating
+    /// the default is how a call transmits from the wrong input — the operator
+    /// chose a device precisely because the default was wrong.
+    #[test]
+    fn an_unmatched_name_does_not_fall_back() {
+        assert_eq!(match_name(&names(&["HDMI 1"]), "Headset"), None);
+        assert_eq!(match_name(&[], "anything"), None);
+    }
+
+    /// An unnameable device matches nothing — including the empty string, which
+    /// would otherwise substring-match every device on the host.
+    #[test]
+    fn an_unnamed_device_is_never_matched() {
+        let have = names(&["", "HDMI 1"]);
+        assert_eq!(match_name(&have, ""), Some(0), "an exact empty request");
+        assert_eq!(match_name(&have, "hdmi"), Some(1));
+        assert_eq!(match_name(&names(&[""]), "x"), None);
+    }
 
     #[test]
     fn device_thread_drop_does_not_deadlock() {

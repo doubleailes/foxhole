@@ -226,7 +226,7 @@ impl NetLink {
     /// Drained even with no network task so the setting still sticks offline.
     fn send_commands(&self, app: &mut App) {
         while let Some(cmd) = app.outbox.commands.pop_front() {
-            if matches!(cmd, NetCommand::SetPropagationNode(_))
+            if cmd.persists_config()
                 && let Err(e) = app.config.save()
             {
                 app.push_log(format!("[SYS] config save failed: {e}"));

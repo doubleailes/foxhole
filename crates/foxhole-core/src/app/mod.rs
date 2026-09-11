@@ -41,10 +41,10 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use crate::config::Config;
 pub use crate::domain::{
-    AudioStatus, Call, CallDirection, CallPhase, Conversation, Entry, GeoPos, IntelRecord,
-    IntelZone, Interface, MsgStatus, NetCommand, NetEvent, Node, NomadNode, Outbound, Page,
-    PageStatus, PathProbe, PeerKind, Trust, VoiceCommand, VoiceEvent, VoicePeer, VoiceProfile,
-    Zone, fmt_bitrate, fmt_bytes, now_secs, path_summary,
+    AudioDevices, AudioStatus, Call, CallDirection, CallPhase, Conversation, DevicePrefs, Entry,
+    GeoPos, IntelRecord, IntelZone, Interface, MsgStatus, NetCommand, NetEvent, Node, NomadNode,
+    Outbound, Page, PageStatus, PathProbe, PeerKind, Trust, VoiceCommand, VoiceEvent, VoicePeer,
+    VoiceProfile, Zone, fmt_bitrate, fmt_bytes, now_secs, path_summary,
 };
 pub use crate::notes::Notes;
 // World Map domain types, surfaced through `app` so the UI and binary reach them
@@ -61,7 +61,7 @@ pub use intel::{IntelReview, IntelState};
 pub use map::{GotoMgrs, MapState};
 pub use network::NetworkState;
 pub use share::ShareZone;
-pub use voice::VoiceState;
+pub use voice::{DeviceColumn, DevicePicker, VoiceState};
 
 // Re-exported so the renderer (and the binary) reach the CoT model through
 // `crate::app::…` without each crate depending on `foxhole-cot` directly.
@@ -370,6 +370,8 @@ enum Modal {
     Author,
     /// "Go to MGRS" grid-reference jump.
     GotoMgrs,
+    /// Voice audio-device picker (which microphone / speaker a call uses).
+    VoiceDevices,
 }
 
 /// Whole-program UI state.
@@ -564,6 +566,8 @@ impl App {
             Some(Modal::Author)
         } else if self.map.goto_mgrs.is_some() {
             Some(Modal::GotoMgrs)
+        } else if self.voice.picker.is_some() {
+            Some(Modal::VoiceDevices)
         } else {
             None
         }
@@ -580,6 +584,7 @@ impl App {
             Modal::ShareZone => self.handle_share_zone_key(key),
             Modal::Author => self.handle_author_key(key),
             Modal::GotoMgrs => self.handle_goto_mgrs_key(key),
+            Modal::VoiceDevices => self.handle_device_picker_key(key),
         }
     }
 

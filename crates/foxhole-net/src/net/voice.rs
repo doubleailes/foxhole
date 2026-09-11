@@ -59,11 +59,16 @@ impl VoiceLink {
         transport: mpsc::Sender<rns_transport::messages::TransportMessage>,
         id_path: &std::path::Path,
         events: mpsc::Sender<NetEvent>,
+        devices: foxhole_core::app::DevicePrefs,
     ) -> Result<Self, String> {
         let identity = rns_identity::identity::Identity::from_file(id_path)
             .map_err(|e| format!("load identity (voice): {e:?}"))?;
         let (tx, rx) = mpsc::channel::<VoiceCommand>(VOICE_COMMAND_CAPACITY);
-        tokio::spawn(foxhole_voice::run(transport, identity, rx, events));
+        // The configured devices are handed over at spawn rather than asked for
+        // later: the task probes its audio path during bring-up, and probing the
+        // host default first would report the wrong microphone to the operator
+        // before the real one had been considered.
+        tokio::spawn(foxhole_voice::run(transport, identity, rx, events, devices));
         Ok(Self { commands: Some(tx) })
     }
 

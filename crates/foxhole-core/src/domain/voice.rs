@@ -368,6 +368,70 @@ impl AudioStatus {
     }
 }
 
+/// Which platform audio devices a call should use, by name.
+///
+/// `None` means "whatever the host calls default" — the behaviour before this
+/// was selectable, and the right default for a machine with one microphone.
+/// A name is matched case-insensitively, exactly first and then as a substring,
+/// so an operator can persist a short, memorable fragment of a long device
+/// string (`"USB"` for `"USB PnP Sound Device (hw:1,0)"`).
+///
+/// Stored in the config (`voice_input_device` / `voice_output_device`) so a rig
+/// with a headset *and* an unused HDMI or webcam input keeps the operator's
+/// choice across restarts. Getting this wrong is silent: the call connects, the
+/// meters sit at zero, and nothing reports an error — the host handed us a real
+/// device, just not the one with a microphone in it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DevicePrefs {
+    /// Preferred capture device, or `None` to follow the system default.
+    pub input: Option<String>,
+    /// Preferred playback device, or `None` to follow the system default.
+    pub output: Option<String>,
+}
+
+/// The platform's audio devices as the voice task last enumerated them, plus
+/// which of them is selected — everything the device picker needs to draw.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AudioDevices {
+    /// Capture device names, in host order.
+    pub inputs: Vec<String>,
+    /// Playback device names, in host order.
+    pub outputs: Vec<String>,
+    /// What the host reports as the default capture device, if any.
+    pub default_input: Option<String>,
+    /// What the host reports as the default playback device, if any.
+    pub default_output: Option<String>,
+    /// The operator's choice; `None` in either direction follows the default.
+    pub selected: DevicePrefs,
+}
+
+impl AudioDevices {
+    /// Label for the capture device in use: the selection, else the host
+    /// default marked as such, else that there is none.
+    pub fn input_label(&self) -> String {
+        Self::label(
+            self.selected.input.as_deref(),
+            self.default_input.as_deref(),
+        )
+    }
+
+    /// Label for the playback device in use. See [`AudioDevices::input_label`].
+    pub fn output_label(&self) -> String {
+        Self::label(
+            self.selected.output.as_deref(),
+            self.default_output.as_deref(),
+        )
+    }
+
+    fn label(selected: Option<&str>, default: Option<&str>) -> String {
+        match (selected, default) {
+            (Some(name), _) => name.to_string(),
+            (None, Some(name)) => format!("{name} (default)"),
+            (None, None) => "none".to_string(),
+        }
+    }
+}
+
 /// A command from the UI down to the LXST telephony task. Carried inside
 /// [`NetCommand::Voice`](super::NetCommand::Voice) so voice reuses the one
 /// UI→network channel rather than opening a second one.
@@ -393,6 +457,17 @@ pub enum VoiceCommand {
     SetProfile(VoiceProfile),
     /// Re-announce our `lxst.telephony` destination now, so peers learn a path.
     Announce,
+    /// Re-enumerate the platform audio devices, answered with
+    /// [`VoiceEvent::Devices`]. Asked for when the picker opens, because a
+    /// headset plugged in after boot must appear without a restart.
+    ListDevices,
+    /// Use this capture device (`None` = the system default). Applied to the
+    /// live call immediately by reopening the microphone, so the operator can
+    /// fix a silent transmit path *during* the call that revealed it.
+    SetInputDevice(Option<String>),
+    /// Use this playback device (`None` = the system default). See
+    /// [`VoiceCommand::SetInputDevice`].
+    SetOutputDevice(Option<String>),
 }
 
 /// An event from the LXST telephony task up to the UI. Carried inside
@@ -425,8 +500,10 @@ pub enum VoiceEvent {
     Call(Option<Call>),
     /// The call ended; the string is a human-readable reason for the log.
     Ended(String),
-    /// Audio-backend readiness, reported once at bring-up.
+    /// Audio-backend readiness, reported at bring-up and after a device change.
     Audio(AudioStatus),
+    /// The platform audio devices and the current selection, for the picker.
+    Devices(AudioDevices),
     /// Live signal levels, 0–100, for the transmit and receive VU meters.
     Levels { tx: u8, rx: u8 },
     /// A voice-layer log line (already `[VOX]`-tagged) for the Log tool.

@@ -227,6 +227,14 @@ fn active_call_lines(app: &App, call: &Call) -> Vec<Line<'static>> {
     if call.phase.is_live() {
         lines.push(vu_line("TX", app.voice.tx_level, app.voice.muted));
         lines.push(vu_line("RX", app.voice.rx_level, false));
+        // A TX meter pinned at zero is ambiguous — a muted key, a dead link, or
+        // the wrong input device. Naming the microphone next to the meter makes
+        // the third case answerable without leaving the screen (`d` changes it,
+        // mid-call).
+        lines.push(Line::from(vec![
+            Span::styled("   mic  ", ts_style()),
+            Span::raw(app.voice.devices.input_label()),
+        ]));
     } else {
         lines.push(Line::styled("  (no media yet)", ts_style()));
     }
@@ -267,8 +275,17 @@ fn idle_lines(app: &App) -> Vec<Line<'static>> {
                 p.bitrate_ceiling() / 1000,
             )),
         ]),
+        Line::from(vec![
+            Span::styled("mic     ", ts_style()),
+            Span::raw(app.voice.devices.input_label()),
+        ]),
+        Line::from(vec![
+            Span::styled("speaker ", ts_style()),
+            Span::raw(app.voice.devices.output_label()),
+        ]),
         Line::raw(""),
         Line::styled("  select a peer and press Enter to call", ts_style()),
+        Line::styled("  d  choose microphone / speaker", ts_style()),
     ]
 }
 

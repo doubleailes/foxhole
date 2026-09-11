@@ -10,6 +10,7 @@
 //! having: a headless node that should be reachable and answerable without
 //! pulling a platform audio stack in at all.
 
+use foxhole_core::app::{AudioDevices, DevicePrefs};
 use lxst_core::{Profile, RawAudioFrame};
 use tokio::sync::mpsc;
 
@@ -23,6 +24,10 @@ const NO_BACKEND: &str = "built without audio support (rebuild with --features v
 pub(crate) struct Capture;
 
 impl Capture {
+    pub(crate) fn name(&self) -> &str {
+        ""
+    }
+
     pub(crate) fn set_muted(&self, _muted: bool) {}
 
     pub(crate) fn level(&self) -> u8 {
@@ -38,6 +43,10 @@ impl Capture {
 pub(crate) struct Playback;
 
 impl Playback {
+    pub(crate) fn name(&self) -> &str {
+        ""
+    }
+
     pub(crate) fn play(&mut self, _frame: &RawAudioFrame) {}
 
     pub(crate) fn level(&self) -> u8 {
@@ -49,7 +58,13 @@ impl Playback {
     }
 }
 
-pub(crate) fn probe() -> super::AudioProbe {
+/// No backend, so no devices to offer — the picker shows "system default"
+/// alone, which is the honest answer for a build that opens nothing.
+pub(crate) fn devices() -> AudioDevices {
+    AudioDevices::default()
+}
+
+pub(crate) fn probe(_prefs: &DevicePrefs) -> super::AudioProbe {
     super::AudioProbe {
         capture: Err(NO_BACKEND.to_string()),
         playback: Err(NO_BACKEND.to_string()),
@@ -58,10 +73,14 @@ pub(crate) fn probe() -> super::AudioProbe {
 
 pub(crate) fn open_capture(
     _profile: Profile,
+    _preferred: Option<&str>,
 ) -> Result<(Capture, mpsc::Receiver<RawAudioFrame>), String> {
     Err(NO_BACKEND.to_string())
 }
 
-pub(crate) fn open_playback(_profile: Profile) -> Result<Playback, String> {
+pub(crate) fn open_playback(
+    _profile: Profile,
+    _preferred: Option<&str>,
+) -> Result<Playback, String> {
     Err(NO_BACKEND.to_string())
 }

@@ -8,8 +8,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
 use crate::app::{
-    App, AuthorField, AuthorForm, AuthorKind, BURN_TOKEN, BurnConfirm, GotoMgrs, IntelReview,
-    MnemonicView, NewConv, NewConvField, ShareZone,
+    App, AuthorField, AuthorForm, AuthorKind, BURN_TOKEN, BurnConfirm, DeviceColumn, DevicePicker,
+    GotoMgrs, IntelReview, MnemonicView, NewConv, NewConvField, ShareZone,
 };
 
 use super::style::{base_style, tag_style};
@@ -262,6 +262,92 @@ pub(super) fn render_share_zone_popup(frame: &mut Frame, app: &App, share: &Shar
         .block(block)
         .wrap(Wrap { trim: false });
     frame.render_widget(para, area);
+}
+
+/// The audio device picker (`d` in the Voice tool): which microphone and which
+/// speaker a call uses.
+///
+/// Worth a modal rather than a config-file-only setting because of how the
+/// problem presents. A machine with more than one input — a webcam, an HDMI
+/// sink, a headset — can default to the one with no microphone behind it, and
+/// the symptom is a call that connects, sounds fine inbound, and transmits
+/// silence. Nothing errors, so there is nothing to read; the only way through
+/// is to see the list and pick another. Row 0 hands the choice back to the
+/// host, so "undo" is a selection like any other.
+pub(super) fn render_device_popup(frame: &mut Frame, app: &App, picker: &DevicePicker) {
+    let area = centered_rect(66, 16, frame.area());
+    frame.render_widget(Clear, area);
+    let cfg = tag_style("CFG");
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_set(FRAME_BORDER)
+        .style(base_style())
+        .border_style(cfg)
+        .title(Span::styled(
+            " AUDIO DEVICES ",
+            cfg.add_modifier(Modifier::BOLD),
+        ));
+
+    let devices = &app.voice.devices;
+    let default = match picker.column {
+        DeviceColumn::Input => devices.default_input.as_deref(),
+        DeviceColumn::Output => devices.default_output.as_deref(),
+    };
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled("  ", base_style()),
+            Span::styled(picker.column.label(), cfg.add_modifier(Modifier::BOLD)),
+            Span::styled("   [Tab] switch", base_style()),
+        ]),
+        Line::raw(""),
+    ];
+
+    // Row 0 is the "follow the host" choice, named so the operator can see
+    // which device that actually is before deciding it is the wrong one.
+    let default_label = match default {
+        Some(name) => format!("system default ({name})"),
+        None => "system default (none reported)".to_string(),
+    };
+    lines.push(device_row(
+        &default_label,
+        picker.is_selected(devices, None),
+        picker.index == 0,
+    ));
+    let names = picker.names(devices);
+    if names.is_empty() {
+        lines.push(Line::styled("    (no devices enumerated)", base_style()));
+    }
+    for (i, name) in names.iter().enumerate() {
+        lines.push(device_row(
+            name,
+            picker.is_selected(devices, Some(name.as_str())),
+            picker.index == i + 1,
+        ));
+    }
+
+    lines.push(Line::raw(""));
+    lines.push(Line::styled(
+        "  [\u{2191}\u{2193}] select   [Enter] use   [Tab] mic/speaker   [Esc] cancel",
+        base_style(),
+    ));
+
+    let para = Paragraph::new(lines)
+        .block(block)
+        .wrap(Wrap { trim: false });
+    frame.render_widget(para, area);
+}
+
+/// One device row: `\u{25b6}` marks the cursor, `\u{25cf}` the device in use.
+/// The two are distinct on purpose — the highlighted row is where Enter would
+/// take you, the dot is where you already are.
+fn device_row(label: &str, selected: bool, active: bool) -> Line<'static> {
+    let lead = if active { "\u{25b6} " } else { "  " }; // ▶
+    let mark = if selected { "\u{25cf} " } else { "  " }; // ●
+    let mut style = base_style();
+    if active {
+        style = style.add_modifier(Modifier::REVERSED);
+    }
+    Line::styled(format!("{lead}{mark}{label:.56}"), style)
 }
 
 /// The intel authoring form (`a`/`e` on the World Map): place or edit a marker

@@ -546,3 +546,54 @@ fn wrapped_height_counts_word_wrapping_not_just_width() {
     // Blank lines still occupy a row.
     assert_eq!(wrapped_height(&[Line::raw("")], 10), 1);
 }
+
+#[test]
+fn voice_device_picker_lists_devices_and_marks_the_one_in_use() {
+    use crate::app::{AudioDevices, DeviceColumn, DevicePicker, DevicePrefs};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let mut app = voice_app();
+    app.voice.devices = AudioDevices {
+        inputs: vec!["HDMI 1".to_string(), "USB PnP Sound Device".to_string()],
+        outputs: vec!["Headphones".to_string()],
+        default_input: Some("HDMI 1".to_string()),
+        default_output: Some("Headphones".to_string()),
+        selected: DevicePrefs {
+            input: Some("USB PnP Sound Device".to_string()),
+            output: None,
+        },
+    };
+    // The idle HUD names the device before the picker is even opened — that is
+    // what makes a wrong default visible without going looking for it.
+    let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    term.draw(|f| crate::ui::render(f, &app)).unwrap();
+    assert!(
+        term.backend().to_string().contains("USB PnP Sound Device"),
+        "idle HUD names the microphone in use"
+    );
+
+    // Set up the overlay the way the `d` key does. (The key routing itself is
+    // covered in `foxhole-core`; this test is about what gets drawn.)
+    app.voice.picker = Some(DevicePicker {
+        column: DeviceColumn::Input,
+        index: 2,
+    });
+    let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    term.draw(|f| crate::ui::render(f, &app)).unwrap();
+    let text = term.backend().to_string();
+
+    assert!(text.contains("AUDIO DEVICES"), "picker title");
+    assert!(text.contains("MICROPHONE"), "opens on the input column");
+    assert!(
+        text.contains("system default (HDMI 1)"),
+        "names the host default"
+    );
+    assert!(text.contains("USB PnP"), "lists the enumerated inputs");
+    // The dot marks the device in use; it opens on that row, so the chevron is
+    // there too and Enter changes nothing.
+    assert!(
+        text.contains("\u{25b6} \u{25cf} USB PnP"),
+        "cursor and in-use mark both on the selected device: {text}"
+    );
+}

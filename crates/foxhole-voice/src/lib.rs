@@ -39,7 +39,8 @@ use rns_transport::messages::{AnnounceHandlerEvent, TransportMessage};
 use tokio::sync::mpsc;
 
 use foxhole_core::app::{
-    AudioStatus, Call, CallDirection, CallPhase, NetEvent, VoiceCommand, VoiceEvent, VoiceProfile,
+    AudioStatus, Call, CallDirection, CallPhase, DevicePrefs, NetEvent, VoiceCommand, VoiceEvent,
+    VoiceProfile,
 };
 
 use audio::{Capture, Playback};
@@ -68,8 +69,9 @@ pub async fn run(
     identity: Identity,
     commands: mpsc::Receiver<VoiceCommand>,
     events: mpsc::Sender<NetEvent>,
+    devices: DevicePrefs,
 ) {
-    if let Err(e) = run_inner(transport, identity, commands, &events).await {
+    if let Err(e) = run_inner(transport, identity, commands, &events, devices).await {
         vox(&events, format!("[VOX] [ERR] voice: {e}")).await;
     }
 }
@@ -79,6 +81,7 @@ async fn run_inner(
     identity: Identity,
     mut commands: mpsc::Receiver<VoiceCommand>,
     events: &mpsc::Sender<NetEvent>,
+    devices: DevicePrefs,
 ) -> Result<(), String> {
     let local = hex::encode(identity.hash);
     let _ = events
@@ -112,8 +115,12 @@ async fn run_inner(
     )
     .await;
 
-    let mut session = Session::new(local);
+    let mut session = Session::new(local, devices);
     session.report_audio(events).await;
+    // Publish the device list at bring-up, not only when the picker asks: it is
+    // what lets the HUD name the microphone a call will use before one is
+    // placed, which is the whole point of making it selectable.
+    session.report_devices(events).await;
 
     let mut level_tick = tokio::time::interval(LEVEL_INTERVAL);
     level_tick.tick().await; // consume the immediate first tick
@@ -173,8 +180,12 @@ struct Session {
     /// and a capture still producing at the previous rate would feed a stream
     /// that no longer exists — a call that looks connected and is silent.
     streaming: Option<VoiceProfile>,
-    /// Audio-backend readiness, probed once at startup.
+    /// Audio-backend readiness, re-probed at startup and on a device change.
     audio: AudioStatus,
+    /// Which devices the operator has chosen (`None` = the host default). Held
+    /// here rather than read from the config at each call, because the picker
+    /// can change it mid-call and the reopened device must use the new value.
+    devices: DevicePrefs,
     /// Announce-learned names by hex identity hash.
     names: HashMap<String, String>,
     /// Last levels published, so an idle call doesn't emit a redundant event
@@ -195,7 +206,7 @@ impl Flow {
 }
 
 impl Session {
-    fn new(local: String) -> Self {
+    fn new(local: String, devices: DevicePrefs) -> Self {
         // Probe at startup rather than at call time: an operator needs to find
         // out their microphone is missing before someone calls, not while the
         // phone is ringing. The probe only queries the devices and their default
@@ -207,7 +218,7 @@ impl Session {
         // runs happily with one of them, so collapsing "no microphone" into
         // "no audio" would tell an operator with working speakers that a call
         // carries nothing when it would in fact be receive-only.
-        let audio = audio::probe().into_status();
+        let audio = audio::probe(&devices).into_status();
         Self {
             local,
             call: None,
@@ -218,6 +229,7 @@ impl Session {
             playback: None,
             streaming: None,
             audio,
+            devices,
             names: HashMap::new(),
             last_levels: (0, 0),
         }
@@ -227,6 +239,39 @@ impl Session {
         let _ = events
             .send(NetEvent::Voice(VoiceEvent::Audio(self.audio.clone())))
             .await;
+    }
+
+    /// Enumerate the host's devices and publish them with the current choice.
+    async fn report_devices(&self, events: &mpsc::Sender<NetEvent>) {
+        let mut devices = audio::devices();
+        devices.selected = self.devices.clone();
+        let _ = events
+            .send(NetEvent::Voice(VoiceEvent::Devices(devices)))
+            .await;
+    }
+
+    /// Re-probe, republish, and — if a call is up — reopen the media path on the
+    /// newly chosen devices.
+    ///
+    /// Applying it mid-call is the point of the whole feature: the way an
+    /// operator discovers the default microphone is the wrong one is by placing
+    /// a call whose transmit meter stays at zero, and being told to hang up,
+    /// edit a config file and dial again is a poor answer while the far end is
+    /// waiting. `stop_media` drops the device handles (which is what closes
+    /// them), then `start_media` opens the new ones and re-registers the Opus
+    /// stream with rsLXST.
+    async fn devices_changed(
+        &mut self,
+        control: &mpsc::Sender<TelephonyControl>,
+        events: &mpsc::Sender<NetEvent>,
+    ) {
+        self.audio = audio::probe(&self.devices).into_status();
+        self.report_audio(events).await;
+        self.report_devices(events).await;
+        if let Some(profile) = self.streaming {
+            self.stop_media();
+            self.start_media(profile, control, events).await;
+        }
     }
 
     /// Act on one UI command.
@@ -267,6 +312,15 @@ impl Session {
                         })
                         .await;
                 }
+            }
+            VoiceCommand::ListDevices => self.report_devices(events).await,
+            VoiceCommand::SetInputDevice(name) => {
+                self.devices.input = name;
+                self.devices_changed(control, events).await;
+            }
+            VoiceCommand::SetOutputDevice(name) => {
+                self.devices.output = name;
+                self.devices_changed(control, events).await;
             }
             VoiceCommand::Announce => {
                 let _ = control.send(TelephonyControl::Announce).await;
@@ -510,8 +564,11 @@ impl Session {
     ) {
         let lxst_profile = to_lxst(profile);
 
-        match audio::open_playback(lxst_profile) {
-            Ok(playback) => self.playback = Some(playback),
+        match audio::open_playback(lxst_profile, self.devices.output.as_deref()) {
+            Ok(playback) => {
+                vox(events, format!("[VOX] speaker: {}", playback.name())).await;
+                self.playback = Some(playback);
+            }
             Err(e) => vox(events, format!("[VOX] [WRN] no speaker ({e})")).await,
         }
 
@@ -523,9 +580,14 @@ impl Session {
         // `Playback` in the select loop already, so we take the frames from the
         // event and skip the second copy.
 
-        match audio::open_capture(lxst_profile) {
+        match audio::open_capture(lxst_profile, self.devices.input.as_deref()) {
             Ok((capture, frames)) => {
                 capture.set_muted(self.muted);
+                // Name the device every call. Which microphone is live is the
+                // first thing to check when the far end hears nothing, and a
+                // host default can change between calls without anything here
+                // being reconfigured.
+                vox(events, format!("[VOX] microphone: {}", capture.name())).await;
                 self.capture = Some(capture);
                 let _ = control
                     .send(TelephonyControl::StartOpusStream {
