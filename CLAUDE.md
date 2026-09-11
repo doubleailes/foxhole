@@ -68,7 +68,9 @@ terminal, or networking. Fast to build, fully unit-tested.
     for a peer; `revoke_shared_zone` (P4) sends a `stale==time` revocation (same
     deterministic uid) so the peer's `apply_cot` revoke path drops it.
   `voice.rs` is likewise only the App-level *binding* for the Voice tool —
-  the callable-peer roster, the call HUD state, and key→`VoiceCommand` routing.
+  the callable-peer roster, the call HUD state, the audio-device picker
+  (`DevicePicker`, key `d`, persisted as `voice_{input,output}_device`), and
+  key→`VoiceCommand` routing.
   It never invents call state: every transition arrives as `VoiceEvent::Call`
   from the telephony task, which (via rsLXST's `TelephonyRuntimeCore`) is the
   single authority on whether the line is busy. Note the addressing split —
@@ -272,7 +274,11 @@ on `foxhole-core` (the voice vocabulary), `lxst-core`/`lxst-telephony`,
   is what closes the device, so the microphone is open only during a call.
   Callbacks never block: capture `try_send`s whole frames, playback drains a
   bounded ring and pads with silence. The conversion maths is unit-tested in
-  every configuration, backend or not.
+  every configuration, backend or not. Devices are **selected, not assumed**:
+  `devices()` enumerates them and a configured name is matched exactly then by
+  case-insensitive substring (`match_name`), with no match an error rather than
+  a silent fall back to the host default — which is the one device the operator
+  has already rejected.
 
 The telephony service task is **supervised, not detached**: it decodes inbound
 audio, and a wider-than-negotiated packet panics inside `opus-rs` (an upstream

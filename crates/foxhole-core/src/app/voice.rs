@@ -47,6 +47,78 @@ pub struct VoiceState {
     /// announces (LXST's own announce carries none). Kept apart from the roster
     /// because an alias says a peer *has* a name, not that it can take a call.
     pub aliases: HashMap<String, String>,
+    /// The platform audio devices and the current selection, as the task last
+    /// enumerated them. Empty until it reports (and always empty offline).
+    pub devices: AudioDevices,
+    /// Open device picker (`d`), if any.
+    pub picker: Option<DevicePicker>,
+}
+
+/// Which direction the device picker is choosing for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeviceColumn {
+    Input,
+    Output,
+}
+
+impl DeviceColumn {
+    /// Heading for the picker, and the word used in its log lines.
+    pub fn label(self) -> &'static str {
+        match self {
+            DeviceColumn::Input => "MICROPHONE",
+            DeviceColumn::Output => "SPEAKER",
+        }
+    }
+
+    fn other(self) -> Self {
+        match self {
+            DeviceColumn::Input => DeviceColumn::Output,
+            DeviceColumn::Output => DeviceColumn::Input,
+        }
+    }
+}
+
+/// Device picker overlay: one direction at a time, Tab to swap.
+///
+/// Row 0 is always "system default" — the `None` preference — so clearing a
+/// choice is a selection like any other rather than a separate key to discover.
+pub struct DevicePicker {
+    /// Direction being chosen.
+    pub column: DeviceColumn,
+    /// Highlighted row: 0 = system default, `n` = the `n-1`th device.
+    pub index: usize,
+}
+
+impl DevicePicker {
+    /// The device names offered for the current column.
+    pub fn names<'a>(&self, devices: &'a AudioDevices) -> &'a [String] {
+        match self.column {
+            DeviceColumn::Input => &devices.inputs,
+            DeviceColumn::Output => &devices.outputs,
+        }
+    }
+
+    /// The highlighted choice: `None` on row 0 (follow the system default).
+    pub fn choice(&self, devices: &AudioDevices) -> Option<String> {
+        self.index
+            .checked_sub(1)
+            .and_then(|i| self.names(devices).get(i))
+            .cloned()
+    }
+
+    /// Rows in the current column, including the "system default" row.
+    pub fn len(&self, devices: &AudioDevices) -> usize {
+        self.names(devices).len() + 1
+    }
+
+    /// Whether `name` (or the default row) is the one currently in use.
+    pub fn is_selected(&self, devices: &AudioDevices, name: Option<&str>) -> bool {
+        let current = match self.column {
+            DeviceColumn::Input => devices.selected.input.as_deref(),
+            DeviceColumn::Output => devices.selected.output.as_deref(),
+        };
+        current == name
+    }
 }
 
 /// Cap on the voice roster. `lxst.telephony` announces are as cheap to mint as
@@ -82,6 +154,8 @@ impl VoiceState {
             rx_level: 0,
             log: Vec::new(),
             aliases: HashMap::new(),
+            devices: AudioDevices::default(),
+            picker: None,
         }
     }
 
@@ -141,8 +215,83 @@ impl App {
                     .commands
                     .push_back(NetCommand::Voice(VoiceCommand::Announce));
             }
+            KeyCode::Char('d') => self.open_device_picker(),
             _ => {}
         }
+    }
+
+    /// Open the audio device picker, refreshing the list first: a headset
+    /// plugged in after bring-up must show up without restarting the terminal,
+    /// and the enumeration is cheap enough to redo on every open.
+    pub(super) fn open_device_picker(&mut self) {
+        self.outbox
+            .commands
+            .push_back(NetCommand::Voice(VoiceCommand::ListDevices));
+        let column = DeviceColumn::Input;
+        let picker = DevicePicker { column, index: 0 };
+        // Start on the row already in use, so Enter is a no-op rather than a
+        // silent change of device.
+        let index = current_row(&self.voice.devices, column);
+        self.voice.picker = Some(DevicePicker { index, ..picker });
+    }
+
+    /// Device-picker keys: Up/Down move, Tab swaps microphone/speaker, Enter
+    /// selects (row 0 = follow the system default), Esc closes.
+    pub(super) fn handle_device_picker_key(&mut self, key: KeyEvent) {
+        let devices = self.voice.devices.clone();
+        let Some(picker) = self.voice.picker.as_mut() else {
+            return;
+        };
+        match key.code {
+            KeyCode::Up => picker.index = picker.index.saturating_sub(1),
+            KeyCode::Down => {
+                if picker.index + 1 < picker.len(&devices) {
+                    picker.index += 1;
+                }
+            }
+            KeyCode::Tab | KeyCode::Left | KeyCode::Right => {
+                picker.column = picker.column.other();
+                picker.index = current_row(&devices, picker.column);
+            }
+            KeyCode::Enter => {
+                let column = picker.column;
+                let choice = picker.choice(&devices);
+                self.select_audio_device(column, choice);
+                self.close_device_picker();
+            }
+            KeyCode::Esc => self.close_device_picker(),
+            _ => {}
+        }
+    }
+
+    /// Close the picker without changing anything.
+    pub(super) fn close_device_picker(&mut self) {
+        self.voice.picker = None;
+    }
+
+    /// Adopt a device choice: persist it, mirror it into the displayed
+    /// selection, and tell the task — which reopens the device, so a wrong
+    /// microphone can be corrected during the very call that exposed it.
+    ///
+    /// The config write itself happens in the runtime, which drains the command
+    /// queue and saves on a command that says it persists; doing it here would
+    /// put disk I/O in the state machine.
+    pub(super) fn select_audio_device(&mut self, column: DeviceColumn, name: Option<String>) {
+        let label = name.clone().unwrap_or_else(|| "system default".to_string());
+        let cmd = match column {
+            DeviceColumn::Input => {
+                self.config.voice_input_device = name.clone();
+                self.voice.devices.selected.input = name.clone();
+                VoiceCommand::SetInputDevice(name)
+            }
+            DeviceColumn::Output => {
+                self.config.voice_output_device = name.clone();
+                self.voice.devices.selected.output = name.clone();
+                VoiceCommand::SetOutputDevice(name)
+            }
+        };
+        self.push_voice_log(format!("[VOX] {} = {label}", column.label().to_lowercase()));
+        self.outbox.commands.push_back(NetCommand::Voice(cmd));
     }
 
     /// Place a call to the highlighted roster entry. Refused while a call is
@@ -279,7 +428,22 @@ impl App {
                 self.voice.tx_level = tx.min(100);
                 self.voice.rx_level = rx.min(100);
             }
+            VoiceEvent::Devices(devices) => self.set_audio_devices(devices),
             VoiceEvent::Sys(line) => self.push_voice_log(line),
+        }
+    }
+
+    /// Adopt the enumerated device list. The task is the authority on what
+    /// exists *and* on what it is actually using, so its selection replaces the
+    /// local mirror — a configured name the host no longer has comes back as
+    /// whatever the task fell back to, rather than lingering in the HUD.
+    fn set_audio_devices(&mut self, devices: AudioDevices) {
+        self.voice.devices = devices;
+        // Keep the open picker pointing at a row that still exists: the list
+        // can shrink between opening it and this arriving.
+        if let Some(picker) = self.voice.picker.as_mut() {
+            let last = picker.len(&self.voice.devices).saturating_sub(1);
+            picker.index = picker.index.min(last);
         }
     }
 
@@ -440,5 +604,155 @@ impl App {
             self.voice.log.drain(..excess);
         }
         self.push_log(line);
+    }
+}
+
+/// The picker row matching what is in use for `column`: 0 for the system
+/// default, else the device's position in the list (+1 for that row).
+fn current_row(devices: &AudioDevices, column: DeviceColumn) -> usize {
+    let (selected, names) = match column {
+        DeviceColumn::Input => (devices.selected.input.as_deref(), &devices.inputs),
+        DeviceColumn::Output => (devices.selected.output.as_deref(), &devices.outputs),
+    };
+    selected
+        .and_then(|want| names.iter().position(|n| n == want))
+        .map_or(0, |i| i + 1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn devices() -> AudioDevices {
+        AudioDevices {
+            inputs: vec!["HDMI".to_string(), "USB PnP Sound Device".to_string()],
+            outputs: vec!["Headphones".to_string()],
+            default_input: Some("HDMI".to_string()),
+            default_output: Some("Headphones".to_string()),
+            selected: DevicePrefs::default(),
+        }
+    }
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    /// `d` opens the picker and asks for a fresh enumeration — a headset
+    /// plugged in after bring-up has to appear without a restart.
+    #[test]
+    fn d_opens_the_picker_and_refreshes_the_list() {
+        let mut app = App::new();
+        app.active = Tool::Voice;
+        app.handle_key(key(KeyCode::Char('d')));
+
+        assert!(app.voice.picker.is_some(), "picker open");
+        assert!(
+            app.outbox
+                .commands
+                .iter()
+                .any(|c| matches!(c, NetCommand::Voice(VoiceCommand::ListDevices))),
+            "enumeration requested"
+        );
+    }
+
+    /// Choosing a device persists it to the config *and* tells the task, and
+    /// the command says it needs a config save — the two must not drift, or the
+    /// choice survives the call but not the restart.
+    #[test]
+    fn choosing_an_input_sets_the_config_and_commands_the_task() {
+        let mut app = App::new();
+        app.voice.devices = devices();
+        app.active = Tool::Voice;
+        app.handle_key(key(KeyCode::Char('d')));
+        app.outbox.commands.clear();
+
+        // Row 0 is "system default"; row 2 is the second enumerated input.
+        app.handle_key(key(KeyCode::Down));
+        app.handle_key(key(KeyCode::Down));
+        app.handle_key(key(KeyCode::Enter));
+
+        assert_eq!(
+            app.config.voice_input_device.as_deref(),
+            Some("USB PnP Sound Device")
+        );
+        let cmd = app
+            .outbox
+            .commands
+            .iter()
+            .find(|c| matches!(c, NetCommand::Voice(VoiceCommand::SetInputDevice(_))))
+            .expect("task told");
+        assert!(cmd.persists_config(), "a device choice must be saved");
+        assert!(app.voice.picker.is_none(), "picker closed after choosing");
+    }
+
+    /// Row 0 hands the choice back to the host, so clearing a stored device is
+    /// a selection like any other rather than a separate key to find.
+    #[test]
+    fn row_zero_clears_the_stored_device() {
+        let mut app = App::new();
+        app.voice.devices = devices();
+        app.config.voice_input_device = Some("USB PnP Sound Device".to_string());
+        app.voice.devices.selected.input = Some("USB PnP Sound Device".to_string());
+        app.active = Tool::Voice;
+        app.handle_key(key(KeyCode::Char('d')));
+
+        // Opens on the row in use (the second input = row 2), so Enter alone
+        // would change nothing; walk back up to the default row.
+        assert_eq!(app.voice.picker.as_ref().unwrap().index, 2);
+        app.handle_key(key(KeyCode::Up));
+        app.handle_key(key(KeyCode::Up));
+        app.handle_key(key(KeyCode::Enter));
+
+        assert_eq!(app.config.voice_input_device, None);
+    }
+
+    /// Tab swaps direction and re-homes the cursor on that direction's own
+    /// selection; Esc leaves everything alone.
+    #[test]
+    fn tab_switches_direction_and_esc_cancels() {
+        let mut app = App::new();
+        app.voice.devices = devices();
+        app.voice.devices.selected.output = Some("Headphones".to_string());
+        app.active = Tool::Voice;
+        app.handle_key(key(KeyCode::Char('d')));
+        app.handle_key(key(KeyCode::Tab));
+
+        let picker = app.voice.picker.as_ref().expect("still open");
+        assert_eq!(picker.column, DeviceColumn::Output);
+        assert_eq!(picker.index, 1, "homed on the selected output");
+
+        app.handle_key(key(KeyCode::Esc));
+        assert!(app.voice.picker.is_none());
+        assert_eq!(
+            app.config.voice_output_device, None,
+            "cancel changes nothing"
+        );
+    }
+
+    /// The task is the authority on what exists: a shrinking list must not
+    /// leave the cursor pointing past the end.
+    #[test]
+    fn a_shrinking_device_list_clamps_the_cursor() {
+        let mut app = App::new();
+        app.voice.devices = devices();
+        app.active = Tool::Voice;
+        app.handle_key(key(KeyCode::Char('d')));
+        app.handle_key(key(KeyCode::Down));
+        app.handle_key(key(KeyCode::Down));
+
+        app.apply_voice_event(VoiceEvent::Devices(AudioDevices::default()));
+
+        assert_eq!(app.voice.picker.as_ref().unwrap().index, 0);
+    }
+
+    /// The HUD names the device in use, falling back to the host default so a
+    /// blank readout never implies "no microphone".
+    #[test]
+    fn labels_name_the_device_in_use() {
+        let mut devices = devices();
+        assert_eq!(devices.input_label(), "HDMI (default)");
+        devices.selected.input = Some("USB PnP Sound Device".to_string());
+        assert_eq!(devices.input_label(), "USB PnP Sound Device");
+        assert_eq!(AudioDevices::default().input_label(), "none");
     }
 }

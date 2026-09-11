@@ -163,7 +163,7 @@ Two mappings are not one-to-one and are worth knowing:
 
 rsLXST draws its boundary above the devices — *"applications still own
 capture/playback and resampling into `RawAudioFrame`"* — so
-`foxhole-voice/src/audio.rs` is entirely FoxHole's, built on `cpal`.
+`foxhole-voice/src/audio/` is entirely FoxHole's, built on `cpal`.
 
 **Rate and channel conversion.** The negotiated profile fixes the codec rate
 (8/24/48 kHz) and channel count; the device offers whatever it offers. Both
@@ -219,13 +219,38 @@ diagnostics straight to stderr, bypassing every Rust logging path — and with n
 sound card, an unusual `.asoundrc`, or inside a container, opening the default
 device produces half a screen of them. FoxHole runs full-screen on the alternate
 buffer, so that output lands on top of the console and corrupts the display with
-no redraw to clean it up. `audio::QuietStderr` redirects fd 2 to `/dev/null` for
+no redraw to clean it up. `audio::cpal_backend::QuietStderr` redirects fd 2 to `/dev/null` for
 the duration of each device call and restores it after. Losing those lines is the
 right trade: they describe a condition the operator is already told about, in the
 Voice tool's audio status, in terms that mean something.
 
 A missing or unusable device is reported, never fatal — a call still signals and
 connects with no audio path, which is what a headless relay wants.
+
+**Choosing the device.** The host default is not reliably the right one. A
+machine with a webcam, an HDMI sink or a docking station commonly defaults to an
+input with no microphone behind it, and the failure is silent: the call
+connects, inbound audio is fine, the TX meter sits at zero, and nothing errors —
+the host handed us a real device, just not one that hears anything. So the
+device is selectable in three places that agree with each other:
+
+- `voice_input_device` / `voice_output_device` in `foxhole.conf`, matched
+  case-insensitively, **exactly first and then as a substring** — so a config
+  can hold a memorable fragment (`USB`) of a long, host-specific string (`USB
+  PnP Sound Device: Audio (hw:1,0)`), which differs between ALSA, WASAPI and
+  CoreAudio for the same hardware;
+- `d` in the Voice tool, which enumerates the host's devices and lets the
+  operator pick one. It applies **during a call** — reprobing, reopening the
+  device and re-registering the Opus stream — because the way you discover the
+  wrong microphone is by placing a call, and "hang up, edit a file, dial again"
+  is a poor answer with the far end waiting;
+- the HUD, which names the device actually in use (`mic`), next to the TX meter
+  during a call. A meter pinned at zero is otherwise ambiguous between a muted
+  key, a dead link, and the wrong input.
+
+A configured name that matches nothing is an **error, not a fallback to the
+default** — the error lists the devices the host does have. Falling back would
+reinstate exactly the device the operator rejected, and do it silently.
 
 ## 6. Profiles
 
@@ -277,6 +302,7 @@ In the console, Ctrl+N to the **Voice** tab:
 | `m` | mute / unmute the microphone |
 | `p` | cycle profile (renegotiates during a call) |
 | `a` | re-announce `lxst.telephony` now |
+| `d` | choose the microphone / speaker (Tab swaps; applies mid-call) |
 
 Ctrl+V in **Conversations** dials the selected peer and jumps here.
 

@@ -20,7 +20,8 @@ use std::collections::HashMap;
 
 pub use intel::{IntelRecord, IntelZone};
 pub use voice::{
-    AudioStatus, Call, CallDirection, CallPhase, VoiceCommand, VoiceEvent, VoicePeer, VoiceProfile,
+    AudioDevices, AudioStatus, Call, CallDirection, CallPhase, DevicePrefs, VoiceCommand,
+    VoiceEvent, VoicePeer, VoiceProfile,
 };
 
 // The geographic position and hazard-zone types now live in the standalone
@@ -60,6 +61,25 @@ pub enum NetCommand {
     /// rides this channel rather than its own so the UI keeps a single ordered
     /// handoff — a hangup queued behind a page fetch still arrives in order.
     Voice(VoiceCommand),
+}
+
+impl NetCommand {
+    /// Whether draining this command should also persist the config.
+    ///
+    /// These are the commands that *are* a settings change — the network side
+    /// is the notification, the config file is where it has to survive a
+    /// restart. Kept with the enum rather than in the runtime that drains the
+    /// queue, so adding a persisted setting is one edit here and not a second
+    /// match on `NetCommand` in the binary.
+    pub fn persists_config(&self) -> bool {
+        matches!(
+            self,
+            NetCommand::SetPropagationNode(_)
+                | NetCommand::Voice(
+                    VoiceCommand::SetInputDevice(_) | VoiceCommand::SetOutputDevice(_)
+                )
+        )
+    }
 }
 
 /// A message accepted for transmission, carrying its destination so the

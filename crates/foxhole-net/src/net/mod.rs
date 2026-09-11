@@ -279,7 +279,12 @@ async fn run_inner(
     // interfaces, and a second Reticulum instance would announce a second set of
     // paths for it. Inert unless the `voice` feature is on.
     #[cfg(feature = "voice")]
-    let mut voice = match VoiceLink::spawn(transport.clone(), &id_path, events.clone()) {
+    let mut voice = match VoiceLink::spawn(
+        transport.clone(),
+        &id_path,
+        events.clone(),
+        config.voice_devices(),
+    ) {
         Ok(link) => link,
         Err(e) => {
             // A voice bring-up failure must not take the messaging terminal
