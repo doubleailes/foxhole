@@ -21,3 +21,6 @@ foxhole-map = { workspace = true }
 splash = ["foxhole-core/splash"]
 # Status-bar NET indicator + net-only cfg parity with core.
 net = ["foxhole-core/net"]
+# Whether the LXST voice stack is compiled in — the Voice tool is always drawn,
+# this only selects its "stack offline" placeholder. Pure flag, no extra deps.
+voice = []

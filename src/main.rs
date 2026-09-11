@@ -166,14 +166,14 @@ async fn run(
                     // The store key arrives once; adopting it loads history and
                     // the intel layer before the live event is applied.
                     store.adopt(app, &ev);
-                    apply_net_event(app, ev);
+                    app.apply_net_event(ev);
                     // Drain the rest of the ready backlog before flushing, so a
                     // burst of inbound events (telemetry/CoT floods) coalesces into
                     // a single store rewrite this iteration instead of one full
                     // re-encrypt per event (write amplification against flash).
                     while let Ok(ev) = net_rx.try_recv() {
                         store.adopt(app, &ev);
-                        apply_net_event(app, ev);
+                        app.apply_net_event(ev);
                     }
                 }
             },
@@ -226,7 +226,7 @@ impl NetLink {
     /// Drained even with no network task so the setting still sticks offline.
     fn send_commands(&self, app: &mut App) {
         while let Some(cmd) = app.outbox.commands.pop_front() {
-            if matches!(cmd, NetCommand::SetPropagationNode(_))
+            if cmd.persists_config()
                 && let Err(e) = app.config.save()
             {
                 app.push_log(format!("[SYS] config save failed: {e}"));
@@ -379,82 +379,6 @@ fn now_secs() -> i64 {
         .unwrap_or(0)
 }
 
-/// Fold a single network event into UI state.
-fn apply_net_event(app: &mut App, ev: NetEvent) {
-    // While the cold-boot splash is up, let the real readiness events flip its
-    // bring-up lines to their reported status (live monitor).
-    #[cfg(feature = "splash")]
-    if app.state == app::AppState::Splash {
-        mark_boot_from_event(app, &ev);
-    }
-
-    match ev {
-        NetEvent::Sys(line) => app.push_log(line),
-        NetEvent::Local(addr) => app.local_address = Some(addr),
-        NetEvent::Peer { kind, hash, name } => app.upsert_peer(kind, hash, name),
-        NetEvent::Message {
-            source,
-            title,
-            content,
-        } => {
-            let body = if title.is_empty() {
-                content
-            } else {
-                format!("{title}: {content}")
-            };
-            app.deliver(&source, &body);
-        }
-        NetEvent::Telemetry { source, lat, lon } => {
-            app.set_location(&source, app::GeoPos::new(lat, lon));
-        }
-        NetEvent::Cot { source, event } => app.apply_cot(source, event),
-        NetEvent::Sync(status) => app.sync_status = status,
-        NetEvent::MsgStatus { id, status } => app.set_msg_status(id, status),
-        NetEvent::Path { hash, hops, iface } => app.record_path(hash, hops, iface),
-        NetEvent::NomadNode {
-            identity,
-            dest,
-            name,
-            last_seen,
-        } => app.upsert_nomad(identity, dest, name, last_seen),
-        NetEvent::Page {
-            identity,
-            path,
-            body,
-        } => app.set_page(identity, path, body),
-        NetEvent::Interfaces { interfaces, links } => app.set_interfaces(interfaces, links),
-        // Handled in `run` (loads history); nothing to fold into UI state here.
-        NetEvent::StoreKey(_) => {}
-    }
-}
-
-/// Flip cold-boot lines to their reported status as the real bring-up events
-/// arrive: encrypted store + cache on the store key, mesh + console on the local
-/// address (which also opens the hand-off), and best-effort accents off the
-/// transport/identity banners. Steps not reached this way still appear on the
-/// timer, so a changed banner string only loses an early accent, never a line.
-#[cfg(feature = "splash")]
-fn mark_boot_from_event(app: &mut App, ev: &NetEvent) {
-    use crate::app::BootStep;
-    match ev {
-        NetEvent::StoreKey(_) => {
-            app.mark_boot(BootStep::Store);
-            app.mark_boot(BootStep::Cache);
-        }
-        NetEvent::Local(_) => {
-            app.mark_boot(BootStep::Mesh);
-            app.mark_boot(BootStep::Console);
-        }
-        NetEvent::Sys(line) if line.contains("transport online") => {
-            app.mark_boot(BootStep::Iface);
-        }
-        NetEvent::Sys(line) if line.contains("identity ") => {
-            app.mark_boot(BootStep::Identity);
-        }
-        _ => {}
-    }
-}
-
 /// Enter raw mode, switch to the alternate screen, and hide the cursor.
 fn setup_terminal() -> io::Result<Tui> {
     enable_raw_mode()?;
@@ -486,10 +410,45 @@ impl Drop for TerminalGuard {
 
 /// Chain a terminal restore in front of the default panic hook so the operator
 /// can actually read the panic message on a cleaned-up screen.
+///
+/// Only for a panic that actually ends the program, though. A panic on a
+/// worker thread unwinds *that task* and leaves the runtime — and the console —
+/// running, so tearing down the alternate screen and printing a backtrace over
+/// it would turn a survivable background failure into what looks like a hard
+/// crash, with the operator's session unusable afterwards. A real case: a
+/// malformed inbound voice packet panics deep inside the Opus decoder on a
+/// tokio worker (see `docs/lxst-voice.md` §9); messaging is unaffected and the
+/// voice task reports the loss itself, so the display must survive it.
+///
+/// Background panics are written to `{cfgdir}/panic.log` instead — inside the
+/// tree BURN destroys, since a backtrace can name peers.
 fn install_panic_hook() {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        let _ = restore_terminal();
-        default_hook(info);
+        // `main` is where a fatal panic unwinds out of the program; anything
+        // else is a task that the runtime absorbs.
+        if std::thread::current().name() == Some("main") {
+            let _ = restore_terminal();
+            default_hook(info);
+            return;
+        }
+        record_background_panic(info);
     }));
+}
+
+/// Append a worker-thread panic to `{cfgdir}/panic.log`, best-effort and
+/// without touching the terminal.
+fn record_background_panic(info: &std::panic::PanicHookInfo<'_>) {
+    use std::io::Write;
+    let thread = std::thread::current();
+    let name = thread.name().unwrap_or("<unnamed>").to_string();
+    let entry = format!("[{}] thread '{name}' panicked: {info}\n", now_secs());
+    let path = config::config_dir().join("panic.log");
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = f.write_all(entry.as_bytes());
+    }
 }

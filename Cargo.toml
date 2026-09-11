@@ -12,7 +12,7 @@ keywords = ["lxmf", "reticulum", "tui", "mesh", "off-grid"]
 categories = ["command-line-utilities"]
 
 [workspace]
-members = ["crates/foxhole-micron", "crates/foxhole-cot", "crates/foxhole-map", "crates/foxhole-core", "crates/foxhole-tui", "crates/foxhole-net"]
+members = ["crates/foxhole-micron", "crates/foxhole-cot", "crates/foxhole-map", "crates/foxhole-core", "crates/foxhole-tui", "crates/foxhole-net", "crates/foxhole-voice"]
 
 # Shared metadata inherited by every member crate via `field.workspace = true`.
 # The whole workspace ships under AGPL-3.0-or-later: the `net` build links the
@@ -42,6 +42,7 @@ foxhole-cot    = { path = "crates/foxhole-cot" }
 foxhole-map    = { path = "crates/foxhole-map" }
 foxhole-micron = { path = "crates/foxhole-micron" }
 foxhole-net    = { path = "crates/foxhole-net" }
+foxhole-voice  = { path = "crates/foxhole-voice" }
 
 # --- Third-party --------------------------------------------------------------
 # TUI framework (crossterm backend on by default).
@@ -61,6 +62,15 @@ bytes = "1"
 hex = "0.4"
 # Encode Nomad Network form submissions as the msgpack request map.
 rmpv = "1.3"
+
+# Cross-platform audio capture/playback for the `voice` feature (ALSA on Linux,
+# CoreAudio on macOS, WASAPI on Windows). Consumed only by `foxhole-voice`, so
+# the default and `net`-only builds never link an audio stack. On Debian/Ubuntu/
+# Raspberry Pi OS the ALSA backend needs `libasound2-dev` at build time.
+cpal = "0.16"
+# Only `foxhole-voice` uses this, and only to silence ALSA's stderr chatter
+# while a device is opened. Already in the tree via `cpal`/`crossterm`.
+libc = "0.2"
 
 # Sink for the mesh stack's own `tracing` diagnostics (delivery proofs, link
 # lifecycle), which are otherwise discarded. `tracing-core` only: the whole
@@ -82,6 +92,13 @@ tracing = "0.1"
 # delivery is never acknowledged (see docs/rsreticulum-delivery-proof-issue.md).
 # Do not pin back below it; bump both repos' revs together when moving forward.
 lxmf-core     = { git = "https://github.com/ratspeak/rsLXMF",      rev = "d58ea180118c0cb5f92692bfd96337193ef8bb91" }
+# LXST — real-time voice/media over Reticulum (the `voice` feature). Same
+# immutable-commit rule as above; this rev is rsLXST release v0.2.0, whose own
+# `rns-*` deps are sibling-path references pinned to Reticulum 1.2.0 — the exact
+# release the rest of the stack is on, so the `[patch]` block at the bottom
+# unifies rsLXST onto the same rsReticulum source with no version skew.
+lxst-core      = { git = "https://github.com/ratspeak/rsLXST", rev = "f228e2e1b1c026728c728549f70ce22633770009" }
+lxst-telephony = { git = "https://github.com/ratspeak/rsLXST", rev = "f228e2e1b1c026728c728549f70ce22633770009" }
 rns-crypto    = { git = "https://github.com/ratspeak/rsReticulum", rev = "dc6bc4ee82daf66b3b40386f9777dbe62b08fec2" }
 rns-wire      = { git = "https://github.com/ratspeak/rsReticulum", rev = "dc6bc4ee82daf66b3b40386f9777dbe62b08fec2" }
 rns-identity  = { git = "https://github.com/ratspeak/rsReticulum", rev = "dc6bc4ee82daf66b3b40386f9777dbe62b08fec2" }
@@ -138,6 +155,17 @@ net = [
     "foxhole-core/net",
     "foxhole-tui/net",
 ]
+# Live LXST voice calls (see docs/lxst-voice.md). Implies `net`: telephony rides
+# the same Reticulum transport the LXMF stack brings up, so `foxhole-net` owns
+# the `foxhole-voice` task and hands it `transport_tx`. Off by default — it pulls
+# the rsLXST stack, a bundled Opus encoder, and a platform audio backend (ALSA on
+# Linux, so `libasound2-dev` must be installed to build it). The Voice tool
+# itself is always present; without this feature it says the stack is offline.
+voice = [
+    "net",
+    "foxhole-net/voice",
+    "foxhole-tui/voice",
+]
 
 # `rsLXMF`'s crates depend on the `rns-*` libraries via sibling-checkout paths
 # (`../rsReticulum/...`), which don't exist when `rsLXMF` is fetched from git.
@@ -155,3 +183,18 @@ rns-protocol  = { git = "https://github.com/ratspeak/rsReticulum", rev = "dc6bc4
 rns-transport = { git = "https://github.com/ratspeak/rsReticulum", rev = "dc6bc4ee82daf66b3b40386f9777dbe62b08fec2" }
 rns-runtime   = { git = "https://github.com/ratspeak/rsReticulum", rev = "dc6bc4ee82daf66b3b40386f9777dbe62b08fec2" }
 rns-interface = { git = "https://github.com/ratspeak/rsReticulum", rev = "dc6bc4ee82daf66b3b40386f9777dbe62b08fec2" }
+
+# rsLXST reaches for the `rns-*` libraries the same way rsLXMF does — sibling
+# checkout paths (`../rsReticulum/crates/...`) that don't exist in a git fetch —
+# so it needs its own patch table keyed by *its* URL. Same pinned rsReticulum
+# commit as the block above: one Reticulum source for LXMF and LXST alike, which
+# is what lets the voice task share the transport the LXMF stack brought up.
+# (Only consulted under `--features voice`.)
+[patch."https://github.com/ratspeak/rsLXST"]
+rns-crypto    = { git = "https://github.com/ratspeak/rsReticulum", rev = "dc6bc4ee82daf66b3b40386f9777dbe62b08fec2" }
+rns-identity  = { git = "https://github.com/ratspeak/rsReticulum", rev = "dc6bc4ee82daf66b3b40386f9777dbe62b08fec2" }
+rns-interface = { git = "https://github.com/ratspeak/rsReticulum", rev = "dc6bc4ee82daf66b3b40386f9777dbe62b08fec2" }
+rns-link      = { git = "https://github.com/ratspeak/rsReticulum", rev = "dc6bc4ee82daf66b3b40386f9777dbe62b08fec2" }
+rns-runtime   = { git = "https://github.com/ratspeak/rsReticulum", rev = "dc6bc4ee82daf66b3b40386f9777dbe62b08fec2" }
+rns-transport = { git = "https://github.com/ratspeak/rsReticulum", rev = "dc6bc4ee82daf66b3b40386f9777dbe62b08fec2" }
+rns-wire      = { git = "https://github.com/ratspeak/rsReticulum", rev = "dc6bc4ee82daf66b3b40386f9777dbe62b08fec2" }

@@ -5,17 +5,24 @@
 //! [`MsgStatus`]), the events/commands crossing the UI↔network boundary
 //! ([`NetEvent`], [`NetCommand`], [`Outbound`], [`PeerKind`]), and the registries
 //! the Network/Browser tools display ([`Node`], [`PathProbe`], [`NomadNode`],
-//! [`Page`]), plus the received-intel record ([`IntelRecord`], in [`intel`]).
+//! [`Page`]), plus the received-intel record ([`IntelRecord`], in [`intel`]) and
+//! the LXST voice-call model ([`Call`], [`VoiceCommand`], [`VoiceEvent`], in
+//! [`voice`]).
 //!
 //! These carry no UI focus or navigation semantics (those live in
 //! [`crate::app`]); they are the model that `store`, `net`, `ui`, and the state
 //! machine all import, which is why they live apart from the controller.
 
 mod intel;
+mod voice;
 
 use std::collections::HashMap;
 
 pub use intel::{IntelRecord, IntelZone};
+pub use voice::{
+    AudioDevices, AudioStatus, Call, CallDirection, CallPhase, DevicePrefs, VoiceCommand,
+    VoiceEvent, VoicePeer, VoiceProfile,
+};
 
 // The geographic position and hazard-zone types now live in the standalone
 // `foxhole-map` crate. Re-exported here so the conversation model (peer
@@ -50,6 +57,29 @@ pub enum NetCommand {
         path: String,
         fields: Vec<(String, String)>,
     },
+    /// An LXST voice-call action (place/answer/hang up/mute/renegotiate). Voice
+    /// rides this channel rather than its own so the UI keeps a single ordered
+    /// handoff — a hangup queued behind a page fetch still arrives in order.
+    Voice(VoiceCommand),
+}
+
+impl NetCommand {
+    /// Whether draining this command should also persist the config.
+    ///
+    /// These are the commands that *are* a settings change — the network side
+    /// is the notification, the config file is where it has to survive a
+    /// restart. Kept with the enum rather than in the runtime that drains the
+    /// queue, so adding a persisted setting is one edit here and not a second
+    /// match on `NetCommand` in the binary.
+    pub fn persists_config(&self) -> bool {
+        matches!(
+            self,
+            NetCommand::SetPropagationNode(_)
+                | NetCommand::Voice(
+                    VoiceCommand::SetInputDevice(_) | VoiceCommand::SetOutputDevice(_)
+                )
+        )
+    }
 }
 
 /// A message accepted for transmission, carrying its destination so the
@@ -153,6 +183,9 @@ pub enum NetEvent {
         interfaces: Vec<Interface>,
         links: u32,
     },
+    /// An LXST voice-call event (roster, call state, audio readiness, levels).
+    /// Applied to the Voice tool by [`crate::app::App::apply_voice_event`].
+    Voice(VoiceEvent),
 }
 
 /// One network interface's live status (Interfaces tab), distilled from the
@@ -416,7 +449,11 @@ impl Conversation {
 }
 
 /// Current Unix time in whole seconds (UTC); 0 if the clock predates the epoch.
-pub(crate) fn now_secs() -> u64 {
+///
+/// Public because the renderer needs it too: an in-call talk timer has to tick
+/// against the wall clock at draw time, and threading "now" down through every
+/// render signature to avoid one clock read would be the worse trade.
+pub fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())

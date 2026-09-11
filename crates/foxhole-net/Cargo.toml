@@ -19,6 +19,12 @@ description = "FoxHole live networking layer — LXMF/Reticulum protocol stack +
 foxhole-core = { workspace = true, features = ["net"] }
 foxhole-cot = { workspace = true }
 
+# The LXST voice layer (telephony runtime + platform audio). Optional and owned
+# from here rather than from the binary because voice rides *this* crate's
+# Reticulum transport: `net::run_inner` brings the stack up and is the only
+# place a `transport_tx` and the loaded identity both exist.
+foxhole-voice = { workspace = true, optional = true }
+
 # Async runtime: keeps network packet processing off the render path.
 tokio = { workspace = true }
 
@@ -42,6 +48,12 @@ rmpv = { workspace = true }
 
 # Capture the mesh stack's `tracing` diagnostics into an opt-in trace file.
 tracing-core = { workspace = true }
+
+[features]
+# Live LXST voice calls. Pulls the `foxhole-voice` crate (rsLXST + Opus + a
+# platform audio backend) and spawns its task after transport bring-up; without
+# it every voice command is answered with an "offline" notice.
+voice = ["dep:foxhole-voice", "foxhole-voice/audio"]
 
 [dev-dependencies]
 # The `tracing` facade (already in the tree via the `rns-*` crates) so the trace

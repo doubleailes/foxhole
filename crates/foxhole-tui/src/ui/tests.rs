@@ -350,3 +350,250 @@ fn dump_world_map() {
     term.draw(|f| crate::ui::render(f, &app)).unwrap();
     println!("{}", term.backend());
 }
+
+// --- Voice tool ------------------------------------------------------------------
+
+/// An app on the Voice tool with one callable peer.
+fn voice_app() -> crate::app::App {
+    use crate::app::{App, AppState, Tool, VoiceEvent};
+    let mut app = App::new();
+    // Force the console, as `map_app` does: under workspace feature unification
+    // core's `cfg!(test)` is false here, so it would otherwise boot to Splash
+    // and the splash would own the whole frame.
+    app.state = AppState::Running;
+    app.convs.items.clear();
+    app.active = Tool::Voice;
+    app.voice.local_identity = Some("ff".repeat(16));
+    app.apply_voice_event(VoiceEvent::Peer {
+        identity: "ab".repeat(16),
+        name: Some("bravo".to_string()),
+        hops: Some(2),
+    });
+    app
+}
+
+#[test]
+fn voice_tool_renders_roster_and_idle_hud() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let app = voice_app();
+    let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    term.draw(|f| crate::ui::render(f, &app)).unwrap();
+    let text = term.backend().to_string();
+
+    assert!(text.contains("Voice"), "tab strip lists the Voice tool");
+    assert!(text.contains("VOICE PEERS"), "roster panel title");
+    assert!(text.contains("bravo"), "roster lists the announced peer");
+    assert!(text.contains("CALL LOG"), "call-log panel title");
+    // The idle HUD must name the identity a peer dials, not the LXMF address —
+    // handing out the wrong one is a call that never connects.
+    assert!(
+        text.contains("lxst.telephony identity"),
+        "this-node header names the identity aspect"
+    );
+    assert!(text.contains("IDLE"), "idle HUD state");
+}
+
+#[test]
+fn voice_tool_renders_an_established_call_with_meters() {
+    use crate::app::{Call, CallDirection, CallPhase, VoiceEvent, VoiceProfile};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let mut app = voice_app();
+    let mut call = Call::new(
+        "ab".repeat(16),
+        Some("bravo".to_string()),
+        CallDirection::Outgoing,
+        0,
+    );
+    call.phase = CallPhase::Established;
+    call.profile = Some(VoiceProfile::QualityHigh);
+    call.connected_at = Some(crate::app::now_secs());
+    app.apply_voice_event(VoiceEvent::Call(Some(call)));
+    app.apply_voice_event(VoiceEvent::Levels { tx: 50, rx: 10 });
+
+    let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    term.draw(|f| crate::ui::render(f, &app)).unwrap();
+    let text = term.backend().to_string();
+
+    assert!(text.contains("ESTABLISHED"), "phase reads as a word");
+    assert!(text.contains("HQ"), "negotiated profile shown");
+    assert!(text.contains("TX"), "transmit meter labelled");
+    assert!(text.contains("RX"), "receive meter labelled");
+    assert!(text.contains("LIVE"), "microphone state shown");
+    // The meter's length carries the level, so it must actually draw blocks.
+    assert!(text.contains('\u{2588}'), "VU meters drew filled cells");
+    // The roster pane is ~38 columns, so the on-call marker is a pip rather
+    // than a word — it has to coexist with the name, hash and hop meter.
+    assert!(
+        text.contains('\u{25cf}'),
+        "roster pips the peer that is on the call"
+    );
+}
+
+#[test]
+fn voice_tool_shows_a_ringing_call_as_answerable() {
+    use crate::app::{Call, CallDirection, VoiceEvent};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let mut app = voice_app();
+    app.apply_voice_event(VoiceEvent::Call(Some(Call::new(
+        "ab".repeat(16),
+        Some("bravo".to_string()),
+        CallDirection::Incoming,
+        0,
+    ))));
+
+    let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    term.draw(|f| crate::ui::render(f, &app)).unwrap();
+    let text = term.backend().to_string();
+
+    assert!(text.contains("RINGING"), "ringing phase is spelled out");
+    // Before media is up the meters would read as a dead line, so they're
+    // replaced by an explicit note.
+    assert!(text.contains("no media yet"), "pre-media note");
+    assert!(text.contains("answer"), "the legend offers the answer key");
+}
+
+#[test]
+fn muted_transmit_meter_reads_empty_and_says_so() {
+    use crate::app::{Call, CallDirection, CallPhase, VoiceEvent};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let mut app = voice_app();
+    let mut call = Call::new("ab".repeat(16), None, CallDirection::Incoming, 0);
+    call.phase = CallPhase::Established;
+    app.apply_voice_event(VoiceEvent::Call(Some(call)));
+    app.voice.muted = true;
+    // A stale level from before the mute must not still light the meter.
+    app.apply_voice_event(VoiceEvent::Levels { tx: 90, rx: 0 });
+
+    let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    term.draw(|f| crate::ui::render(f, &app)).unwrap();
+    let text = term.backend().to_string();
+
+    assert!(text.contains("MUTED"), "mute state shown");
+    assert!(text.contains("muted"), "the TX meter is tagged muted");
+}
+
+#[test]
+fn voice_lines_carry_their_own_severity() {
+    use super::style::line_style;
+    // A plain call line gets the voice tint…
+    assert_eq!(line_style("[VOX] calling bravo"), tag_style("VOX"));
+    // …but a stated severity wins, so "no audio devices" reads as a warning
+    // rather than as ordinary call chatter.
+    assert_eq!(
+        line_style("[VOX] [WRN] no audio devices (no input device)"),
+        tag_style("WRN")
+    );
+    assert_eq!(line_style("[VOX] [ERR] voice: boom"), tag_style("ERR"));
+    // Keyword classification must not reach voice lines: "hung up" and
+    // "answering" mean nothing in the messaging stack's vocabulary.
+    assert_eq!(line_style("[VOX] call ended: hung up"), tag_style("VOX"));
+    assert_ne!(line_style("[VOX] calling bravo"), tag_style("SYS"));
+}
+
+#[test]
+fn wrapped_call_log_still_shows_the_newest_entry() {
+    // Bottom-pinning used to count logical lines, not the rows they wrap to,
+    // so one long entry could push newer ones below the fold. Voice lines are
+    // exactly the long kind — "[VOX] [WRN] no audio devices (output config: …)".
+    use crate::app::VoiceEvent;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let mut app = voice_app();
+    for i in 0..4 {
+        app.apply_voice_event(VoiceEvent::Sys(format!(
+            "[VOX] [WRN] entry {i} with a deliberately long tail that will wrap \
+             several times over in a narrow pane, pushing later lines down"
+        )));
+    }
+    app.apply_voice_event(VoiceEvent::Sys("[VOX] NEWEST".to_string()));
+
+    // Narrow enough that the call-log pane wraps hard.
+    let mut term = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    term.draw(|f| crate::ui::render(f, &app)).unwrap();
+    let text = term.backend().to_string();
+
+    assert!(
+        text.contains("NEWEST"),
+        "the newest call-log entry must stay visible when earlier ones wrap"
+    );
+}
+
+#[test]
+fn wrapped_height_counts_word_wrapping_not_just_width() {
+    // Dividing line width by pane width under-counts whenever a word is pushed
+    // to the next row — and an under-count on a bottom-pinned pane hides the
+    // newest entries.
+    //
+    // "aaa bbb ccc" is 11 columns, so the naive count at width 6 is 2. Greedy
+    // word wrapping actually needs 3: "aaa bbb" is 7, so each word gets a row.
+    assert_eq!(wrapped_height(&[Line::raw("aaa bbb ccc")], 6), 3);
+
+    // Words that do fit share a row.
+    assert_eq!(wrapped_height(&[Line::raw("aa bb cc")], 8), 1);
+
+    // A word longer than the pane is split rather than overflowing.
+    assert_eq!(wrapped_height(&[Line::raw("abcdefghij")], 4), 3);
+
+    // Blank lines still occupy a row.
+    assert_eq!(wrapped_height(&[Line::raw("")], 10), 1);
+}
+
+#[test]
+fn voice_device_picker_lists_devices_and_marks_the_one_in_use() {
+    use crate::app::{AudioDevices, DeviceColumn, DevicePicker, DevicePrefs};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let mut app = voice_app();
+    app.voice.devices = AudioDevices {
+        inputs: vec!["HDMI 1".to_string(), "USB PnP Sound Device".to_string()],
+        outputs: vec!["Headphones".to_string()],
+        default_input: Some("HDMI 1".to_string()),
+        default_output: Some("Headphones".to_string()),
+        selected: DevicePrefs {
+            input: Some("USB PnP Sound Device".to_string()),
+            output: None,
+        },
+    };
+    // The idle HUD names the device before the picker is even opened — that is
+    // what makes a wrong default visible without going looking for it.
+    let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    term.draw(|f| crate::ui::render(f, &app)).unwrap();
+    assert!(
+        term.backend().to_string().contains("USB PnP Sound Device"),
+        "idle HUD names the microphone in use"
+    );
+
+    // Set up the overlay the way the `d` key does. (The key routing itself is
+    // covered in `foxhole-core`; this test is about what gets drawn.)
+    app.voice.picker = Some(DevicePicker {
+        column: DeviceColumn::Input,
+        index: 2,
+    });
+    let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    term.draw(|f| crate::ui::render(f, &app)).unwrap();
+    let text = term.backend().to_string();
+
+    assert!(text.contains("AUDIO DEVICES"), "picker title");
+    assert!(text.contains("MICROPHONE"), "opens on the input column");
+    assert!(
+        text.contains("system default (HDMI 1)"),
+        "names the host default"
+    );
+    assert!(text.contains("USB PnP"), "lists the enumerated inputs");
+    // The dot marks the device in use; it opens on that row, so the chevron is
+    // there too and Enter changes nothing.
+    assert!(
+        text.contains("\u{25b6} \u{25cf} USB PnP"),
+        "cursor and in-use mark both on the selected device: {text}"
+    );
+}

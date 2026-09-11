@@ -1,6 +1,7 @@
 //! Unit tests for the `App` state machine and key routing.
 
 use super::*;
+use crate::app::voice::{VOICE_ALIASES_MAX, VOICE_LOG_MAX, VOICE_PEERS_MAX};
 use crossterm::event::KeyEventState;
 
 /// A test event at a fixed instant (shared with the `intel`/`share`/`author`
@@ -1446,4 +1447,387 @@ fn start_conversation_rejects_bad_mnemonic_phrase() {
     let bad = "noodle payment vivid slogan gas ancient match hammer fever crisp timber crazy";
     assert!(!app.start_conversation(bad, ""));
     assert_eq!(app.convs.items.len(), before);
+}
+
+// --- Voice tool ------------------------------------------------------------------
+
+/// An app on the Voice tool with `n` callable peers and nothing else seeded.
+fn voice_app(n: usize) -> App {
+    let mut app = App::new();
+    app.convs.items.clear();
+    app.active = Tool::Voice;
+    for i in 0..n {
+        app.apply_voice_event(VoiceEvent::Peer {
+            identity: format!("{:02x}", i).repeat(16),
+            name: Some(format!("peer{i}")),
+            hops: Some(i as u8),
+        });
+    }
+    app
+}
+
+/// The voice commands queued so far, in order.
+fn voice_commands(app: &App) -> Vec<VoiceCommand> {
+    app.outbox
+        .commands
+        .iter()
+        .filter_map(|c| match c {
+            NetCommand::Voice(v) => Some(v.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn voice_enter_calls_the_selected_peer() {
+    let mut app = voice_app(2);
+    app.handle_key(press(KeyCode::Down));
+    app.handle_key(press(KeyCode::Enter));
+    assert_eq!(
+        voice_commands(&app),
+        vec![VoiceCommand::Call("01".repeat(16))]
+    );
+}
+
+#[test]
+fn voice_enter_answers_instead_of_dialling_while_ringing() {
+    // The overload is the whole point: a ringing phone must not place a second
+    // call because the cursor happened to be on someone else.
+    let mut app = voice_app(2);
+    app.apply_voice_event(VoiceEvent::Call(Some(Call::new(
+        "01".repeat(16),
+        None,
+        CallDirection::Incoming,
+        0,
+    ))));
+    app.handle_key(press(KeyCode::Enter));
+    assert_eq!(voice_commands(&app), vec![VoiceCommand::Answer]);
+}
+
+#[test]
+fn voice_refuses_a_second_call_while_busy() {
+    let mut app = voice_app(2);
+    app.apply_voice_event(VoiceEvent::Call(Some(Call::new(
+        "00".repeat(16),
+        None,
+        CallDirection::Outgoing,
+        0,
+    ))));
+    // An established call: Enter must not dial the highlighted peer.
+    let mut established = app.voice.call.clone().unwrap();
+    established.phase = CallPhase::Established;
+    app.apply_voice_event(VoiceEvent::Call(Some(established)));
+    app.handle_key(press(KeyCode::Enter));
+    assert!(voice_commands(&app).is_empty());
+}
+
+#[test]
+fn voice_hangup_is_a_noop_when_idle() {
+    // Otherwise every stray Esc would queue a hangup for a call that isn't there.
+    let mut app = voice_app(1);
+    app.handle_key(press(KeyCode::Esc));
+    app.handle_key(press(KeyCode::Char('h')));
+    assert!(voice_commands(&app).is_empty());
+}
+
+#[test]
+fn voice_hangup_covers_ringing_and_established_alike() {
+    for phase in [CallPhase::Ringing, CallPhase::Established] {
+        let mut app = voice_app(1);
+        let mut call = Call::new("00".repeat(16), None, CallDirection::Incoming, 0);
+        call.phase = phase;
+        app.apply_voice_event(VoiceEvent::Call(Some(call)));
+        app.handle_key(press(KeyCode::Char('h')));
+        assert_eq!(
+            voice_commands(&app),
+            vec![VoiceCommand::Hangup],
+            "{phase:?}"
+        );
+    }
+}
+
+#[test]
+fn voice_mute_toggles_and_reports_both_ways() {
+    let mut app = voice_app(1);
+    app.handle_key(press(KeyCode::Char('m')));
+    assert!(app.voice.muted);
+    app.handle_key(press(KeyCode::Char('m')));
+    assert!(!app.voice.muted);
+    assert_eq!(
+        voice_commands(&app),
+        vec![VoiceCommand::SetMuted(true), VoiceCommand::SetMuted(false)]
+    );
+}
+
+#[test]
+fn voice_a_new_call_always_starts_unmuted() {
+    // Carrying a mute across calls is how an operator talks into a dead
+    // microphone for the first ten seconds of the next one.
+    let mut app = voice_app(1);
+    app.handle_key(press(KeyCode::Char('m')));
+    assert!(app.voice.muted);
+    app.apply_voice_event(VoiceEvent::Call(Some(Call::new(
+        "00".repeat(16),
+        None,
+        CallDirection::Incoming,
+        0,
+    ))));
+    assert!(!app.voice.muted);
+}
+
+#[test]
+fn voice_profile_cycle_skips_unsupported_and_requests_it() {
+    let mut app = voice_app(1);
+    let before = app.voice.profile;
+    app.handle_key(press(KeyCode::Char('p')));
+    assert_ne!(app.voice.profile, before);
+    assert!(app.voice.profile.is_supported());
+    assert_eq!(
+        voice_commands(&app),
+        vec![VoiceCommand::SetProfile(app.voice.profile)]
+    );
+}
+
+#[test]
+fn voice_adopts_the_negotiated_profile() {
+    // So the next call opens on what actually worked rather than re-proposing
+    // one the peer already renegotiated away from.
+    let mut app = voice_app(1);
+    let mut call = Call::new("00".repeat(16), None, CallDirection::Outgoing, 0);
+    call.phase = CallPhase::Established;
+    call.profile = Some(VoiceProfile::LatencyLow);
+    app.apply_voice_event(VoiceEvent::Call(Some(call)));
+    assert_eq!(app.voice.profile, VoiceProfile::LatencyLow);
+}
+
+#[test]
+fn voice_peer_upsert_refreshes_without_blanking_a_known_name() {
+    let mut app = voice_app(1);
+    let id = "00".repeat(16);
+    app.apply_voice_event(VoiceEvent::Peer {
+        identity: id.clone(),
+        name: None,
+        hops: Some(4),
+    });
+    assert_eq!(app.voice.peers.len(), 1);
+    let peer = &app.voice.peers[0];
+    assert_eq!(peer.name.as_deref(), Some("peer0"));
+    assert_eq!(peer.hops, Some(4));
+    assert_eq!(peer.identity, id);
+}
+
+#[test]
+fn voice_roster_is_bounded() {
+    let mut app = voice_app(0);
+    for i in 0..(VOICE_PEERS_MAX + 20) {
+        app.apply_voice_event(VoiceEvent::Peer {
+            identity: format!("{i:032x}"),
+            name: None,
+            hops: None,
+        });
+    }
+    assert_eq!(app.voice.peers.len(), VOICE_PEERS_MAX);
+}
+
+#[test]
+fn voice_call_end_clears_the_meters() {
+    // A frozen meter after a hangup reads as a live call at a glance.
+    let mut app = voice_app(1);
+    let mut call = Call::new("00".repeat(16), None, CallDirection::Incoming, 0);
+    call.phase = CallPhase::Established;
+    app.apply_voice_event(VoiceEvent::Call(Some(call)));
+    app.apply_voice_event(VoiceEvent::Levels { tx: 70, rx: 40 });
+    assert_eq!((app.voice.tx_level, app.voice.rx_level), (70, 40));
+
+    app.apply_voice_event(VoiceEvent::Ended("hung up".to_string()));
+    assert!(app.voice.call.is_none());
+    assert_eq!((app.voice.tx_level, app.voice.rx_level), (0, 0));
+}
+
+#[test]
+fn voice_levels_are_clamped() {
+    let mut app = voice_app(1);
+    app.apply_voice_event(VoiceEvent::Levels { tx: 250, rx: 101 });
+    assert_eq!((app.voice.tx_level, app.voice.rx_level), (100, 100));
+}
+
+#[test]
+fn voice_call_log_is_bounded() {
+    let mut app = voice_app(0);
+    for i in 0..(VOICE_LOG_MAX + 50) {
+        app.push_voice_log(format!("[VOX] line {i}"));
+    }
+    assert_eq!(app.voice.log.len(), VOICE_LOG_MAX);
+    // The tail is kept — the newest lines are the ones worth having.
+    assert!(
+        app.voice
+            .log
+            .last()
+            .unwrap()
+            .text
+            .contains(&format!("line {}", VOICE_LOG_MAX + 49))
+    );
+}
+
+#[test]
+fn conversations_ctrl_v_dials_by_destination_hash() {
+    // The Conversations roster only knows an LXMF destination hash, so it must
+    // send `CallPeer` (which the net layer resolves), never `Call`.
+    let dest = "cd".repeat(16);
+    let mut app = app_with_peer(&dest, Trust::Unknown);
+    app.active = Tool::Conversations;
+    app.handle_key(ctrl('v'));
+    assert_eq!(voice_commands(&app), vec![VoiceCommand::CallPeer(dest)]);
+    // …and it jumps to the Voice tool so the HUD is what's on screen.
+    assert_eq!(app.active, Tool::Voice);
+}
+
+#[test]
+fn voice_tool_is_in_the_tab_cycle() {
+    // Ctrl+N from Browser must reach Voice — the tab order is the only place
+    // the tool is discoverable.
+    let mut app = App::new();
+    app.active = Tool::Browser;
+    app.handle_key(ctrl('n'));
+    assert_eq!(app.active, Tool::Voice);
+    app.handle_key(ctrl('p'));
+    assert_eq!(app.active, Tool::Browser);
+}
+
+#[test]
+fn voice_alias_labels_a_callable_peer() {
+    // LXST's telephony announce carries no name, so the roster is labelled from
+    // the peer's LXMF announce instead — correlated by identity.
+    let mut app = voice_app(0);
+    let id = "aa".repeat(16);
+    app.apply_voice_event(VoiceEvent::Alias {
+        identity: id.clone(),
+        name: "alice".to_string(),
+    });
+    // An alias alone must NOT make the peer callable.
+    assert!(app.voice.peers.is_empty());
+
+    app.apply_voice_event(VoiceEvent::Peer {
+        identity: id,
+        name: None,
+        hops: Some(1),
+    });
+    assert_eq!(app.voice.peers[0].name.as_deref(), Some("alice"));
+}
+
+#[test]
+fn voice_alias_arriving_late_relabels_roster_and_call() {
+    let mut app = voice_app(0);
+    let id = "bb".repeat(16);
+    app.apply_voice_event(VoiceEvent::Peer {
+        identity: id.clone(),
+        name: None,
+        hops: None,
+    });
+    app.apply_voice_event(VoiceEvent::Call(Some(Call::new(
+        id.clone(),
+        None,
+        CallDirection::Incoming,
+        0,
+    ))));
+    assert!(app.voice.peers[0].name.is_none());
+
+    app.apply_voice_event(VoiceEvent::Alias {
+        identity: id,
+        name: "bob".to_string(),
+    });
+    // Both the roster row and the call in progress pick the name up, so a name
+    // learned mid-call isn't stuck showing a hash until the next announce.
+    assert_eq!(app.voice.peers[0].name.as_deref(), Some("bob"));
+    assert_eq!(app.voice.call.as_ref().unwrap().label(), "bob");
+}
+
+#[test]
+fn voice_unmuting_for_a_new_call_is_told_to_the_task() {
+    // The task keeps its own mute flag and applies it when capture opens, so
+    // clearing only the UI flag would show a live microphone while the real one
+    // stayed muted.
+    let mut app = voice_app(1);
+    app.handle_key(press(KeyCode::Char('m')));
+    assert!(app.voice.muted);
+    app.outbox.commands.clear();
+
+    app.apply_voice_event(VoiceEvent::Call(Some(Call::new(
+        "00".repeat(16),
+        None,
+        CallDirection::Incoming,
+        0,
+    ))));
+    assert!(!app.voice.muted);
+    assert_eq!(
+        voice_commands(&app),
+        vec![VoiceCommand::SetMuted(false)],
+        "the task must be told the mute was cleared"
+    );
+}
+
+#[test]
+fn voice_new_call_while_unmuted_sends_no_redundant_command() {
+    let mut app = voice_app(1);
+    app.apply_voice_event(VoiceEvent::Call(Some(Call::new(
+        "00".repeat(16),
+        None,
+        CallDirection::Incoming,
+        0,
+    ))));
+    assert!(voice_commands(&app).is_empty());
+}
+
+#[test]
+fn voice_alias_table_is_bounded_but_keeps_what_is_on_screen() {
+    // Aliases come from *every* LXMF announce, not just callable peers, so the
+    // table grows faster than the roster it labels; announces are free to mint.
+    let mut app = voice_app(0);
+    let rostered = "aa".repeat(16);
+    app.apply_voice_event(VoiceEvent::Peer {
+        identity: rostered.clone(),
+        name: None,
+        hops: None,
+    });
+    app.apply_voice_event(VoiceEvent::Alias {
+        identity: rostered.clone(),
+        name: "kept".to_string(),
+    });
+
+    for i in 0..(VOICE_ALIASES_MAX + 50) {
+        app.apply_voice_event(VoiceEvent::Alias {
+            identity: format!("{i:032x}"),
+            name: format!("n{i}"),
+        });
+    }
+
+    assert!(app.voice.aliases.len() <= VOICE_ALIASES_MAX);
+    // The label actually on screen survives the trim.
+    assert_eq!(
+        app.voice.aliases.get(&rostered).map(String::as_str),
+        Some("kept")
+    );
+    assert_eq!(app.voice.peers[0].name.as_deref(), Some("kept"));
+}
+
+#[test]
+fn audio_status_reports_each_direction() {
+    // Collapsing a missing microphone into "no audio" would tell an operator
+    // with working speakers that the call carries nothing.
+    assert!(AudioStatus::Ready.has_audio());
+    assert!(AudioStatus::TransmitOnly("no speaker".into()).has_audio());
+    assert!(AudioStatus::ReceiveOnly("no mic".into()).has_audio());
+    assert!(!AudioStatus::Unavailable("no card".into()).has_audio());
+    assert!(!AudioStatus::Unknown.has_audio());
+
+    assert!(
+        AudioStatus::ReceiveOnly("no input device".into())
+            .summary()
+            .contains("receive only")
+    );
+    assert!(
+        AudioStatus::TransmitOnly("no output device".into())
+            .summary()
+            .contains("transmit only")
+    );
 }

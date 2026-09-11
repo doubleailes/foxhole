@@ -25,7 +25,7 @@
 //! The file is split into a shared toolkit ([`style`] colours/text helpers,
 //! [`widgets`] bordered panes + scroll), the chrome/overlays ([`chrome`],
 //! [`popups`]), and one module per tool body ([`conversations`], [`network`],
-//! [`browser`], [`views`]).
+//! [`browser`], [`voice`], [`views`]).
 
 mod browser;
 mod chrome;
@@ -38,6 +38,7 @@ mod style;
 #[cfg(test)]
 mod tests;
 mod views;
+mod voice;
 mod widgets;
 
 use ratatui::Frame;
@@ -48,8 +49,9 @@ use crate::app::App;
 
 use chrome::{render_status, render_tab_strip, render_tool};
 use popups::{
-    render_author_popup, render_burn_popup, render_goto_mgrs_popup, render_intel_review_popup,
-    render_mnemonic_popup, render_new_conv_popup, render_share_zone_popup, render_sync_popup,
+    render_author_popup, render_burn_popup, render_device_popup, render_goto_mgrs_popup,
+    render_intel_review_popup, render_mnemonic_popup, render_new_conv_popup,
+    render_share_zone_popup, render_sync_popup,
 };
 use style::base_style;
 
@@ -103,6 +105,10 @@ pub fn render(frame: &mut Frame, app: &App) {
     // The "go to MGRS" reframe modal.
     if let Some(ref goto) = app.map.goto_mgrs {
         render_goto_mgrs_popup(frame, goto);
+    }
+    // The voice audio-device picker.
+    if let Some(ref picker) = app.voice.picker {
+        render_device_popup(frame, app, picker);
     }
     // The read-only mnemonic phrase modal.
     if let Some(ref m) = app.modals.mnemonic_view {

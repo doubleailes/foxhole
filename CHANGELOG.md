@@ -6,6 +6,51 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Voice calls over LXST (`--features voice`).** Point-to-point Opus telephony
+  between operators, built on
+  [rsLXST](https://github.com/ratspeak/rsLXST) (pinned by commit to release
+  v0.2.0, as the rest of the mesh stack is). A new **Voice** tool carries the
+  callable-peer roster, an in-call HUD (phase, negotiated profile, talk timer,
+  TX/RX level meters, mute state) and the call log; `Ctrl+V` in Conversations
+  dials the selected peer. Off by default — the tool is always present and
+  reports the stack as offline in a build without the feature. See
+  `docs/lxst-voice.md`.
+  - Rides the **same Reticulum transport** the LXMF stack brings up rather than
+    a second instance, so one node keeps announcing one set of paths.
+  - Peers are discovered from `lxst.telephony` announces; a call addresses a
+    peer's **identity** hash, and `Ctrl+V` resolves an `lxmf.delivery`
+    destination hash to one through the announce-learned key cache.
+  - Microphone capture and speaker playback via `cpal`, with streaming rate and
+    channel conversion to whatever profile is negotiated. The backend sits
+    behind `foxhole-voice`'s own default-off `audio` feature, so `--workspace`
+    builds and tests still need no system libraries; only `--features voice`
+    pulls ALSA, which on Debian-family systems needs `libasound2-dev` at build
+    time. Without it voice runs signalling-only.
+  - Missing audio devices are reported, not fatal: a call still signals and
+    connects with no audio path.
+
+### Known limitations
+
+- **A peer can fault the voice stack.** `opus-rs` indexes past its output
+  buffer instead of returning an error when an inbound packet decodes to more
+  samples than the local profile expects (libopus returns
+  `OPUS_BUFFER_TOO_SMALL` there), and `lxst-core` sizes that buffer from its
+  own profile rather than the packet. Loud broadband noise from the far end
+  triggers it by pushing that encoder into a wider bandwidth mode. Both fixes
+  belong upstream; FoxHole contains the blast radius — the telephony task is
+  supervised so the call is cleared and the operator told, background panics no
+  longer tear down the terminal, and messaging is unaffected. Voice is lost
+  until restart. See `docs/lxst-voice.md` §9.
+- LXST's Codec2 profiles (the sub-4-kbps ones that would matter most on a
+  bandwidth-starved link) are signalling-only — rsLXST ships Opus only so far —
+  and the profile cycle skips them.
+- Interoperability with Python LXST / Sideband follows from rsLXST's own wire
+  targeting but has not been verified against a live call from this client.
+- Peer trust levels do not yet gate incoming calls the way they gate incoming
+  intel.
+
 ## [0.1.1] - 2026-08-19
 
 Maintenance release. The mesh stack moves to upstream's first release carrying

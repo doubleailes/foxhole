@@ -18,6 +18,8 @@
 //! - [`inbound`] — decoded messages → UI events (thread, telemetry, intel).
 //! - [`nomad`] — Nomad Network node discovery and page fetching.
 //! - [`discovery`] — operator path probes and interface statistics.
+//! - [`voice`] — the LXST telephony bridge (`voice` feature): address
+//!   translation, and ownership of the `foxhole-voice` task.
 //! - [`codec`] / [`telemetry`] — pure wire-format helpers.
 
 mod codec;
@@ -28,6 +30,7 @@ mod nomad;
 mod outbound;
 mod peers;
 mod telemetry;
+mod voice;
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -54,6 +57,7 @@ use endpoint::{Endpoint, LXMF_DELIVERY};
 use nomad::Nomad;
 use outbound::Dispatcher;
 use peers::PeerCache;
+use voice::VoiceLink;
 
 /// LXMF propagation-node aspect — the destination that stores messages for
 /// offline peers.
@@ -269,6 +273,29 @@ async fn run_inner(
         transport.clone(),
         events.clone(),
     );
+    // --- Voice (LXST telephony) -------------------------------------------------
+    // Shares this transport rather than standing up a second one: the peer we
+    // message and the peer we call are the same node, reached over the same
+    // interfaces, and a second Reticulum instance would announce a second set of
+    // paths for it. Inert unless the `voice` feature is on.
+    #[cfg(feature = "voice")]
+    let mut voice = match VoiceLink::spawn(
+        transport.clone(),
+        &id_path,
+        events.clone(),
+        config.voice_devices(),
+    ) {
+        Ok(link) => link,
+        Err(e) => {
+            // A voice bring-up failure must not take the messaging terminal
+            // down with it — report and carry on offline.
+            sys(events, format!("[SYS] [WRN] voice: {e}")).await;
+            VoiceLink::offline()
+        }
+    };
+    #[cfg(not(feature = "voice"))]
+    let mut voice = VoiceLink::offline();
+
     let mut probes = PathProbes::default();
     let mut banner = SyncBanner::default();
     let mut ticks: u32 = 0;
@@ -337,6 +364,10 @@ async fn run_inner(
                 // Cache the peer's key + hop count so we can reach it later (path
                 // responses carry these too, hence no is_path_response guard here).
                 learn_announce(&mut tx, &ev);
+                // The same announce labels the peer for voice: LXST's telephony
+                // announce carries no name, but this one does and both aspects
+                // hang off the same identity.
+                voice::learn_alias(&ev, events).await;
                 if !ev.is_path_response {
                     let name = ev.app_data.as_deref()
                         .and_then(lxmf_core::handlers::display_name_from_app_data);
@@ -371,7 +402,15 @@ async fn run_inner(
                 tx.send(&endpoint, &out).await;
             }
             Some(cmd) = command_rx.recv() => {
-                handle_command(cmd, &endpoint, &mut tx, &mut probes, &nomad, &mut banner, events).await;
+                let mut svc = Services {
+                    endpoint: &endpoint,
+                    tx: &mut tx,
+                    probes: &mut probes,
+                    nomad: &nomad,
+                    banner: &mut banner,
+                    voice: &mut voice,
+                };
+                handle_command(cmd, &mut svc, events).await;
             }
             _ = send_tick.tick() => {
                 ticks = ticks.wrapping_add(1);
@@ -576,16 +615,29 @@ async fn seed_from_announce_cache(handle: &reticulum::ReticulumHandle, tx: &mut 
     }
 }
 
+/// The long-lived pieces a UI command can act on, bundled so the handler keeps
+/// one readable signature as tools are added (it reached for eight parameters
+/// once voice arrived). Borrowed fresh in the select arm, so nothing outlives an
+/// iteration of the loop.
+struct Services<'a> {
+    endpoint: &'a Endpoint,
+    tx: &'a mut Dispatcher,
+    probes: &'a mut PathProbes,
+    nomad: &'a Nomad,
+    banner: &'a mut SyncBanner,
+    voice: &'a mut VoiceLink,
+}
+
 /// Act on one command from the UI.
-async fn handle_command(
-    cmd: NetCommand,
-    endpoint: &Endpoint,
-    tx: &mut Dispatcher,
-    probes: &mut PathProbes,
-    nomad: &Nomad,
-    banner: &mut SyncBanner,
-    events: &mpsc::Sender<NetEvent>,
-) {
+async fn handle_command(cmd: NetCommand, svc: &mut Services<'_>, events: &mpsc::Sender<NetEvent>) {
+    let Services {
+        endpoint,
+        tx,
+        probes,
+        nomad,
+        banner,
+        voice,
+    } = svc;
     match cmd {
         NetCommand::SetPropagationNode(node) => {
             let parsed = node.as_deref().and_then(|s| parse_hash(s).ok());
@@ -619,6 +671,10 @@ async fn handle_command(
             path,
             fields,
         } => nomad.fetch(identity, path, fields, events).await,
+        // Address translation needs the peer cache, which lives on the
+        // dispatcher — hence the hop through here rather than a direct channel
+        // from the UI to the telephony task.
+        NetCommand::Voice(v) => voice.command(v, &tx.peers, events).await,
     }
 }
 

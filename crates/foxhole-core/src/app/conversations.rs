@@ -102,6 +102,18 @@ impl App {
         true
     }
 
+    /// Dial the selected conversation's peer over LXST (Ctrl+V). The roster is
+    /// keyed by LXMF destination hash, which is not what LXST addresses, so the
+    /// hash goes down as [`VoiceCommand::CallPeer`] for the telephony task to
+    /// resolve against its announce-learned keys.
+    fn call_selected_peer(&mut self) {
+        let Some(conv) = self.selected_conv() else {
+            return;
+        };
+        let (dest, label) = (conv.peer.clone(), conv.label().to_string());
+        self.call_peer_dest(dest, label);
+    }
+
     /// Conversations: pane cycling, peer navigation, compose + send.
     pub(super) fn handle_conversations_key(&mut self, ctrl: bool, key: KeyEvent) {
         match (ctrl, key.code) {
@@ -113,6 +125,9 @@ impl App {
             (true, KeyCode::Char('r')) => self.outbox.commands.push_back(NetCommand::SyncNow),
             // Pull the selected peer's position (Sideband's "Request telemetry").
             (true, KeyCode::Char('l')) => self.request_telemetry(),
+            // Place an LXST voice call to the selected peer, without having to
+            // find them again in the Voice tool's own (identity-keyed) roster.
+            (true, KeyCode::Char('v')) => self.call_selected_peer(),
             // Set/edit the outbound message title (Nomadnet's Ctrl+T): focus the
             // Transmit pane and toggle between the title and the body field.
             (true, KeyCode::Char('t')) => {

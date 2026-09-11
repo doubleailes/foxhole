@@ -50,6 +50,17 @@ pub struct Config {
     /// carries no usable `stale`, so map-flooding stale-less intel still expires
     /// (§6 / §9). Defaults to [`DEFAULT_INTEL_TTL_SECS`].
     pub intel_ttl_secs: u64,
+    /// Preferred voice **capture** device name, or `None` to follow the host
+    /// default. Matched case-insensitively, exactly first and then as a
+    /// substring, so a fragment of a long device string is enough.
+    ///
+    /// Worth having as a setting rather than a runtime-only choice: a rig with
+    /// a headset plus an HDMI or webcam input can default to the one with no
+    /// microphone behind it, and the symptom — a connected call whose transmit
+    /// meter never moves — looks like a network fault, not a configuration one.
+    pub voice_input_device: Option<String>,
+    /// Preferred voice **playback** device name; see [`Config::voice_input_device`].
+    pub voice_output_device: Option<String>,
 }
 
 /// Fallback validity window for a stale-less CoT event: 6 hours, matching the
@@ -66,6 +77,8 @@ impl Default for Config {
             lon: None,
             intel_auto_apply: false,
             intel_ttl_secs: DEFAULT_INTEL_TTL_SECS,
+            voice_input_device: None,
+            voice_output_device: None,
         }
     }
 }
@@ -117,6 +130,8 @@ impl Config {
                         .filter(|&n| n > 0)
                         .unwrap_or(DEFAULT_INTEL_TTL_SECS)
                 }
+                "voice_input_device" => cfg.voice_input_device = non_empty(value),
+                "voice_output_device" => cfg.voice_output_device = non_empty(value),
                 _ => {}
             }
         }
@@ -144,7 +159,21 @@ impl Config {
         if self.intel_ttl_secs != DEFAULT_INTEL_TTL_SECS {
             s.push_str(&format!("intel_ttl_secs = {}\n", self.intel_ttl_secs));
         }
+        if let Some(ref device) = self.voice_input_device {
+            s.push_str(&format!("voice_input_device = {device}\n"));
+        }
+        if let Some(ref device) = self.voice_output_device {
+            s.push_str(&format!("voice_output_device = {device}\n"));
+        }
         s
+    }
+
+    /// The configured device preferences, as the voice task takes them.
+    pub fn voice_devices(&self) -> crate::domain::DevicePrefs {
+        crate::domain::DevicePrefs {
+            input: self.voice_input_device.clone(),
+            output: self.voice_output_device.clone(),
+        }
     }
 
     /// The operator's own position, when both coordinates are configured. Fed to
@@ -201,6 +230,8 @@ mod tests {
             lon: Some(2.3522),
             intel_auto_apply: true,
             intel_ttl_secs: 3600,
+            voice_input_device: Some("USB PnP Sound Device".to_string()),
+            voice_output_device: Some("Headphones".to_string()),
         };
         assert_eq!(Config::parse(&cfg.serialize()), cfg);
     }

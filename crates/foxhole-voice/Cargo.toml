@@ -1,0 +1,57 @@
+[package]
+name = "foxhole-voice"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "FoxHole — live LXST voice calls over Reticulum (the `voice` feature)"
+
+[dependencies]
+# Domain model: the `VoiceCommand`/`VoiceEvent` vocabulary the UI speaks, plus
+# `NetEvent` (voice reports back over the same channel the LXMF task uses).
+# Dependency-light — this crate is the only place LXST/audio types appear.
+foxhole-core = { workspace = true }
+
+# --- LXST telephony (rsLXST) ---------------------------------------------------
+# `lxst-telephony` is the whole application seam (call state, destination
+# registration, discovery, link ownership, Opus stream boundaries); `lxst-core`
+# supplies the profile table and the `RawAudioFrame` the audio backend fills.
+lxst-core = { workspace = true }
+lxst-telephony = { workspace = true }
+
+# --- Reticulum ------------------------------------------------------------------
+# The identity we register the `lxst.telephony` destination under, and the
+# transport channel `foxhole-net` hands us once it has brought the stack up.
+rns-identity = { workspace = true }
+rns-transport = { workspace = true }
+
+# --- Runtime + platform audio ---------------------------------------------------
+tokio = { workspace = true }
+hex = { workspace = true }
+
+# Microphone capture and speaker playback. rsLXST deliberately owns no device
+# integration ("applications still own capture/playback and resampling into
+# RawAudioFrame"), so that half lives in `src/audio/`.
+#
+# Optional, and that matters beyond this crate: cpal's Linux backend links ALSA
+# via `alsa-sys`, which needs `libasound2-dev` at *build* time. `cargo
+# build/test --workspace` builds every member whatever the binary's features
+# are, so a non-optional cpal here would make that system package a hard
+# prerequisite for the dependency-light offline build as well.
+cpal = { workspace = true, optional = true }
+
+# Unix only, and for exactly one thing: muting fd 2 around the calls that reach
+# into a platform audio library. ALSA's C library writes its diagnostics
+# straight to stderr, which lands on top of the alternate screen and corrupts
+# the TUI (see `audio::cpal_backend::QuietStderr`). Rides with `cpal`.
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true, optional = true }
+
+[features]
+# The platform audio backend. Off by default so the crate — and therefore
+# `--workspace` — builds with no system libraries; the telephony half is
+# unaffected, and without it voice runs signalling-only (see `audio::silent`).
+# The binary's `voice` feature turns this on.
+audio = ["dep:cpal", "dep:libc"]
